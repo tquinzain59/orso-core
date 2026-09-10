@@ -7,6 +7,14 @@ past that); see the **routing table** at the end and read the area file before e
 
 **Never give up on the right solution.**
 
+## 🚨 Orso agents - Charte de Gouvernance & Règle de Vigilance (Inviolable)
+
+Le projet **Orso agents** est un fork de `hermes-agent` (Nous Research). Pour préserver l'intégrité, la stabilité et l'alignement upstream :
+- **Le Sanctuaire (Interdit d'altération métier)** : La boucle d'exécution (`agent/turn_*.py`, `run_agent.py`, `conversation_loop.py`), la persistance (`hermes_state*.py`), l'invariance absolue du cache de prompt et les connecteurs modèles (`providers/`, `tools/registry.py`).
+- **La Zone d'Évolution (Périmètre Orso)** : Interfaces et PWA mobile (`App_Hermes Core`), routeurs d'API (`hermes_cli/web_routers/`), profils métiers (`profiles/`), compétences (`skills/`, `plugins/`), Docker (`Dockerfile.orso`).
+- **Règle de Vigilance Active (Mandat Assistant IA)** : Si une consigne ou demande utilisateur tend à altérer le Sanctuaire pour un besoin métier, l'assistant DOIT alerter immédiatement l'utilisateur sur les risques (surcoût, régression, perte de sync upstream) et rediriger la solution vers les bords (skills, profils, plugins, routeurs).
+Détail complet : `docs/3_Technique/charte_gouvernance_fork.md`.
+
 ## What Hermes Is
 
 Hermes is a personal AI agent that runs the same agent core across a CLI, a messaging
