@@ -1,0 +1,62 @@
+# Image Python slim de base pour Orso Agents Core
+FROM python:3.11-slim
+
+LABEL maintainer="Thibaut - Orso Agents (www.orso-agents.fr)"
+LABEL version="1.0-orso-core"
+
+# Empêche Python d'écrire des fichiers .pyc et configure le tampon de sortie pour Docker
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH="/app:${PYTHONPATH}"
+
+# Installation des dépendances système de base, de ripgrep et de Node.js/npm (requis pour compiler le bundle TUI)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    git \
+    build-essential \
+    ripgrep \
+    nodejs \
+    npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# Installation de 'uv' pour accélérer l'installation des dépendances Python
+RUN pip install --no-cache-dir uv
+
+WORKDIR /app
+
+# Création d'un utilisateur non-root 'orso' pour des raisons de sécurité
+RUN groupadd -g 10001 orso && \
+    useradd -u 10001 -g orso -m -d /home/orso orso
+
+# Création préalable des répertoires de configuration et de travail
+RUN mkdir -p /home/orso/.hermes /app/config /app/skills /app/data /app/profiles /app/templates && \
+    chown -R orso:orso /home/orso /app
+
+# Copie préalable des dépendances pour le cache Docker
+COPY requirements-base.txt /app/
+
+# Copie du code source complet du moteur Orso
+COPY . /app/
+
+# Installation du moteur Orso en mode éditable local + dépendances métier
+RUN uv pip install --system --no-cache-dir -e /app -r /app/requirements-base.txt
+
+# Configuration par défaut
+RUN if [ ! -f /app/config/hermes.yaml ] && [ -f /app/config/hermes.default.yaml ]; then \
+        cp /app/config/hermes.default.yaml /app/config/hermes.yaml; \
+    fi
+
+# Liaisons symboliques pour que l'agent accède à la config et aux skills
+RUN ln -sf /app/config/hermes.yaml /home/orso/.hermes/config.yaml && \
+    ln -sf /app/skills /home/orso/.hermes/skills && \
+    chown -h orso:orso /home/orso/.hermes/config.yaml /home/orso/.hermes/skills && \
+    chown -R orso:orso /app /home/orso
+
+# Bascule vers l'utilisateur non-root
+USER orso
+
+# Port exposé par le serveur de dashboard / API
+EXPOSE 9119
+
+# Commande de démarrage par défaut
+CMD ["hermes", "dashboard", "--host", "0.0.0.0", "--port", "9119", "--no-open", "--skip-build"]

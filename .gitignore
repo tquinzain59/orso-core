@@ -224,3 +224,24 @@ native/fts5_cjk/*.so
 
 # Disposable profile created by scripts/probe_active_session_exclusivity.py
 .probe-home/
+
+# ── Orso Agents Runtime & Databases ─────────────────────────────
+*.db
+*.db-wal
+*.db-shm
+*.log
+logs/
+data/
+profiles/*/logs/
+profiles/*/cache/
+profiles/*/audio_cache/
+profiles/*/image_cache/
+profiles/*/memories/
+profiles/*/sessions/
+profiles/*/spawn-trees/
+profiles/*/cron/
+profiles/*/pairing/
+profiles/*/state/
+profiles/*/bin/
+profiles/*/home/
+profiles/*/.env

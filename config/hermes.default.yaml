@@ -1,0 +1,18 @@
+agent:
+  name: "Hermes_Base_Agent"
+  role: "Assistant générique d'IA pour les TPE/PME."
+  description: "Tu es un assistant agentique configuré pour assister les entreprises dans leurs tâches quotidiennes."
+
+llm:
+  provider: "openai"
+  base_url: "https://api.openai.com/v1"
+  api_key: "${OPENAI_API_KEY}"
+  model: "gpt-4o-mini"
+  temperature: 0.7
+
+tools: []
+
+dashboard:
+  basic_auth:
+    username: "${HERMES_DASHBOARD_BASIC_AUTH_USERNAME}"
+    password_hash: "${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH}"

@@ -1,0 +1,6 @@
+model:
+  provider: openrouter
+  default: deepseek/deepseek-v4-flash
+command_allowlist:
+  - script execution via heredoc
+_config_version: 33

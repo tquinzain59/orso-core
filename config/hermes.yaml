@@ -1,0 +1,47 @@
+model:
+  provider: openrouter
+  default: deepseek/deepseek-v4-flash
+
+agent:
+  name: Hermes_Recouvrement
+  role: Assistant ADV spécialisé dans le recouvrement pour les TPE/PME.
+  description: Tu analyses les fichiers comptables, détectes les retards de paiement
+    et rédiges les relances en appliquant le droit commercial français (L.441-10).
+
+dashboard:
+  basic_auth:
+    username: ${HERMES_DASHBOARD_BASIC_AUTH_USERNAME}
+    password_hash: ${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH}
+
+tools:
+  - path: /app/skills/check_overdue.py
+  - path: /app/skills/credit_management/balance_agee.py
+  - path: /app/skills/credit_management/import_csv.py
+  - path: /app/skills/credit_management/veille_bodacc.py
+  - path: /app/skills/credit_management/fiche_credit.py
+  - path: /app/skills/telemetry.py
+
+gateway:
+  platforms:
+    telegram:
+      extra:
+        status_indicator: true
+        status_online: "🟢 En ligne — Credit Manager"
+        status_offline: "🔴 Hors ligne"
+
+_config_version: 33
+
+# ── Security ──────────────────────────────────────────────────────────
+# Secret redaction is ON by default — strings that look like API keys,
+# tokens, and passwords are masked in tool output, logs, and chat
+# responses before the model or user ever sees them.
+security:
+  redact_secrets: true
+  tirith_enabled: false
+
+# ── Fallback Model ────────────────────────────────────────────────────
+# Automatic provider failover when primary is unavailable.
+# Triggers on rate limits (429), overload (529), service errors (503).
+fallback_model:
+  provider: openrouter
+  model: anthropic/claude-3-5-sonnet

@@ -1,0 +1,29 @@
+services:
+  orso-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.orso
+    container_name: orso_agents_backend
+    ports:
+      # Mappe le port du dashboard/API d'Orso sur le port 9229
+      - "9229:9119"
+    environment:
+      # Chemin vers le fichier de configuration à charger au runtime
+      - HERMES_CONFIG_PATH=/app/config/hermes.yaml
+      # Clés API passées depuis le fichier .env de l'hôte
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - AIRTABLE_API_KEY=${AIRTABLE_API_KEY}
+      # Authentification basique sécurisée pour le dashboard web (à renseigner dans le fichier .env)
+      - HERMES_DASHBOARD_BASIC_AUTH_USERNAME=${HERMES_DASHBOARD_BASIC_AUTH_USERNAME}
+      - HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH=${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH}
+    volumes:
+      # Montage des configurations locales en lecture/écriture
+      - ./config:/app/config
+      # Montage des compétences locales en lecture seule
+      - ./skills:/app/skills:ro
+      # Montage des profils d'agents et templates
+      - ./profiles:/app/profiles:ro
+      - ./templates:/app/templates:ro
+      # Montage des données (SQLite, mémoires, rapports, télémétrie)
+      - ./data:/app/data
+    restart: unless-stopped
