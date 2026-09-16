@@ -1,18 +1,42 @@
+model:
+  provider: openrouter
+  default: deepseek/deepseek-v4-flash
+
 agent:
-  name: "Hermes_Base_Agent"
-  role: "Assistant générique d'IA pour les TPE/PME."
-  description: "Tu es un assistant agentique configuré pour assister les entreprises dans leurs tâches quotidiennes."
-
-llm:
-  provider: "openai"
-  base_url: "https://api.openai.com/v1"
-  api_key: "${OPENAI_API_KEY}"
-  model: "gpt-4o-mini"
-  temperature: 0.7
-
-tools: []
+  name: Hermes_Recouvrement
+  role: Assistant ADV spécialisé dans le recouvrement pour les TPE/PME.
+  description: Tu analyses les fichiers comptables, détectes les retards de paiement
+    et rédiges les relances en appliquant le droit commercial français (L.441-10).
 
 dashboard:
   basic_auth:
-    username: "${HERMES_DASHBOARD_BASIC_AUTH_USERNAME}"
-    password_hash: "${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH}"
+    username: ${HERMES_DASHBOARD_BASIC_AUTH_USERNAME}
+    password_hash: ${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH}
+
+tools:
+  - path: /app/skills/check_overdue.py
+  - path: /app/skills/credit_management/balance_agee.py
+  - path: /app/skills/credit_management/import_csv.py
+  - path: /app/skills/credit_management/veille_bodacc.py
+  - path: /app/skills/credit_management/fiche_credit.py
+  - path: /app/skills/telemetry.py
+
+gateway:
+  platforms:
+    telegram:
+      extra:
+        status_indicator: true
+        status_online: "🟢 En ligne — Credit Manager"
+        status_offline: "🔴 Hors ligne"
+
+_config_version: 33
+
+# ── Security ──────────────────────────────────────────────────────────
+security:
+  redact_secrets: true
+  tirith_enabled: false
+
+# ── Fallback Model ────────────────────────────────────────────────────
+fallback_model:
+  provider: openrouter
+  model: anthropic/claude-3-5-sonnet

@@ -8,13 +8,15 @@ LABEL version="1.0-orso-core"
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH="/app:${PYTHONPATH}"
+ENV HERMES_HOME="/app/data/hermes_home"
 
-# Installation des dépendances système de base, de ripgrep et de Node.js/npm (requis pour compiler le bundle TUI)
+# Installation des dépendances système de base, de ripgrep, de gosu et de Node.js/npm
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
     build-essential \
     ripgrep \
+    gosu \
     nodejs \
     npm \
     && rm -rf /var/lib/apt/lists/*
@@ -29,7 +31,7 @@ RUN groupadd -g 10001 orso && \
     useradd -u 10001 -g orso -m -d /home/orso orso
 
 # Création préalable des répertoires de configuration et de travail
-RUN mkdir -p /home/orso/.hermes /app/config /app/skills /app/data /app/profiles /app/templates && \
+RUN mkdir -p /home/orso/.hermes /app/config /app/skills /app/data/hermes_home /app/data/agents /app/data/reports /app/data/telemetry /app/profiles /app/templates && \
     chown -R orso:orso /home/orso /app
 
 # Copie préalable des dépendances pour le cache Docker
@@ -57,11 +59,14 @@ RUN ln -sf /app/config/hermes.yaml /home/orso/.hermes/config.yaml && \
     chown -h orso:orso /home/orso/.hermes/config.yaml /home/orso/.hermes/skills && \
     chown -R orso:orso /app /home/orso
 
-# Bascule vers l'utilisateur non-root
-USER orso
+# Droits d'exécution sur le script d'entrypoint
+RUN chmod +x /app/docker/orso-entrypoint.sh
 
 # Port exposé par le serveur de dashboard / API
 EXPOSE 9119
+
+# Entrypoint garantissant permissions, persistance et drop de privilèges vers 'orso' (UID 10001)
+ENTRYPOINT ["/app/docker/orso-entrypoint.sh"]
 
 # Commande de démarrage par défaut
 CMD ["python", "-m", "uvicorn", "hermes_cli.web_server:app", "--host", "0.0.0.0", "--port", "9119"]

@@ -9,20 +9,22 @@ services:
       # Mappe le port du dashboard/API d'Orso sur le port 9229 (Olympe reste sur 9339)
       - "9229:9119"
     environment:
-      # Chemin vers le fichier de configuration à charger au runtime
+      # Chemin vers le fichier de configuration et espace de persistance de l'agent
       - HERMES_CONFIG_PATH=/app/config/hermes.yaml
+      - HERMES_HOME=/app/data/hermes_home
       # Clés API passées depuis le fichier .env de l'hôte
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
-      - AIRTABLE_API_KEY=${AIRTABLE_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - AIRTABLE_API_KEY=${AIRTABLE_API_KEY:-}
       # Authentification basique sécurisée pour le dashboard web (à renseigner dans le fichier .env)
       - HERMES_DASHBOARD_BASIC_AUTH_USERNAME=${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:-admin}
       - HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH=${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH:-scrypt$$16384$$8$$1$$ISSlbORw91Gyari7jv6+lA==$$W0h3DLb/8dG9sAjcfTtPlm3shTjg8um+PMTDz/3Glvo=}
       # Isolation Client Orso & Authentification IAM Supabase
-      - ORSO_CLIENT_ID=${ORSO_CLIENT_ID}
-      - ORSO_CLIENT_SLUG=${ORSO_CLIENT_SLUG}
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - ORSO_CLIENT_ID=${ORSO_CLIENT_ID:-}
+      - ORSO_CLIENT_SLUG=${ORSO_CLIENT_SLUG:-}
+      - SUPABASE_URL=${SUPABASE_URL:-}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY:-}
     volumes:
       # Montage des configurations locales en lecture/écriture
       - ./config:/app/config
@@ -36,6 +38,12 @@ services:
       - ./apps/ui-client/dist:/app/apps/ui-client/dist:ro
       # Montage des données (SQLite, mémoires, rapports, télémétrie)
       - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9119/api/client/status"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
 
   orso-ui-client:
@@ -51,5 +59,6 @@ services:
       - ./apps/ui-client/dist:/usr/share/nginx/html:ro
       - ./apps/ui-client/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      - orso-backend
+      orso-backend:
+        condition: service_healthy
     restart: unless-stopped
