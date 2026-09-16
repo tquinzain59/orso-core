@@ -109,7 +109,7 @@ def test_login_environment_found_matches_instance(client, monkeypatch):
                 "tenant_slug": "financia-solutions",
                 "role": "daf",
                 "target_environment": {
-                    "instance_url": "https://recouvrement.orso-agents.fr",
+                    "instance_url": "https://prod-fr-002.orso-agents.fr",
                     "docker_container_name": "orso_client_backend",
                     "docker_host": "92.222.68.80",
                     "docker_port": 9300,
@@ -143,7 +143,7 @@ def test_login_environment_found_matches_instance(client, monkeypatch):
         assert resp.status_code == 200
         data = resp.json()
         assert data["success"] is True
-        assert data["target_environment"]["instance_url"] == "https://recouvrement.orso-agents.fr"
+        assert data["target_environment"]["instance_url"] == "https://prod-fr-002.orso-agents.fr"
         assert data["target_environment"]["docker_container_name"] == "orso_client_backend"
         assert data["redirect_url"] is None
 
@@ -168,7 +168,7 @@ def test_login_environment_found_on_different_instance_provides_redirect(client,
                 "tenant_slug": "financia-solutions",
                 "role": "daf",
                 "target_environment": {
-                    "instance_url": "https://recouvrement.orso-agents.fr",
+                    "instance_url": "https://prod-fr-002.orso-agents.fr",
                     "docker_container_name": "orso_client_backend",
                     "docker_host": "92.222.68.80",
                     "docker_port": 9300,
@@ -199,4 +199,4 @@ def test_login_environment_found_on_different_instance_provides_redirect(client,
         assert resp.status_code == 200
         data = resp.json()
         assert data["success"] is True
-        assert data["redirect_url"] == "https://recouvrement.orso-agents.fr"
+        assert data["redirect_url"] == "https://prod-fr-002.orso-agents.fr"

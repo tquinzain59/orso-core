@@ -35,7 +35,7 @@ POC_DATA = [
             "internal_route_key": "orso_backend_financia",
             "status": "ready",
             "agents_enabled": ["jerome"],
-            "instance_url": "https://recouvrement.orso-agents.fr",
+            "instance_url": "https://prod-fr-002.orso-agents.fr",
             "docker_container_name": "orso_client_backend",
             "docker_host": "92.222.68.80",
             "docker_port": 9300,

@@ -43,9 +43,8 @@ COPY . /app/
 # Installation du moteur Orso en mode éditable local + dépendances métier
 RUN uv pip install --system --no-cache-dir -e /app -r /app/requirements-base.txt
 
-# S'assure que le dossier du bundle UI Client existe et alimente web_dist
+# S'assure que les dossiers du dashboard et de l'UI Client existent avec les bons droits
 RUN mkdir -p /app/apps/ui-client/dist /app/hermes_cli/web_dist && \
-    cp -rn /app/apps/ui-client/dist/* /app/hermes_cli/web_dist/ 2>/dev/null || true && \
     chown -R orso:orso /app/apps/ui-client /app/hermes_cli/web_dist
 
 # Configuration par défaut

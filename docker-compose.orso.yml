@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile.orso
     container_name: ${ORSO_CLIENT_CONTAINER:-orso_client_backend}
-    command: ["python", "-m", "uvicorn", "hermes_cli.web_server:app", "--host", "0.0.0.0", "--port", "9119"]
+    command: ["hermes", "dashboard", "--host", "0.0.0.0", "--port", "9119", "--no-open", "--skip-build"]
     ports:
       # Mappe le port du dashboard/API d'Orso sur le port 9229 (Olympe reste sur 9339)
       - "9229:9119"
@@ -12,6 +12,7 @@ services:
       # Chemin vers le fichier de configuration et espace de persistance de l'agent
       - HERMES_CONFIG_PATH=/app/config/hermes.yaml
       - HERMES_HOME=/app/data/hermes_home
+      - HERMES_DASHBOARD_PUBLIC_URL=${HERMES_DASHBOARD_PUBLIC_URL:-https://admin.prod-fr-002.orso-agents.fr}
       # Clés API passées depuis le fichier .env de l'hôte
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
@@ -19,7 +20,8 @@ services:
       - AIRTABLE_API_KEY=${AIRTABLE_API_KEY:-}
       # Authentification basique sécurisée pour le dashboard web (à renseigner dans le fichier .env)
       - HERMES_DASHBOARD_BASIC_AUTH_USERNAME=${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:-admin}
-      - HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH=${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH:-scrypt$$16384$$8$$1$$ISSlbORw91Gyari7jv6+lA==$$W0h3DLb/8dG9sAjcfTtPlm3shTjg8um+PMTDz/3Glvo=}
+      - HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD:-admin}
+      - HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH=${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH:-}
       # Isolation Client Orso & Authentification IAM Supabase
       - ORSO_CLIENT_ID=${ORSO_CLIENT_ID:-}
       - ORSO_CLIENT_SLUG=${ORSO_CLIENT_SLUG:-}
@@ -31,7 +33,9 @@ services:
       # Montage des compétences locales en lecture seule
       - ./skills:/app/skills:ro
       # Montage des profils d'agents et templates
-      - ./profiles:/app/profiles:ro
+      - ./profiles:/app/profiles
+      - ./profiles:/app/data/hermes_home/profiles
+      - ./profiles:/home/orso/.hermes/profiles
       - ./templates:/app/templates:ro
       # Montage en direct des routeurs Orso et du bundle compilé UI Client
       - ./hermes_cli:/app/hermes_cli:ro

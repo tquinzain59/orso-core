@@ -67,6 +67,16 @@ data/
 # Compose/profile runtime state (bind-mounted; avoid ownership/secret issues)
 hermes-config/
 runtime/
+profiles/*/audio_cache/
+profiles/*/image_cache/
+profiles/*/cache/
+profiles/*/sessions/
+profiles/*/logs/
+profiles/*/pairing/
+profiles/*/cron/
+profiles/*/*.db*
+profiles/*/auth.json
+profiles/*/auth.lock
 
 # ---------- Not needed inside the Docker image ----------
 

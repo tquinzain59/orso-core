@@ -1,5 +1,6 @@
 #!/bin/sh
 set -e
+umask 0002
 
 # ==============================================================================
 # Orso Agents - Entrypoint de Démarrage Sécurisé
@@ -54,6 +55,15 @@ fi
 # 4. Définition explicite de HERMES_HOME vers le volume persistant
 export HERMES_HOME="${HERMES_HOME:-/app/data/hermes_home}"
 export HERMES_CONFIG_PATH="${HERMES_CONFIG_PATH:-/app/config/hermes.yaml}"
+
+# Liaison des profils pour la découverte multi-profils Hermès
+mkdir -p /home/orso/.hermes /app/data/hermes_home
+ln -sfn /app/profiles /home/orso/.hermes/profiles
+ln -sfn /app/profiles /app/data/hermes_home/profiles
+if [ "$(id -u)" = "0" ]; then
+    chown -h orso:orso /home/orso/.hermes/profiles /app/data/hermes_home/profiles 2>/dev/null || true
+    chown -R orso:orso /home/orso/.hermes 2>/dev/null || true
+fi
 
 echo "==> [Orso Entrypoint] HERMES_HOME configuré sur : $HERMES_HOME"
 echo "==> [Orso Entrypoint] HERMES_CONFIG_PATH : $HERMES_CONFIG_PATH"

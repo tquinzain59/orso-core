@@ -46,10 +46,10 @@ CREATE POLICY "Users can view own tenant alerts"
         SELECT tenant_id FROM public.profiles WHERE profiles.id = auth.uid()
     ));
 
--- 4. Mise à jour des références cibles pour Financia Solutions
+-- 4. Mise à jour des références cibles pour Financia Solutions (PROD-FR-002)
 UPDATE public.tenant_instances ti
 SET 
-  instance_url = 'https://recouvrement.orso-agents.fr',
+  instance_url = 'https://prod-fr-002.orso-agents.fr',
   docker_container_name = 'orso_client_backend',
   docker_host = '92.222.68.80',
   docker_port = 9300,
