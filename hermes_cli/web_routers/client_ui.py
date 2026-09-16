@@ -60,21 +60,24 @@ def _find_profile_dir(agent_id: str) -> Optional[Path]:
         Path.home() / ".hermes" / "profiles" / agent_id,
     ]
     for c in candidates:
-        if c.is_dir():
-            return c
+        try:
+            if c.is_dir():
+                return c
+        except Exception:
+            continue
     return None
 
 
 def _load_agent_soul(agent_id: str) -> str:
     """Charge le SOUL.md de l'agent s'il existe, sinon fournit la persona par défaut."""
-    profile_dir = _find_profile_dir(agent_id)
-    if profile_dir:
-        soul_file = profile_dir / "SOUL.md"
-        if soul_file.is_file():
-            try:
+    try:
+        profile_dir = _find_profile_dir(agent_id)
+        if profile_dir:
+            soul_file = profile_dir / "SOUL.md"
+            if soul_file.is_file():
                 return soul_file.read_text(encoding="utf-8")
-            except Exception as e:
-                _log.warning("Impossible de lire %s: %s", soul_file, e)
+    except Exception as e:
+        _log.warning("Impossible de lire la persona de %s: %s", agent_id, e)
 
     # Personas de repli enrichies
     if agent_id == "jerome":
@@ -624,10 +627,10 @@ async def _chat_stream_generator(
             try:
                 from hermes_constants import set_hermes_home_override, reset_hermes_home_override
                 profile_dir = _find_profile_dir(agent_id)
-                if profile_dir and profile_dir.is_dir():
+                if profile_dir and profile_dir.is_dir() and os.access(profile_dir, os.W_OK):
                     agent_home = profile_dir.resolve()
                 else:
-                    agent_home = (PROJECT_ROOT / "data" / "hermes_home").resolve()
+                    agent_home = (PROJECT_ROOT / "data" / "agents" / agent_id).resolve()
                     agent_home.mkdir(parents=True, exist_ok=True)
                 token = set_hermes_home_override(str(agent_home))
                 agent = AIAgent(

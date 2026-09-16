@@ -61,6 +61,19 @@ def test_load_agent_soul_other_agents():
         assert len(soul) > 20
 
 
+def test_load_agent_soul_permission_error(monkeypatch):
+    from pathlib import Path
+    orig_is_file = Path.is_file
+    def mock_is_file(self):
+        if "SOUL.md" in str(self):
+            raise PermissionError("Permission denied: simulated")
+        return orig_is_file(self)
+    monkeypatch.setattr(Path, "is_file", mock_is_file)
+    soul = _load_agent_soul("jerome")
+    assert "Jerome" in soul or "Jérôme" in soul
+    assert "recouvrement" in soul.lower()
+
+
 @pytest.mark.asyncio
 async def test_chat_stream_generator(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
