@@ -108,6 +108,10 @@ export const App: React.FC = () => {
     setAuthLoading(false);
 
     if (res.success && res.user) {
+      if (res.redirect_url && typeof window !== 'undefined' && !window.location.href.startsWith(res.redirect_url)) {
+        window.location.href = res.redirect_url;
+        return;
+      }
       setIsAuthenticated(true);
       setShowLoginModal(false);
       setCompanyName(res.tenant?.name || 'Financia Solutions');
@@ -431,6 +435,30 @@ export const App: React.FC = () => {
                 </div>
                 <span className="text-[10px] px-2 py-0.5 rounded bg-rose-900/80 border border-rose-700 text-rose-300 font-bold">
                   403 Rejet
+                </span>
+              </button>
+
+              <button
+                type="button"
+                disabled={authLoading}
+                onClick={() =>
+                  handleLogin(
+                    undefined,
+                    'test.sansenv@orso-agents.fr',
+                    'TempOrso2026!SansEnv'
+                  )
+                }
+                className="w-full p-2.5 rounded-xl bg-amber-950/40 hover:bg-amber-950/70 border border-amber-800/40 text-amber-200 text-xs font-semibold flex items-center justify-between transition-all group active:scale-95"
+              >
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-400 group-hover:scale-110 transition-transform" />
+                  <div className="text-left">
+                    <p className="font-bold text-white">⚠️ Test Sans Environnement</p>
+                    <p className="text-[10px] text-amber-300/80">Aura Sans Env (Alerte Support Orso 404)</p>
+                  </div>
+                </div>
+                <span className="text-[10px] px-2 py-0.5 rounded bg-amber-900/80 border border-amber-700 text-amber-300 font-bold">
+                  404 Alerte
                 </span>
               </button>
             </div>

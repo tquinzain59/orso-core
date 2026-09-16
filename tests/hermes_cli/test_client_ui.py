@@ -331,6 +331,9 @@ def test_client_auth_login_cross_tenant_rejection(monkeypatch):
                         "tenant_id": "other-tenant-id",
                         "tenant_slug": "commercialink",
                         "role": "commercial",
+                        "target_environment": {
+                            "docker_container_name": "orso_backend_commercialink"
+                        },
                     },
                     "user_metadata": {
                         "full_name": "Claire Dubois"

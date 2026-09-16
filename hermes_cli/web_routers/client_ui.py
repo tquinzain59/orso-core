@@ -134,9 +134,118 @@ async def client_status():
     }
 
 
+def _resolve_target_environment(
+    token_tenant_id: Optional[str],
+    token_tenant_slug: Optional[str],
+    app_meta: Dict[str, Any],
+    supabase_url: str,
+    service_key: str,
+) -> Optional[Dict[str, Any]]:
+    """Résout les références de l'environnement Docker cible depuis Supabase ou les métadonnées.
+
+    Retourne un dict avec les références d'infrastructure {instance_url, docker_container_name, ...}
+    ou None si aucune référence d'environnement n'est configurée.
+    """
+    # 1. Vérifier si les métadonnées utilisateur portent déjà l'environnement cible
+    target_env = app_meta.get("target_environment") or app_meta.get("environment")
+    if isinstance(target_env, dict) and (target_env.get("instance_url") or target_env.get("docker_container_name")):
+        return target_env
+
+    # 2. Interroger la table public.tenant_instances dans Supabase via PostgREST
+    if token_tenant_id and supabase_url and service_key:
+        try:
+            inst_url = f"{supabase_url}/rest/v1/tenant_instances?tenant_id=eq.{token_tenant_id}&select=*"
+            inst_req = urllib.request.Request(
+                inst_url,
+                headers={
+                    "apikey": service_key,
+                    "Authorization": f"Bearer {service_key}",
+                    "User-Agent": "OrsoCore/1.0",
+                },
+            )
+            with urllib.request.urlopen(inst_req, timeout=3.0) as inst_resp:
+                instances = json.loads(inst_resp.read().decode("utf-8"))
+                if instances and len(instances) > 0:
+                    inst_data = instances[0]
+                    inst_url_val = inst_data.get("instance_url")
+                    inst_container_val = inst_data.get("docker_container_name") or inst_data.get("internal_route_key")
+                    if inst_url_val or inst_container_val:
+                        return {
+                            "instance_url": inst_url_val,
+                            "docker_container_name": inst_container_val,
+                            "docker_host": inst_data.get("docker_host"),
+                            "docker_port": inst_data.get("docker_port"),
+                            "environment_status": inst_data.get("environment_status") or inst_data.get("status", "ready"),
+                            "agents_enabled": inst_data.get("agents_enabled", ["jerome"]),
+                        }
+        except Exception as e:
+            _log.debug("Impossible d'interroger tenant_instances: %s", e)
+
+    return None
+
+
+def _trigger_support_alert(
+    supabase_url: str,
+    service_key: str,
+    user_email: str,
+    user_id: Optional[str],
+    tenant_id: Optional[str],
+    tenant_slug: Optional[str],
+    client_ip: Optional[str] = None,
+) -> None:
+    """Déclenche et persiste une alerte critique lorsque aucun environnement n'est trouvé."""
+    _log.error(
+        "[ALERT_SUPPORT_ORSO] Environnement non trouvé pour le client authentifié : "
+        "user=%s (id:%s), tenant=%s (id:%s), ip=%s. Alerte support déclenchée.",
+        user_email,
+        user_id,
+        tenant_slug,
+        tenant_id,
+        client_ip,
+    )
+
+    if not supabase_url or not service_key:
+        return
+
+    try:
+        alert_payload = json.dumps({
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "user_email": user_email,
+            "alert_type": "ENVIRONMENT_NOT_FOUND",
+            "message": (
+                f"L'utilisateur {user_email} s'est authentifié avec succès, mais aucun environnement "
+                f"Docker cible n'est renseigné pour son organisation ({tenant_slug})."
+            ),
+            "status": "open",
+            "details": {
+                "tenant_slug": tenant_slug,
+                "client_ip": client_ip,
+                "timestamp": time.time(),
+            },
+        }).encode("utf-8")
+
+        req = urllib.request.Request(
+            f"{supabase_url}/rest/v1/support_alerts",
+            data=alert_payload,
+            headers={
+                "apikey": service_key,
+                "Authorization": f"Bearer {service_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "OrsoCore/1.0",
+                "Prefer": "return=minimal",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=3.0):
+            _log.info("Alerte support consignée dans public.support_alerts pour %s", user_email)
+    except Exception as e:
+        _log.warning("Impossible d'enregistrer l'alerte support dans public.support_alerts: %s", e)
+
+
 @router.post("/api/client/auth/login")
-async def client_auth_login(req: ClientLoginRequest):
-    """Authentifie un client auprès de Supabase Auth et vérifie l'appartenance à cette instance."""
+async def client_auth_login(req: ClientLoginRequest, request: Request):
+    """Authentifie un client auprès de Supabase Auth, résout son environnement cible et vérifie l'accès."""
     supabase_url = os.environ.get("SUPABASE_URL", "").strip()
     service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
 
@@ -186,10 +295,39 @@ async def client_auth_login(req: ClientLoginRequest):
     token_tenant_id = app_meta.get("tenant_id")
     token_tenant_slug = app_meta.get("tenant_slug")
 
-    # Contrôle d'isolation Tenant immédiat dès le login
+    # 1. Résolution des références de l'environnement Docker cible
+    target_env = _resolve_target_environment(
+        token_tenant_id=token_tenant_id,
+        token_tenant_slug=token_tenant_slug,
+        app_meta=app_meta,
+        supabase_url=supabase_url,
+        service_key=service_key,
+    )
+
+    # 2. Si rien n'est renseigné pour l'environnement cible :
+    # "Lorsque rien n'est renseigné mais que le client s'authentifie correctement,
+    # le message renvoyé doit indiquer : 'Environnement non trouvé, le support Orso-agents est alerté'"
+    if not target_env or (not target_env.get("instance_url") and not target_env.get("docker_container_name")):
+        client_ip = request.client.host if hasattr(request, "client") and request.client else None
+        _trigger_support_alert(
+            supabase_url=supabase_url,
+            service_key=service_key,
+            user_email=req.email,
+            user_id=user_info.get("id"),
+            tenant_id=token_tenant_id,
+            tenant_slug=token_tenant_slug,
+            client_ip=client_ip,
+        )
+        raise HTTPException(
+            status_code=404,
+            detail="Environnement non trouvé, le support Orso-agents est alerté",
+        )
+
+    # 3. Contrôle d'isolation Tenant & Redirection vers l'environnement cible
     expected_client_id = os.environ.get("ORSO_CLIENT_ID", "").strip()
     expected_client_slug = os.environ.get("ORSO_CLIENT_SLUG", "").strip()
 
+    redirect_url = None
     if expected_client_id or expected_client_slug:
         matched = True
         if expected_client_id and token_tenant_id != expected_client_id:
@@ -198,21 +336,32 @@ async def client_auth_login(req: ClientLoginRequest):
             matched = False
 
         if not matched:
-            _log.warning(
-                "Tentative de connexion cross-tenant refusée: user=%s, tenant=%s vs instance=(id:%s, slug:%s)",
-                req.email,
-                token_tenant_slug,
-                expected_client_id,
-                expected_client_slug,
-            )
-            raise HTTPException(
-                status_code=403,
-                detail="Accès refusé : Vos identifiants ne vous permettent pas d'accéder à cette instance.",
-            )
+            target_instance_url = target_env.get("instance_url")
+            if target_instance_url:
+                _log.info(
+                    "Redirection du client %s vers son instance cible: %s",
+                    req.email,
+                    target_instance_url,
+                )
+                redirect_url = target_instance_url
+            else:
+                _log.warning(
+                    "Tentative de connexion cross-tenant refusée: user=%s, tenant=%s vs instance=(id:%s, slug:%s)",
+                    req.email,
+                    token_tenant_slug,
+                    expected_client_id,
+                    expected_client_slug,
+                )
+                raise HTTPException(
+                    status_code=403,
+                    detail="Accès refusé : Vos identifiants ne vous permettent pas d'accéder à cette instance.",
+                )
 
     response_data = {
         "success": True,
         "access_token": access_token,
+        "redirect_url": redirect_url,
+        "target_environment": target_env,
         "user": {
             "id": user_info.get("id"),
             "email": user_info.get("email"),
@@ -225,6 +374,7 @@ async def client_auth_login(req: ClientLoginRequest):
             "name": token_tenant_slug.replace("-", " ").title() if token_tenant_slug else "Client",
         },
     }
+
 
     resp = JSONResponse(response_data)
     resp.set_cookie(

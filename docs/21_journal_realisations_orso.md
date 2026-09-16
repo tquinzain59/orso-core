@@ -50,6 +50,7 @@ Les informations de ce document s'appuient sur :
 | **13/09** | Pilotage | Initialisation du backlog Jira KAN, gouvernance Confluence, spec KAN-4, ticket KAN-20 | Atlassian Cloud |
 | **16/09** | Architecture | **Cadrage securite IAM & isolation multi-tenant** : arbitrage Supabase Auth, routage interne et creation du lot Jira KAN-26 a KAN-29 | Atlassian Jira / `orso-core` |
 | **16/09** | Securite & E2E | **Association conteneur Financia Solutions & Validation Live** : instance Docker associee a Sophie Martin (DAF), guard JWT, streaming SSE avec Jerome (200 OK) et rejet cross-tenant prouve (403 Forbidden) | `orso-core` (Docker 9229/9300) |
+| **16/09** | Architecture & IAM | **Aiguillage conteneurs Docker & Alerte Support** : enrichissement Supabase (`tenant_instances`, `support_alerts`), détection automatique de l'environnement cible, alerte critique et renvoi du message exact "Environnement non trouvé, le support Orso-agents est alerté" | `orso-core` / Supabase / OVH |
 
 ---
 

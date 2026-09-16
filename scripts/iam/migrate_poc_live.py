@@ -35,6 +35,11 @@ POC_DATA = [
             "internal_route_key": "orso_backend_financia",
             "status": "ready",
             "agents_enabled": ["jerome"],
+            "instance_url": "https://recouvrement.orso-agents.fr",
+            "docker_container_name": "orso_client_backend",
+            "docker_host": "92.222.68.80",
+            "docker_port": 9300,
+            "environment_status": "active",
         },
         "user": {
             "email": "sophie.martin@finarecee20.fr",
@@ -128,6 +133,23 @@ POC_DATA = [
             "role": "admin",
         },
     },
+    {
+        "tenant": {
+            "name": "Aura Sans Environnement",
+            "siret": "99988877700011",
+            "slug": "aura-sans-env",
+            "sector": "Audit & Conseil",
+            "status": "active",
+        },
+        "instance": None,
+        "user": {
+            "email": "test.sansenv@orso-agents.fr",
+            "password": "TempOrso2026!SansEnv",
+            "full_name": "Testeur Sans Environnement",
+            "phone": "+33 6 00 00 00 00",
+            "role": "direction",
+        },
+    },
 ]
 
 
@@ -174,9 +196,17 @@ def upsert_instance(i_dict):
         return res[0]["id"]
 
 
-def create_or_get_user(u_dict, tenant_id, tenant_slug):
-    """Crée l'utilisateur dans auth.users via Supabase Admin API."""
+def create_or_get_user(u_dict, tenant_id, tenant_slug, target_env=None):
+    """Crée ou met à jour l'utilisateur dans auth.users via Supabase Admin API."""
     url = f"{SUPABASE_URL}/auth/v1/admin/users"
+    app_meta_dict = {
+        "tenant_id": tenant_id,
+        "tenant_slug": tenant_slug,
+        "role": u_dict["role"],
+    }
+    if target_env:
+        app_meta_dict["target_environment"] = target_env
+
     body = {
         "email": u_dict["email"],
         "password": u_dict["password"],
@@ -185,11 +215,7 @@ def create_or_get_user(u_dict, tenant_id, tenant_slug):
             "full_name": u_dict["full_name"],
             "phone": u_dict["phone"],
         },
-        "app_metadata": {
-            "tenant_id": tenant_id,
-            "tenant_slug": tenant_slug,
-            "role": u_dict["role"],
-        }
+        "app_metadata": app_meta_dict,
     }
     req = urllib.request.Request(url, data=json.dumps(body).encode(), headers=HEADERS, method="POST")
     try:
@@ -199,14 +225,28 @@ def create_or_get_user(u_dict, tenant_id, tenant_slug):
     except urllib.error.HTTPError as e:
         err = e.read().decode()
         if "already been registered" in err or "already exists" in err:
-            # Récupérer l'ID existant
+            # Récupérer l'ID existant et mettre à jour app_metadata
             list_url = f"{SUPABASE_URL}/auth/v1/admin/users"
             req_list = urllib.request.Request(list_url, headers=HEADERS)
             with urllib.request.urlopen(req_list) as resp_l:
                 users_resp = json.loads(resp_l.read().decode())
                 for u in users_resp.get("users", []):
                     if u["email"] == u_dict["email"]:
-                        return u["id"], False
+                        user_id = u["id"]
+                        update_url = f"{SUPABASE_URL}/auth/v1/admin/users/{user_id}"
+                        updated_app_meta = {**u.get("app_metadata", {}), **app_meta_dict}
+                        req_up = urllib.request.Request(
+                            update_url,
+                            data=json.dumps({"app_metadata": updated_app_meta}).encode(),
+                            headers=HEADERS,
+                            method="PUT"
+                        )
+                        try:
+                            with urllib.request.urlopen(req_up):
+                                pass
+                        except Exception as update_err:
+                            print(f"   [WARN] Mise à jour app_metadata échouée pour {u_dict['email']}: {update_err}")
+                        return user_id, False
         raise RuntimeError(f"Erreur création auth user {u_dict['email']}: {err}")
 
 
@@ -263,12 +303,24 @@ def run_migration():
         print(f"   [OK] Tenant ID : {t_id}")
 
         # 2. Instance
-        i_info["tenant_id"] = t_id
-        i_id = upsert_instance(i_info)
-        print(f"   [OK] Instance Dédiée : {i_info['internal_route_key']} (Agents: {i_info['agents_enabled']})")
+        if i_info:
+            i_info["tenant_id"] = t_id
+            i_id = upsert_instance(i_info)
+            print(f"   [OK] Instance Dédiée : {i_info['internal_route_key']} (URL: {i_info.get('instance_url')})")
+            target_env = {
+                "instance_url": i_info.get("instance_url"),
+                "docker_container_name": i_info.get("docker_container_name") or i_info.get("internal_route_key"),
+                "docker_host": i_info.get("docker_host"),
+                "docker_port": i_info.get("docker_port"),
+                "environment_status": i_info.get("environment_status", "active"),
+            }
+        else:
+            i_id = None
+            target_env = None
+            print("   [INFO] Aucune instance renseignée (Test Alerte Support).")
 
         # 3. Auth User
-        u_id, created = create_or_get_user(u_info, t_id, t_info["slug"])
+        u_id, created = create_or_get_user(u_info, t_id, t_info["slug"], target_env=target_env)
         action_label = "Créé" if created else "Existant"
         print(f"   [OK] Utilisateur Auth {action_label} : {u_info['email']} (UUID: {u_id})")
 
@@ -281,8 +333,9 @@ def run_migration():
             "slug": t_info["slug"],
             "email": u_info["email"],
             "role": u_info["role"],
-            "agents": i_info["agents_enabled"],
-            "instance_key": i_info["internal_route_key"],
+            "agents": i_info["agents_enabled"] if i_info else [],
+            "instance_key": i_info["internal_route_key"] if i_info else None,
+            "instance_url": i_info.get("instance_url") if i_info else None,
             "temp_password": u_info["password"],
             "user_id": u_id,
             "tenant_id": t_id,

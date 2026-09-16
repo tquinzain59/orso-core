@@ -69,6 +69,8 @@ export async function loginClient(email: string, password: string): Promise<{
   user?: any;
   tenant?: any;
   token?: string;
+  target_environment?: any;
+  redirect_url?: string;
   error?: string;
 }> {
   const base = getApiBaseUrl();
@@ -92,12 +94,15 @@ export async function loginClient(email: string, password: string): Promise<{
       setStoredUser({
         ...data.user,
         tenant: data.tenant,
+        target_environment: data.target_environment,
       });
       return {
         success: true,
         user: data.user,
         tenant: data.tenant,
         token: data.access_token,
+        target_environment: data.target_environment,
+        redirect_url: data.redirect_url,
       };
     }
   } catch (err: any) {
