@@ -79,8 +79,9 @@ ignored/
 .worktrees/
 environments/benchmarks/evals/
 
-# Web UI build output
-hermes_cli/web_dist/
+# Web UI build output (tracked in orso-core for self-contained Docker image builds)
+!hermes_cli/web_dist/
+!hermes_cli/web_dist/**
 # Cross-process web UI build lock (flock target, always empty)
 .web_ui_build.lock
 apps/desktop/build/
@@ -152,7 +153,9 @@ models-dev-upstream/
 opencode.json
 config/mcporter.json
 
-hermes_cli/tui_dist/*
+# Pre-bundled TUI entry (tracked in orso-core for self-contained Docker image builds)
+!hermes_cli/tui_dist/
+!hermes_cli/tui_dist/**
 hermes_cli/scripts/
 docs/superpowers/*
 # Working directory for the Hermes Agent's session state (~/.hermes/ at runtime;

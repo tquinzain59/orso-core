@@ -7,19 +7,24 @@ LABEL version="1.0-orso-core"
 # Empêche Python d'écrire des fichiers .pyc et configure le tampon de sortie pour Docker
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH="/app:${PYTHONPATH}"
+ENV PYTHONPATH="/app"
 ENV HERMES_HOME="/app/data/hermes_home"
 
-# Installation des dépendances système de base, de ripgrep, de gosu et de Node.js/npm
+# Installation des dépendances système de base, de ripgrep et de gosu
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
     build-essential \
     ripgrep \
     gosu \
-    nodejs \
-    npm \
     && rm -rf /var/lib/apt/lists/*
+
+# Intégration de Node.js 22 LTS officiel pour satisfaire les contraintes engines du projet (Node >= 22, npm >= 10)
+COPY --from=node:22-bookworm-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22-bookworm-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -sf /usr/local/bin/node /usr/local/bin/nodejs && \
+    ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && \
+    ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 
 # Installation de 'uv' pour accélérer l'installation des dépendances Python
 RUN pip install --no-cache-dir uv
@@ -43,9 +48,9 @@ COPY . /app/
 # Installation du moteur Orso en mode éditable local + dépendances métier
 RUN uv pip install --system --no-cache-dir -e /app -r /app/requirements-base.txt
 
-# S'assure que les dossiers du dashboard et de l'UI Client existent avec les bons droits
-RUN mkdir -p /app/apps/ui-client/dist /app/hermes_cli/web_dist && \
-    chown -R orso:orso /app/apps/ui-client /app/hermes_cli/web_dist
+# S'assure que les dossiers du dashboard, du TUI précompilé et de l'UI Client existent avec les bons droits
+RUN mkdir -p /app/apps/ui-client/dist /app/hermes_cli/web_dist /app/hermes_cli/tui_dist && \
+    chown -R orso:orso /app/apps/ui-client /app/hermes_cli/web_dist /app/hermes_cli/tui_dist
 
 # Configuration par défaut
 RUN if [ ! -f /app/config/hermes.yaml ] && [ -f /app/config/hermes.default.yaml ]; then \
@@ -67,5 +72,5 @@ EXPOSE 9119
 # Entrypoint garantissant permissions, persistance et drop de privilèges vers 'orso' (UID 10001)
 ENTRYPOINT ["/app/docker/orso-entrypoint.sh"]
 
-# Commande de démarrage par défaut
-CMD ["python", "-m", "uvicorn", "hermes_cli.web_server:app", "--host", "0.0.0.0", "--port", "9119"]
+# Commande de démarrage par défaut : dashboard officiel Hermès avec session auth et WebSockets
+CMD ["hermes", "dashboard", "--host", "0.0.0.0", "--port", "9119", "--no-open", "--skip-build"]

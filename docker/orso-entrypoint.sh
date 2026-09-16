@@ -58,11 +58,16 @@ export HERMES_CONFIG_PATH="${HERMES_CONFIG_PATH:-/app/config/hermes.yaml}"
 
 # Liaison des profils pour la découverte multi-profils Hermès
 mkdir -p /home/orso/.hermes /app/data/hermes_home
-ln -sfn /app/profiles /home/orso/.hermes/profiles
-ln -sfn /app/profiles /app/data/hermes_home/profiles
+if [ ! -d /app/data/hermes_home/profiles ] && [ -d /app/profiles ]; then
+    ln -sfn /app/profiles /app/data/hermes_home/profiles
+fi
+if [ ! -e /home/orso/.hermes/profiles ]; then
+    ln -sfn /app/data/hermes_home/profiles /home/orso/.hermes/profiles 2>/dev/null || ln -sfn /app/profiles /home/orso/.hermes/profiles
+fi
 if [ "$(id -u)" = "0" ]; then
     chown -h orso:orso /home/orso/.hermes/profiles /app/data/hermes_home/profiles 2>/dev/null || true
-    chown -R orso:orso /home/orso/.hermes 2>/dev/null || true
+    chown -R orso:orso /home/orso/.hermes /app/data/hermes_home 2>/dev/null || true
+    chmod -R 775 /app/data/hermes_home 2>/dev/null || true
 fi
 
 echo "==> [Orso Entrypoint] HERMES_HOME configuré sur : $HERMES_HOME"
