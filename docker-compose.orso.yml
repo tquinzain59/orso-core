@@ -3,19 +3,26 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.orso
-    container_name: orso_agents_backend
+    container_name: ${ORSO_CLIENT_CONTAINER:-orso_client_backend}
+    command: ["python", "-m", "uvicorn", "hermes_cli.web_server:app", "--host", "0.0.0.0", "--port", "9119"]
     ports:
-      # Mappe le port du dashboard/API d'Orso sur le port 9229
+      # Mappe le port du dashboard/API d'Orso sur le port 9229 (Olympe reste sur 9339)
       - "9229:9119"
     environment:
       # Chemin vers le fichier de configuration à charger au runtime
       - HERMES_CONFIG_PATH=/app/config/hermes.yaml
       # Clés API passées depuis le fichier .env de l'hôte
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - AIRTABLE_API_KEY=${AIRTABLE_API_KEY}
       # Authentification basique sécurisée pour le dashboard web (à renseigner dans le fichier .env)
-      - HERMES_DASHBOARD_BASIC_AUTH_USERNAME=${HERMES_DASHBOARD_BASIC_AUTH_USERNAME}
-      - HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH=${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH}
+      - HERMES_DASHBOARD_BASIC_AUTH_USERNAME=${HERMES_DASHBOARD_BASIC_AUTH_USERNAME:-admin}
+      - HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH=${HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH:-scrypt$$16384$$8$$1$$ISSlbORw91Gyari7jv6+lA==$$W0h3DLb/8dG9sAjcfTtPlm3shTjg8um+PMTDz/3Glvo=}
+      # Isolation Client Orso & Authentification IAM Supabase
+      - ORSO_CLIENT_ID=${ORSO_CLIENT_ID}
+      - ORSO_CLIENT_SLUG=${ORSO_CLIENT_SLUG}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
     volumes:
       # Montage des configurations locales en lecture/écriture
       - ./config:/app/config
@@ -24,6 +31,25 @@ services:
       # Montage des profils d'agents et templates
       - ./profiles:/app/profiles:ro
       - ./templates:/app/templates:ro
+      # Montage en direct des routeurs Orso et du bundle compilé UI Client
+      - ./hermes_cli:/app/hermes_cli:ro
+      - ./apps/ui-client/dist:/app/apps/ui-client/dist:ro
       # Montage des données (SQLite, mémoires, rapports, télémétrie)
       - ./data:/app/data
+    restart: unless-stopped
+
+  orso-ui-client:
+    build:
+      context: ./apps/ui-client
+      dockerfile: Dockerfile
+    container_name: ${ORSO_UI_CONTAINER:-orso_client_ui}
+    ports:
+      # Mappe le port de l'application cliente PWA sur le port 9300
+      - "9300:80"
+    volumes:
+      # Montage en direct du bundle et de la conf nginx pour rechargements instantanés
+      - ./apps/ui-client/dist:/usr/share/nginx/html:ro
+      - ./apps/ui-client/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - orso-backend
     restart: unless-stopped

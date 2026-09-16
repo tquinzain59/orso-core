@@ -365,7 +365,7 @@ _DESKTOP_ATTACHMENT_WS_MAX_BYTES = 384 * 1024 * 1024
 # website read/modify config and secrets.
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|(.*\.)?orso-agents\.fr)(:\d+)?$",
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -633,6 +633,7 @@ async def auth_middleware(request: Request, call_next):
         not getattr(request.state, "token_authenticated", False)
         and not getattr(request.app.state, "auth_required", False)
         and path.startswith("/api/")
+        and not path.startswith("/api/client/")
         and path not in _PUBLIC_API_PATHS
         and not path.startswith("/api/mcp/oauth/callback/")
         and not _has_valid_session_token(request)
@@ -934,6 +935,7 @@ from hermes_cli.web_routers import (  # noqa: E402
     analytics as _analytics_routes,
     chat_ws as _chat_ws_routes,
     dashboard_ui as _dashboard_ui_routes,
+    client_ui as _client_ui_routes,
 )
 
 app.include_router(_files_routes.router)
@@ -964,6 +966,7 @@ app.include_router(_tools_routes.router)
 app.include_router(_analytics_routes.router)
 app.include_router(_chat_ws_routes.router)
 app.include_router(_dashboard_ui_routes.router)
+app.include_router(_client_ui_routes.router)
 
 # Plugin API routes and the dashboard auth routes (/login, /auth/*, /api/auth/*)
 # mount before the SPA catch-all so /{full_path:path} doesn't swallow them. Auth

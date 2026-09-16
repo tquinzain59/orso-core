@@ -245,3 +245,14 @@ profiles/*/state/
 profiles/*/bin/
 profiles/*/home/
 profiles/*/.env
+profiles/*/auth.json
+profiles/*/auth.lock
+profiles/*/.update_check
+profiles/*/channel_directory.json
+profiles/*/models_dev_cache.*
+profiles/*/skills/.usage.json
+profiles/*/skills/.curator_state
+.tmp_hermes/
+install_id
+*.lock
+

@@ -1,0 +1,3 @@
+model:
+  provider: openrouter
+  default: deepseek/deepseek-v4-flash

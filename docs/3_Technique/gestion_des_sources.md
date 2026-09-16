@@ -59,3 +59,12 @@ Chaque dépôt comporte des règles d'exclusion strictes pour empêcher toute fu
   * Fichiers d'environnement (`.env`).
 * **Dans `Site_Hermes-core`** :
   * Fichiers de configuration et secrets d'administration locaux (`Secrets/`).
+
+---
+
+## 5. Cycle de Déploiement et Rapatriement Continu des Compétences
+
+Pour le processus complet de conception locale sur Mac, déploiement sur VPS OVH, entraînement live des agents et rapatriement assaini des compétences, consulter :
+* [`docs/3_Technique/cycle_vie_deploiement_et_rapatriement.md`](file:///Users/tquinzain/Documents/Dev%20Projects/orso-core/docs/3_Technique/cycle_vie_deploiement_et_rapatriement.md)
+* Skill DevOps d'automatisation : `skills/devops/sync-agent-skills/`
+

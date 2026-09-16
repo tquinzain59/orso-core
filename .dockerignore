@@ -76,6 +76,8 @@ runtime/
 apps/
 !apps/shared/
 !apps/shared/**
+!apps/ui-client/dist/
+!apps/ui-client/dist/**
 
 # Test suite — not shipped in production images
 tests/

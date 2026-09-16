@@ -75,3 +75,22 @@ Hermès Core utilise **SQLite** pour sa persistance d'état locale (située dans
   * `api_call_count`
   * `actual_cost_usd` et `estimated_cost_usd`
   * `last_seen` (timestamp de dernière activité)
+
+---
+
+## 4. Architecture IAM & Isolation Multi-Tenant (KAN-26 à KAN-29)
+
+Depuis le 16/09/2026, l'accès client et l'hébergement des agents obéissent à un partitionnement strict :
+
+1. **Fournisseur d'Identité Souverain (IAM Supabase Auth - KAN-26)** :
+   * Remplacement total du stockage Airtable par PostgreSQL managé (Supabase Auth).
+   * Mots de passe chiffrés Argon2id, Row-Level Security (RLS) étanche, émission de JWT signés enrichis de claims de tenant (`tenant_id`, `tenant_slug`, `role`, `agents`).
+   * Spécification détaillée : `docs/3_Technique/spec_kan26_iam_supabase_auth.md`.
+2. **Guard d'Authentification sur le Backend (`orso-core` - KAN-27)** :
+   * Validation cryptographique du JWT sur `/api/client/` dans FastAPI.
+   * Vérification de correspondance entre le `tenant_id` du jeton et `ORSO_CLIENT_ID` du conteneur.
+3. **Topologie 1 Client = 1 Conteneur Dédié (Multi-Agents - KAN-28)** :
+   * Chaque client dispose d'une instance conteneurisée isolée avec ses propres volumes SQLite `state.db` et ses secrets ERP.
+   * Routage interne unifié via Reverse Proxy Ingress aiguillant vers le bon conteneur.
+4. **Cinématique SSO et Session Sécurisée (KAN-29)** :
+   * Passage de session fluide et sans fuite de token entre le portail Vercel et l'interface applicative client (`apps/ui-client`).

@@ -189,15 +189,19 @@ def fetch_invoices(
     """Point d'entrée pour récupérer les factures brutes d'une source."""
     erp_lower = erp.lower()
     if erp_lower == "sellsy":
-        return fetch_invoices_sellsy(token or "")
+        return fetch_invoices_sellsy(token or os.environ.get("SELLSY_TOKEN", ""))
     elif erp_lower == "sage":
-        return fetch_invoices_sage(token or "")
+        return fetch_invoices_sage(token or os.environ.get("SAGE_TOKEN", ""))
     elif erp_lower == "qbo":
-        return fetch_invoices_qbo(token or "", realm or "")
+        return fetch_invoices_qbo(token or os.environ.get("QBO_TOKEN", ""), realm or os.environ.get("QBO_REALM_ID", ""))
     elif erp_lower == "odoo":
-        return fetch_invoices_odoo(odoo_url or "", odoo_db or "", odoo_user or "", odoo_pass or "")
+        url = odoo_url or os.environ.get("ODOO_URL", "")
+        db = odoo_db or os.environ.get("ODOO_DB", "")
+        user = odoo_user or os.environ.get("ODOO_USER", "")
+        pwd = odoo_pass or os.environ.get("ODOO_PASSWORD", "")
+        return fetch_invoices_odoo(url, db, user, pwd)
     elif erp_lower == "d365":
-        return fetch_invoices_d365(token or "", d365_tenant or "")
+        return fetch_invoices_d365(token or os.environ.get("BC_TOKEN", ""), d365_tenant or os.environ.get("BC_TENANT_ID", ""))
     elif erp_lower in ("csv", "excel"):
         if not filepath:
             raise ValueError("Fichier requis pour l'import CSV/Excel")

@@ -41,6 +41,11 @@ COPY . /app/
 # Installation du moteur Orso en mode éditable local + dépendances métier
 RUN uv pip install --system --no-cache-dir -e /app -r /app/requirements-base.txt
 
+# S'assure que le dossier du bundle UI Client existe et alimente web_dist
+RUN mkdir -p /app/apps/ui-client/dist /app/hermes_cli/web_dist && \
+    cp -rn /app/apps/ui-client/dist/* /app/hermes_cli/web_dist/ 2>/dev/null || true && \
+    chown -R orso:orso /app/apps/ui-client /app/hermes_cli/web_dist
+
 # Configuration par défaut
 RUN if [ ! -f /app/config/hermes.yaml ] && [ -f /app/config/hermes.default.yaml ]; then \
         cp /app/config/hermes.default.yaml /app/config/hermes.yaml; \
@@ -59,4 +64,4 @@ USER orso
 EXPOSE 9119
 
 # Commande de démarrage par défaut
-CMD ["hermes", "dashboard", "--host", "0.0.0.0", "--port", "9119", "--no-open", "--skip-build"]
+CMD ["python", "-m", "uvicorn", "hermes_cli.web_server:app", "--host", "0.0.0.0", "--port", "9119"]

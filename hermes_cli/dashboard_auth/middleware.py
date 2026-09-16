@@ -38,6 +38,7 @@ _GATE_PUBLIC_PREFIXES: tuple[str, ...] = (
     "/auth/login", "/auth/callback", "/auth/native/authorize", "/auth/native/token",
     "/auth/native/refresh", "/auth/password-login", "/auth/logout", "/login",
     "/api/auth/providers", "/api/mcp/oauth/callback/",
+    "/client",
     "/assets/", "/favicon.ico", "/ds-assets/", "/fonts/", "/fonts-terminal/")
 
 
