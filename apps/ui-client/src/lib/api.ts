@@ -3,14 +3,20 @@ import { AgentId, ActionCardData, ChatMessage } from '@/types';
 export function getApiBaseUrl(): string {
   if (typeof window === 'undefined') return '';
   const hostname = window.location.hostname;
-  // Si l'UI tourne sur le site vitrine (www.orso-agents.fr), pointer vers l'environnement client officiel
-  if (hostname === 'www.orso-agents.fr' || hostname === 'orso-agents.fr') {
+  // Sur l'instance dédiée (prod-fr-002.orso-agents.fr) ou en conteneur Docker/local, requêtes en relatif
+  if (hostname === 'prod-fr-002.orso-agents.fr' || hostname === 'localhost' || hostname === '127.0.0.1') {
+    if (import.meta.env.VITE_API_BASE_URL) {
+      return import.meta.env.VITE_API_BASE_URL;
+    }
+    return '';
+  }
+  // Si l'UI tourne sur le site vitrine (www.orso-agents.fr, orso-agents.fr ou preview Vercel), pointer vers l'environnement client officiel
+  if (hostname.endsWith('orso-agents.fr') || hostname.endsWith('vercel.app')) {
     return 'https://prod-fr-002.orso-agents.fr';
   }
   if (import.meta.env.VITE_API_BASE_URL) {
     return import.meta.env.VITE_API_BASE_URL;
   }
-  // Sur l'instance dédiée (prod-fr-002.orso-agents.fr) ou en conteneur Docker, requêtes en relatif
   return '';
 }
 
