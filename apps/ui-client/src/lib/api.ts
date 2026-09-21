@@ -1,23 +1,69 @@
 import { AgentId, ActionCardData, ChatMessage } from '@/types';
 
+export function getTenantSlug(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem('orso_client_user');
+    if (!raw) return null;
+    const user = JSON.parse(raw);
+    return user?.tenant?.tenant_slug || user?.tenant_slug || null;
+  } catch {
+    return null;
+  }
+}
+
 export function getApiBaseUrl(): string {
   if (typeof window === 'undefined') return '';
   const hostname = window.location.hostname;
-  // Sur l'instance dédiée (prod-fr-002.orso-agents.fr) ou en conteneur Docker/local, requêtes en relatif
-  if (hostname === 'prod-fr-002.orso-agents.fr' || hostname === 'localhost' || hostname === '127.0.0.1') {
-    if (import.meta.env.VITE_API_BASE_URL) {
-      return import.meta.env.VITE_API_BASE_URL;
-    }
-    return '';
-  }
-  // Si l'UI tourne sur le site vitrine (www.orso-agents.fr, orso-agents.fr ou preview Vercel), pointer vers l'environnement client officiel
-  if (hostname.endsWith('orso-agents.fr') || hostname.endsWith('vercel.app')) {
-    return 'https://prod-fr-002.orso-agents.fr';
-  }
+  const tenantSlug = getTenantSlug();
+  const tenantPrefix = tenantSlug ? `/t/${tenantSlug}` : '';
+
   if (import.meta.env.VITE_API_BASE_URL) {
-    return import.meta.env.VITE_API_BASE_URL;
+    return `${import.meta.env.VITE_API_BASE_URL}${tenantPrefix}`;
   }
-  return '';
+
+  // Sur l'instance dédiée, l'Ingress unifié (app.orso-agents.fr), Docker ou local
+  if (
+    hostname === 'app.orso-agents.fr' ||
+    hostname === 'prod-fr-002.orso-agents.fr' ||
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1'
+  ) {
+    return tenantPrefix;
+  }
+
+  // Si l'UI tourne sur le site vitrine externe ou preview Vercel
+  if (hostname.endsWith('orso-agents.fr') || hostname.endsWith('vercel.app')) {
+    return `https://app.orso-agents.fr${tenantPrefix}`;
+  }
+
+  return tenantPrefix;
+}
+
+export function getWebSocketUrl(): string {
+  if (typeof window === 'undefined') return '';
+  const slug = getTenantSlug();
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const host = window.location.host || 'localhost:9119';
+  if (slug) {
+    return `${proto}//${host}/t/${slug}/ws`;
+  }
+  return `${proto}//${host}/ws`;
+}
+
+export async function wakeTenantEnvironment(tenantSlug?: string): Promise<{ success: boolean; message?: string }> {
+  const slug = tenantSlug || getTenantSlug();
+  if (!slug) return { success: false, message: 'Aucun identifiant d’organisation trouvé.' };
+  try {
+    const res = await fetch(`/api/olympe/tenants/wake/${slug}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const data = await res.json();
+    return { success: res.ok, message: data.message };
+  } catch (err: any) {
+    return { success: false, message: err?.message || 'Superviseur Olympe injoignable.' };
+  }
 }
 
 // ── Gestion des Tokens & Authentification Client ────────────────────────────

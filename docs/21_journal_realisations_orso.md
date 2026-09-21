@@ -51,6 +51,9 @@ Les informations de ce document s'appuient sur :
 | **16/09** | Architecture | **Cadrage securite IAM & isolation multi-tenant** : arbitrage Supabase Auth, routage interne et creation du lot Jira KAN-26 a KAN-29 | Atlassian Jira / `orso-core` |
 | **16/09** | Securite & E2E | **Association conteneur Financia Solutions & Validation Live** : instance Docker associee a Sophie Martin (DAF), guard JWT, streaming SSE avec Jerome (200 OK) et rejet cross-tenant prouve (403 Forbidden) | `orso-core` (Docker 9229/9300) |
 | **16/09** | Architecture & IAM | **Aiguillage conteneurs Docker & Alerte Support** : enrichissement Supabase (`tenant_instances`, `support_alerts`), détection automatique de l'environnement cible, alerte critique et renvoi du message exact "Environnement non trouvé, le support Orso-agents est alerté" | `orso-core` / Supabase / OVH |
+| **20/09** | Architecture & Ingress | **Industrialisation Routage Multi-Tenant (Option B - KAN-28)** : Choix de l'URL unique `app.orso-agents.fr`, Ingress dynamique Nginx Zero-Reload via résolveur Docker DNS (`127.0.0.11`), support complet streaming SSE sans buffering et WebSockets `/t/{slug}/ws` | `docker/ingress/` (`nginx.ingress.conf`) |
+| **20/09** | Orchestration & Flotte | **Superviseur Olympe (Port 9230)** : Module de gestion de cycle de vie (`olympe/lifecycle_manager.py`) et serveur FastAPI (`olympe/server.py`) assurant le provisioning automatique, le réveil à la demande (*Wake-on-Demand*), la mise en veille (*Scale-to-Zero*) et la télémétrie consolidée | `olympe/`, `docker-compose.olympe.yml` (10 tests unitaires) |
+| **20/09** | Client & Vitrine | **Unification de l'accès client** : UI PWA (`apps/ui-client`) adaptée au préfixe dynamique `/t/{tenant_slug}/` avec détection de réveil Olympe. Assainissement complet du site vitrine (`Site_Hermes-core/client.html`) : suppression définitive des mots de passe en clair / bypass POC, passage à Supabase IAM souverain et redirection unifiée | `apps/ui-client`, `Site_Hermes-core` |
 
 ---
 
@@ -81,7 +84,8 @@ Les informations de ce document s'appuient sur :
 - **Avancement du chantier (16/09)** :
   - **KAN-26** (IAM Supabase Auth) : Instance Supabase initialisee (`nyntmjorcqgbzaxszekk`), schema PostgreSQL deploye (tables `tenants`, `profiles`, `tenant_instances` avec RLS), comptes clients migres en direct.
   - **KAN-27** (Guard JWT & isolation tenant) : Guard memoire haute performance implemente (`client_jwt.py`), routes `/api/client/` verrouillees, 13 tests unitaires valides via `scripts/run_tests.sh`.
-  - **Recette concrète Live** : Conteneurs Docker (`orso_financia_backend` et `orso_financia_ui`) relies au tenant `financia-solutions`. Connexion de Sophie Martin valide en direct (HTTP 200), streaming temps reel avec l'agent Jerome fonctionnel, et rejet cross-tenant de Claire Dubois (CommerciaLink) prouve en direct (HTTP 403).
+  - **Recette concrète Live (16/09)** : Conteneurs Docker (`orso_financia_backend` et `orso_financia_ui`) relies au tenant `financia-solutions`. Connexion de Sophie Martin valide en direct (HTTP 200), streaming temps reel avec l'agent Jerome fonctionnel, et rejet cross-tenant de Claire Dubois (CommerciaLink) prouve en direct (HTTP 403).
+  - **KAN-28 (20/09 - Ingress Dynamique & Olympe Lifecycle)** : Arbitrage de l'Option B (URL unique `app.orso-agents.fr`), Ingress Nginx dynamique résolvant à chaud les conteneurs clients (`orso_client_{slug}`) via le DNS Docker interne (`127.0.0.11`), serveur Olympe (port 9230) pour le wake-on-demand/provisioning, UI PWA adaptée (`/t/{tenant_slug}/`) et assainissement complet de `client.html` sur la vitrine. Spécification détaillée : `docs/3_Technique/spec_kan28_ingress_olympe_lifecycle.md`. 27 tests unitaires passés à 100%.
 
 ---
 

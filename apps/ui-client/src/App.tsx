@@ -12,6 +12,7 @@ import {
   getClientToken,
   setClientToken,
   getStoredUser,
+  wakeTenantEnvironment,
 } from '@/lib/api';
 import {
   MessageSquare,
@@ -23,6 +24,7 @@ import {
   ShieldCheck,
   AlertTriangle,
   UserCheck,
+  RefreshCw,
 } from 'lucide-react';
 
 type Tab = 'chat' | 'integrations' | 'channels';
@@ -41,6 +43,8 @@ export const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [authLoading, setAuthLoading] = useState<boolean>(true);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [isWaking, setIsWaking] = useState<boolean>(false);
+  const [wakeMessage, setWakeMessage] = useState<string>('');
   const [loginEmail, setLoginEmail] = useState<string>('sophie.martin@finarecee20.fr');
   const [loginPassword, setLoginPassword] = useState<string>('TempOrso2026!Financia');
   const [showLoginModal, setShowLoginModal] = useState<boolean>(false);
@@ -105,19 +109,33 @@ export const App: React.FC = () => {
     const passToUse = customPass || loginPassword;
 
     const res = await loginClient(emailToUse, passToUse);
-    setAuthLoading(false);
 
     if (res.success && res.user) {
+      const envStatus = res.target_environment?.environment_status || res.target_environment?.status;
+      if (envStatus === 'sleeping') {
+        setIsWaking(true);
+        setWakeMessage("Votre environnement sécurisé est en veille. Olympe procède à son réveil...");
+        try {
+          await wakeTenantEnvironment(res.tenant?.tenant_slug);
+        } catch {}
+        setIsWaking(false);
+      }
+
+      setAuthLoading(false);
+
       if (res.redirect_url && typeof window !== 'undefined' && !window.location.href.startsWith(res.redirect_url)) {
         window.location.href = res.redirect_url;
         return;
       }
+
       setIsAuthenticated(true);
       setShowLoginModal(false);
-      setCompanyName(res.tenant?.name || 'Financia Solutions');
+      setCompanyName(res.tenant?.name || res.tenant?.tenant_slug?.replace('-', ' ').toUpperCase() || 'Financia Solutions');
       setUserName(res.user?.full_name || res.user?.email || 'Sophie Martin');
       setUserRole(res.user?.role || 'DAF');
+      checkBackendHealth().then(setBackendStatus);
     } else {
+      setAuthLoading(false);
       setAuthError(res.error || 'Identifiants invalides.');
     }
   };
@@ -299,8 +317,8 @@ export const App: React.FC = () => {
                   O
                 </div>
                 <div>
-                  <h3 className="text-base font-extrabold text-white">Espace Client Sécurisé</h3>
-                  <p className="text-xs text-slate-400">Authentification IAM & Isolation Multi-Tenant</p>
+                  <h3 className="text-base font-extrabold text-white">Portail Unique Orso Agents</h3>
+                  <p className="text-xs text-slate-400">Routage Dynamique Ingress & IAM Supabase</p>
                 </div>
               </div>
               {isAuthenticated && (
@@ -313,16 +331,27 @@ export const App: React.FC = () => {
               )}
             </div>
 
-            {/* Info Instance */}
+            {/* Info Portail Unique & Isolation */}
             <div className="p-3.5 rounded-2xl bg-blue-950/40 border border-blue-800/40 text-xs text-blue-200 space-y-1">
               <div className="flex items-center gap-1.5 font-bold text-blue-300">
                 <ShieldCheck className="w-4 h-4 text-blue-400" />
-                <span>Instance Conteneur Dédiée</span>
+                <span>Environnement Souverain Dédié</span>
               </div>
               <p className="text-[11px] text-blue-200/80">
-                Cette instance est privée et strictement cloisonnée. Seuls les utilisateurs habilités de votre organisation peuvent accéder à ces agents.
+                Portail universel d'accès. Vos identifiants vous connectent automatiquement à l'environnement conteneurisé dédié de votre organisation.
               </p>
             </div>
+
+            {/* État de réveil Wake-on-Demand via Olympe */}
+            {isWaking && (
+              <div className="p-3.5 rounded-2xl bg-indigo-950/70 border border-indigo-700/60 text-indigo-200 text-xs flex items-center gap-3 animate-pulse">
+                <RefreshCw className="w-5 h-5 text-indigo-400 animate-spin shrink-0" />
+                <div>
+                  <p className="font-bold text-white">Réveil en cours...</p>
+                  <p className="text-[11px] text-indigo-300/90">{wakeMessage || "Olympe prépare votre instance dédiée..."}</p>
+                </div>
+              </div>
+            )}
 
             {/* Message d'erreur */}
             {authError && (

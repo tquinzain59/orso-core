@@ -1,0 +1,83 @@
+# ==============================================================================
+# ORSO AGENTS - COMPOSE D'ORCHESTRATION FLOTTE & INGRESS (OPTION B)
+# ==============================================================================
+
+version: '3.8'
+
+networks:
+  orso_network:
+    name: orso_network
+    driver: bridge
+
+services:
+  # ----------------------------------------------------------------------------
+  # 1. INGRESS REVERSE PROXY UNIFIÉ (Point d'entrée unique de la plateforme)
+  # ----------------------------------------------------------------------------
+  orso-ingress:
+    build:
+      context: .
+      dockerfile: docker/ingress/Dockerfile
+    container_name: orso_ingress
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - orso_network
+    depends_on:
+      - olympe-core
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------
+  # 2. SUPERVISEUR OLYMPE (Gestionnaire de Cycle de Vie & Provisioning)
+  # ----------------------------------------------------------------------------
+  olympe-core:
+    build:
+      context: .
+      dockerfile: Dockerfile.orso
+    container_name: olympe_core
+    command: ["python3", "-m", "olympe.server"]
+    ports:
+      - "9230:9230"
+    environment:
+      - OLYMPE_PORT=9230
+      - OLYMPE_HOST=0.0.0.0
+      - SUPABASE_URL=${SUPABASE_URL:-}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY:-}
+      - ORSO_DATA_ROOT=/app/data/tenants
+    volumes:
+      # Accès à la socket Docker pour lancer / réveiller les conteneurs clients
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data/tenants:/app/data/tenants
+      - ./config:/app/config:ro
+      - ./skills:/app/skills:ro
+    networks:
+      - orso_network
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------------
+  # 3. EXEMPLE : ENVIRONNEMENT CLIENT DÉDIÉ (Financia Solutions)
+  # Port 9119 INTERNE au réseau orso_network (non exposé sur l'hôte)
+  # Ingress achemine dynamiquement via http://orso_client_financia_solutions:9119
+  # ----------------------------------------------------------------------------
+  orso-client-financia:
+    build:
+      context: .
+      dockerfile: Dockerfile.orso
+    container_name: orso_client_financia_solutions
+    command: ["hermes", "dashboard", "--host", "0.0.0.0", "--port", "9119", "--no-open", "--skip-build"]
+    environment:
+      - ORSO_CLIENT_ID=f3e25379-6531-479e-b276-3b3185e7421b
+      - ORSO_CLIENT_SLUG=financia-solutions
+      - HERMES_CONFIG_PATH=/app/config/hermes.yaml
+      - HERMES_HOME=/app/data/hermes_home
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - SUPABASE_URL=${SUPABASE_URL:-}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY:-}
+    volumes:
+      - ./config:/app/config:ro
+      - ./skills:/app/skills:ro
+      - ./profiles:/app/profiles:ro
+      - ./data/tenants/financia_solutions:/app/data
+    networks:
+      - orso_network
+    restart: unless-stopped
