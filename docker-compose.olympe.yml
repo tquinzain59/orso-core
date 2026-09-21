@@ -1,5 +1,5 @@
 # ==============================================================================
-# ORSO AGENTS - COMPOSE D'ORCHESTRATION FLOTTE & INGRESS (OPTION B)
+# ORSO AGENTS - COMPOSE D'ORCHESTRATION FLOTTE, INGRESS & OPS COCKPIT
 # ==============================================================================
 
 version: '3.8'
@@ -12,6 +12,7 @@ networks:
 services:
   # ----------------------------------------------------------------------------
   # 1. INGRESS REVERSE PROXY UNIFIÉ (Point d'entrée unique de la plateforme)
+  # Gère à la fois app.orso-agents.fr et ops.orso-agents.fr
   # ----------------------------------------------------------------------------
   orso-ingress:
     build:
@@ -28,7 +29,8 @@ services:
     restart: unless-stopped
 
   # ----------------------------------------------------------------------------
-  # 2. SUPERVISEUR OLYMPE (Gestionnaire de Cycle de Vie & Provisioning)
+  # 2. SUPERVISEUR OLYMPE & COCKPIT OPS (Gestionnaire de Flotte & Facturation)
+  # Accessible en direct sur :9230 ou via ops.orso-agents.fr
   # ----------------------------------------------------------------------------
   olympe-core:
     build:
@@ -43,11 +45,13 @@ services:
       - OLYMPE_HOST=0.0.0.0
       - SUPABASE_URL=${SUPABASE_URL:-}
       - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY:-}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
       - ORSO_DATA_ROOT=/app/data/tenants
     volumes:
       # Accès à la socket Docker pour lancer / réveiller les conteneurs clients
       - /var/run/docker.sock:/var/run/docker.sock
       - ./data/tenants:/app/data/tenants
+      - ./apps/ui-ops/dist:/app/apps/ui-ops/dist:ro
       - ./config:/app/config:ro
       - ./skills:/app/skills:ro
     networks:

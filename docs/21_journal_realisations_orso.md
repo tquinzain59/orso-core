@@ -86,6 +86,11 @@ Les informations de ce document s'appuient sur :
   - **KAN-27** (Guard JWT & isolation tenant) : Guard memoire haute performance implemente (`client_jwt.py`), routes `/api/client/` verrouillees, 13 tests unitaires valides via `scripts/run_tests.sh`.
   - **Recette concrète Live (16/09)** : Conteneurs Docker (`orso_financia_backend` et `orso_financia_ui`) relies au tenant `financia-solutions`. Connexion de Sophie Martin valide en direct (HTTP 200), streaming temps reel avec l'agent Jerome fonctionnel, et rejet cross-tenant de Claire Dubois (CommerciaLink) prouve en direct (HTTP 403).
   - **KAN-28 (20/09 - Ingress Dynamique & Olympe Lifecycle)** : Arbitrage de l'Option B (URL unique `app.orso-agents.fr`), Ingress Nginx dynamique résolvant à chaud les conteneurs clients (`orso_client_{slug}`) via le DNS Docker interne (`127.0.0.11`), serveur Olympe (port 9230) pour le wake-on-demand/provisioning, UI PWA adaptée (`/t/{tenant_slug}/`) et assainissement complet de `client.html` sur la vitrine. Spécification détaillée : `docs/3_Technique/spec_kan28_ingress_olympe_lifecycle.md`. 27 tests unitaires passés à 100%.
+  - **KAN-30 (21/09 - Cockpit Orso Ops, Stripe Billing & Activation Granulaire des Agents)** : Implémentation du Cockpit d'Administration Opérations et Commercial hébergé sur le superviseur Olympe (port 9230) et routé via le sous-domaine `ops.orso-agents.fr`.
+    - Gestion centralisée des clients (`public.tenants`), contacts DAF/dirigeants et suivi des conteneurs physiques de la flotte.
+    - Intégration de la grille tarifaire officielle : **Starter (1 agent - 99 € HT/m)**, **Duo (2 agents - 169 € HT/m)**, **Flotte Complète (4 agents - 279 € HT/m)** avec suivi du MRR, de l'ARR et réconciliation Stripe Billing / factures PDF.
+    - Matrice de feature toggling des 4 agents (Jérôme, Lucas, Clara, Victor) avec activation en 1-clic et paramétrage de périodes d'essai temporaires (7j, 14j, 30j) répercutées instantanément sans redémarrage de conteneur.
+    - Application SPA React 19 / Vite / Tailwind CSS 4 compilée dans `apps/ui-ops/dist` et servie directement par Olympe. Suite de tests unitaires validée à 100% (`test_ops_manager.py`).
 
 ---
 

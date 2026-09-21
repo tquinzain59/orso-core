@@ -1,0 +1,92 @@
+export type AgentId = "jerome" | "lucas" | "clara" | "victor";
+
+export interface AgentMeta {
+  id: AgentId;
+  name: string;
+  role: string;
+  avatar: string;
+  color: string;
+  badgeBg: string;
+  badgeText: string;
+  description: string;
+}
+
+export interface TrialConfig {
+  is_trial: boolean;
+  start_date?: string;
+  end_date?: string;
+  days_remaining?: number;
+}
+
+export interface TenantContact {
+  full_name: string;
+  email: string;
+  phone?: string;
+  role?: string;
+}
+
+export interface TenantInstance {
+  container_name: string;
+  status: "ready" | "sleeping" | "paused" | "not_found" | string;
+}
+
+export interface SubscriptionInfo {
+  id: string;
+  tier_id: "1_agent" | "2_agents" | "4_agents" | "custom" | string;
+  tier_label: string;
+  price_ht: number;
+  status: "active" | "trialing" | "past_due" | "canceled" | string;
+  current_period_start?: string;
+  current_period_end?: string;
+  stripe_customer_id?: string;
+  payment_method?: string;
+  suggested_tier?: string;
+}
+
+export interface Invoice {
+  id: string;
+  number: string;
+  amount_ht: number;
+  amount_ttc: number;
+  status: "paid" | "open" | "failed" | string;
+  date: string;
+  pdf_url?: string;
+  tenant_id?: string;
+  tenant_name?: string;
+  tenant_slug?: string;
+}
+
+export interface Tenant {
+  id: string;
+  name: string;
+  siret?: string;
+  slug: string;
+  sector?: string;
+  status: "active" | "trial" | "suspended" | "churn" | string;
+  created_at: string;
+  contact: TenantContact;
+  instance: TenantInstance;
+  agents_enabled: {
+    active: AgentId[];
+    trials: Record<string, TrialConfig>;
+  };
+  subscription: SubscriptionInfo;
+  invoices?: Invoice[];
+}
+
+export interface OpsKPIs {
+  total_clients: number;
+  active_subscribers: number;
+  trialing_clients: number;
+  mrr_ht: number;
+  mrr_ttc: number;
+  arr_ht: number;
+}
+
+export interface OpsStats {
+  kpis: OpsKPIs;
+  tier_distribution: Record<string, number>;
+  agent_utilization: Record<string, number>;
+  pricing_catalog: Record<string, { price_ht: number; max_agents: number; label: string }>;
+  timestamp: string;
+}
