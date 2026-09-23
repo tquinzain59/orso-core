@@ -3,13 +3,14 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from olympe.auth import MOCK_SUPERADMIN_TOKEN
 from olympe.ops_manager import OpsManager, TIER_PRICING
 from olympe.server import app
 
 
 @pytest.fixture
 def api_client():
-    return TestClient(app)
+    return TestClient(app, headers={"Authorization": f"Bearer {MOCK_SUPERADMIN_TOKEN}"})
 
 
 def test_ops_manager_seed_data():

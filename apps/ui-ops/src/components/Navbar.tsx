@@ -1,5 +1,6 @@
 import React from "react";
-import { LayoutDashboard, Users, CreditCard, Server, RefreshCw, ShieldCheck } from "lucide-react";
+import { LayoutDashboard, Users, CreditCard, Server, RefreshCw, ShieldCheck, LogOut, User } from "lucide-react";
+import { AdminUser } from "../types";
 
 interface NavbarProps {
   activeTab: "dashboard" | "tenants" | "billing" | "fleet";
@@ -7,6 +8,8 @@ interface NavbarProps {
   onRefresh: () => void;
   loading: boolean;
   totalClients: number;
+  adminUser?: AdminUser | null;
+  onLogout?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -15,6 +18,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   onRefresh,
   loading,
   totalClients,
+  adminUser,
+  onLogout,
 }) => {
   return (
     <header className="sticky top-0 z-40 bg-slate-900/80 backdrop-blur-md border-b border-slate-800">
@@ -40,7 +45,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           <nav className="flex items-center space-x-1 sm:space-x-2">
             <button
               onClick={() => setActiveTab("dashboard")}
-              className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+              className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm font-medium transition-all cursor-pointer ${
                 activeTab === "dashboard"
                   ? "bg-slate-800 text-sky-400 shadow-sm border border-slate-700"
                   : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
@@ -52,7 +57,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
             <button
               onClick={() => setActiveTab("tenants")}
-              className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+              className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm font-medium transition-all cursor-pointer ${
                 activeTab === "tenants"
                   ? "bg-slate-800 text-sky-400 shadow-sm border border-slate-700"
                   : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
@@ -69,7 +74,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
             <button
               onClick={() => setActiveTab("billing")}
-              className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+              className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm font-medium transition-all cursor-pointer ${
                 activeTab === "billing"
                   ? "bg-slate-800 text-sky-400 shadow-sm border border-slate-700"
                   : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
@@ -81,7 +86,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
             <button
               onClick={() => setActiveTab("fleet")}
-              className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+              className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm font-medium transition-all cursor-pointer ${
                 activeTab === "fleet"
                   ? "bg-slate-800 text-sky-400 shadow-sm border border-slate-700"
                   : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
@@ -92,9 +97,9 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
           </nav>
 
-          {/* Health status & Refresh */}
+          {/* User info, Refresh & Logout */}
           <div className="flex items-center space-x-3">
-            <div className="hidden sm:flex items-center space-x-2 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium">
+            <div className="hidden lg:flex items-center space-x-2 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
               <span>Olympe: 9230</span>
             </div>
@@ -102,11 +107,36 @@ export const Navbar: React.FC<NavbarProps> = ({
             <button
               onClick={onRefresh}
               disabled={loading}
-              className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 border border-transparent hover:border-slate-700 transition-all disabled:opacity-50"
+              className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 border border-transparent hover:border-slate-700 transition-all disabled:opacity-50 cursor-pointer"
               title="Rafraîchir les données"
             >
               <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin text-sky-400" : ""}`} />
             </button>
+
+            {adminUser && (
+              <div className="flex items-center space-x-2 pl-2 border-l border-slate-800">
+                <div className="hidden sm:flex flex-col items-end text-right">
+                  <span className="text-xs font-medium text-slate-200 truncate max-w-[140px]">
+                    {adminUser.full_name || adminUser.email}
+                  </span>
+                  <span className="text-[10px] text-sky-400 font-semibold uppercase tracking-wider">
+                    {adminUser.role}
+                  </span>
+                </div>
+                <div className="w-8 h-8 rounded-full bg-sky-500/20 border border-sky-500/30 flex items-center justify-center text-sky-400 font-bold text-xs">
+                  <User className="w-4 h-4" />
+                </div>
+                {onLogout && (
+                  <button
+                    onClick={onLogout}
+                    className="p-2 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 border border-transparent hover:border-rose-500/20 transition-all cursor-pointer"
+                    title="Déconnexion"
+                  >
+                    <LogOut className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>

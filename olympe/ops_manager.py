@@ -312,6 +312,30 @@ class OpsManager:
             _log.warning("Échec requête Supabase (%s %s): %s", method, path, e)
             return None
 
+    def _fetch_supabase_auth_users(self) -> Dict[str, str]:
+        """Récupère la table de correspondance user_id -> email via l'API Admin Supabase."""
+        if not self.supabase_url or not self.supabase_key:
+            return {}
+
+        admin_url = f"{self.supabase_url}/auth/v1/admin/users"
+        req = urllib.request.Request(
+            admin_url,
+            headers={
+                "apikey": self.supabase_key,
+                "Authorization": f"Bearer {self.supabase_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "OrsoOlympeOps/1.0",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5.0) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                users = data.get("users", [])
+                return {u["id"]: u.get("email", "") for u in users if "id" in u}
+        except Exception as e:
+            _log.warning("Échec récupération des utilisateurs Supabase Auth: %s", e)
+            return {}
+
     # ── Endpoints Métier Ops ──────────────────────────────────────────────────
 
     def get_tenants_overview(self) -> List[Dict[str, Any]]:
@@ -319,6 +343,7 @@ class OpsManager:
         # 1. Tentative de lecture Supabase si configuré
         sb_tenants = self._query_supabase("tenants?select=*,profiles(*),tenant_instances(*)")
         if sb_tenants and isinstance(sb_tenants, list) and len(sb_tenants) > 0:
+            auth_emails = self._fetch_supabase_auth_users()
             result = []
             for t in sb_tenants:
                 tenant_id = t.get("id")
@@ -342,6 +367,9 @@ class OpsManager:
                     "current_period_end": t.get("created_at"),
                 }
 
+                contact_id = primary_contact.get("id")
+                email = primary_contact.get("email") or auth_emails.get(contact_id, "") or cached.get("contact", {}).get("email", "")
+
                 item = {
                     "id": tenant_id,
                     "name": t.get("name"),
@@ -352,8 +380,8 @@ class OpsManager:
                     "created_at": t.get("created_at"),
                     "contact": {
                         "full_name": primary_contact.get("full_name", "Contact Principal"),
-                        "email": primary_contact.get("email", ""),
-                        "phone": primary_contact.get("phone", ""),
+                        "email": email,
+                        "phone": primary_contact.get("phone", "") or cached.get("contact", {}).get("phone", ""),
                         "role": primary_contact.get("role", "Direction"),
                     },
                     "instance": {

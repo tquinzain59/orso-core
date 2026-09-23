@@ -5,7 +5,8 @@ import { TenantsView } from "./components/TenantsView";
 import { BillingView } from "./components/BillingView";
 import { FleetView } from "./components/FleetView";
 import { TenantDetailModal } from "./components/TenantDetailModal";
-import { Tenant, OpsStats, Invoice, AgentId } from "./types";
+import { LoginView } from "./components/LoginView";
+import { Tenant, OpsStats, Invoice, AgentId, AdminUser } from "./types";
 import {
   fetchOpsStats,
   fetchTenants,
@@ -14,15 +15,22 @@ import {
   updateTenantSubscription,
   wakeContainer,
   suspendContainer,
+  getStoredToken,
+  getStoredUser,
+  fetchMe,
+  logoutAdmin,
 } from "./api";
+import { Loader2 } from "lucide-react";
 
 export const App: React.FC = () => {
+  const [adminUser, setAdminUser] = useState<AdminUser | null>(getStoredUser());
+  const [checkingAuth, setCheckingAuth] = useState<boolean>(true);
   const [activeTab, setActiveTab] = useState<"dashboard" | "tenants" | "billing" | "fleet">("dashboard");
   const [stats, setStats] = useState<OpsStats | null>(null);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [selectedTenant, setSelectedTenant] = useState<Tenant | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
@@ -39,15 +47,53 @@ export const App: React.FC = () => {
       setInvoices(invoicesData);
     } catch (err: any) {
       console.error("Erreur de chargement des données Orso Ops:", err);
-      setError(err.message || "Erreur lors du chargement des données.");
+      if (err.message && err.message.includes("Session expirée")) {
+        setAdminUser(null);
+      } else {
+        setError(err.message || "Erreur lors du chargement des données.");
+      }
     } finally {
       setLoading(false);
     }
   }, []);
 
+  // Vérification de la session au démarrage
   useEffect(() => {
-    loadData();
+    const initAuth = async () => {
+      const token = getStoredToken();
+      if (!token) {
+        setAdminUser(null);
+        setCheckingAuth(false);
+        return;
+      }
+
+      try {
+        const user = await fetchMe();
+        setAdminUser(user);
+        await loadData();
+      } catch (err) {
+        console.warn("Session invalide ou expirée:", err);
+        setAdminUser(null);
+      } finally {
+        setCheckingAuth(false);
+      }
+    };
+
+    initAuth();
   }, [loadData]);
+
+  const handleLogout = async () => {
+    await logoutAdmin();
+    setAdminUser(null);
+    setStats(null);
+    setTenants([]);
+    setInvoices([]);
+  };
+
+  const handleLoginSuccess = async (user: AdminUser) => {
+    setAdminUser(user);
+    await loadData();
+  };
 
   // Sauvegarde des agents & périodes d'essai
   const handleSaveAgents = async (
@@ -56,9 +102,7 @@ export const App: React.FC = () => {
     trials: Record<string, any>
   ) => {
     await updateTenantAgents(tenantId, active, trials);
-    // Rafraîchir les données
     await loadData();
-    // Mettre à jour le tenant sélectionné dans la modale
     const updated = await fetchTenants();
     const current = updated.find((t) => t.id === tenantId) || null;
     setSelectedTenant(current);
@@ -93,6 +137,21 @@ export const App: React.FC = () => {
     }
   };
 
+  // Écran d'initialisation rapide
+  if (checkingAuth) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-400">
+        <Loader2 className="w-8 h-8 animate-spin text-sky-400 mb-3" />
+        <span className="text-sm font-medium">Chargement du Cockpit Orso Ops...</span>
+      </div>
+    );
+  }
+
+  // Si non authentifié, afficher l'écran de Login
+  if (!adminUser) {
+    return <LoginView onLoginSuccess={handleLoginSuccess} />;
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
       <Navbar
@@ -101,6 +160,8 @@ export const App: React.FC = () => {
         onRefresh={loadData}
         loading={loading}
         totalClients={tenants.length}
+        adminUser={adminUser}
+        onLogout={handleLogout}
       />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -109,7 +170,7 @@ export const App: React.FC = () => {
             <span>{error}</span>
             <button
               onClick={loadData}
-              className="text-xs underline hover:text-white font-bold ml-4"
+              className="text-xs underline hover:text-white font-bold ml-4 cursor-pointer"
             >
               Réessayer
             </button>

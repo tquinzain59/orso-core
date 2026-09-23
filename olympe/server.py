@@ -9,12 +9,13 @@ import os
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from olympe.auth import authenticate_superadmin, require_superadmin
 from olympe.lifecycle_manager import DockerLifecycleManager
 from olympe.ops_manager import OpsManager
 
@@ -60,6 +61,11 @@ class UpdateAgentsRequest(BaseModel):
 class UpdateSubscriptionRequest(BaseModel):
     tier_id: str = Field(..., description="Identifiant du forfait : 1_agent, 2_agents, 4_agents, custom")
     status: Optional[str] = Field("active", description="Statut de l'abonnement : active, trialing, past_due, canceled")
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(..., description="Adresse email superadmin")
+    password: str = Field(..., description="Mot de passe superadmin")
 
 
 # ── Endpoints Supervision & Cycle de Vie Conteneurs ──────────────────────────
@@ -142,22 +148,42 @@ async def telemetry_summary():
     }
 
 
-# ── Endpoints Cockpit Orso Ops & Facturation ─────────────────────────────────
+# ── Authentification IAM Superadmin ──────────────────────────────────────────
+
+@app.post("/api/olympe/ops/auth/login")
+async def ops_login(req: LoginRequest):
+    """Authentifie un administrateur auprès de Supabase Auth et délivre une session superadmin."""
+    return authenticate_superadmin(email=req.email, password=req.password)
+
+
+@app.get("/api/olympe/ops/auth/me")
+async def ops_me(admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Vérifie la validité de la session de l'administrateur connecté."""
+    return {"user": admin}
+
+
+@app.post("/api/olympe/ops/auth/logout")
+async def ops_logout():
+    """Déconnexion de session superadmin."""
+    return {"success": True, "message": "Déconnexion réussie."}
+
+
+# ── Endpoints Cockpit Orso Ops & Facturation (Protégés Superadmin) ───────────
 
 @app.get("/api/olympe/ops/stats")
-async def get_ops_stats():
+async def get_ops_stats(admin: Dict[str, Any] = Depends(require_superadmin)):
     """Retourne les indicateurs consolidés (KPIs, MRR, répartition des forfaits)."""
     return ops_manager.get_stats()
 
 
 @app.get("/api/olympe/ops/tenants")
-async def list_tenants():
+async def list_tenants(admin: Dict[str, Any] = Depends(require_superadmin)):
     """Retourne la liste des clients inscrits avec contact, abonnement et agents activés."""
     return {"tenants": ops_manager.get_tenants_overview()}
 
 
 @app.get("/api/olympe/ops/tenants/{tenant_id}")
-async def get_tenant(tenant_id: str):
+async def get_tenant(tenant_id: str, admin: Dict[str, Any] = Depends(require_superadmin)):
     """Retourne le profil détaillé d'un client."""
     detail = ops_manager.get_tenant_detail(tenant_id)
     if not detail:
@@ -166,7 +192,7 @@ async def get_tenant(tenant_id: str):
 
 
 @app.post("/api/olympe/ops/tenants/{tenant_id}/agents")
-async def update_agents(tenant_id: str, req: UpdateAgentsRequest):
+async def update_agents(tenant_id: str, req: UpdateAgentsRequest, admin: Dict[str, Any] = Depends(require_superadmin)):
     """Active/désactive des agents et paramètre les périodes d'essai pour un client."""
     res = ops_manager.update_tenant_agents(
         tenant_id=tenant_id,
@@ -177,7 +203,7 @@ async def update_agents(tenant_id: str, req: UpdateAgentsRequest):
 
 
 @app.post("/api/olympe/ops/tenants/{tenant_id}/subscription")
-async def update_subscription(tenant_id: str, req: UpdateSubscriptionRequest):
+async def update_subscription(tenant_id: str, req: UpdateSubscriptionRequest, admin: Dict[str, Any] = Depends(require_superadmin)):
     """Met à jour le plan d'abonnement Stripe (99€, 169€, 279€ HT)."""
     res = ops_manager.update_tenant_subscription(
         tenant_id=tenant_id,
@@ -188,7 +214,7 @@ async def update_subscription(tenant_id: str, req: UpdateSubscriptionRequest):
 
 
 @app.get("/api/olympe/ops/invoices")
-async def list_invoices():
+async def list_invoices(admin: Dict[str, Any] = Depends(require_superadmin)):
     """Retourne l'historique complet des factures clients."""
     return {"invoices": ops_manager.list_all_invoices()}
 

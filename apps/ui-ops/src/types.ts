@@ -90,3 +90,17 @@ export interface OpsStats {
   pricing_catalog: Record<string, { price_ht: number; max_agents: number; label: string }>;
   timestamp: string;
 }
+
+export interface AdminUser {
+  id: string;
+  email: string;
+  full_name: string;
+  role: string;
+}
+
+export interface LoginResponse {
+  token: string;
+  refresh_token?: string;
+  expires_in?: number;
+  user: AdminUser;
+}
