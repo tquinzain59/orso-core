@@ -54,6 +54,7 @@ Les informations de ce document s'appuient sur :
 | **20/09** | Architecture & Ingress | **Industrialisation Routage Multi-Tenant (Option B - KAN-28)** : Choix de l'URL unique `app.orso-agents.fr`, Ingress dynamique Nginx Zero-Reload via résolveur Docker DNS (`127.0.0.11`), support complet streaming SSE sans buffering et WebSockets `/t/{slug}/ws` | `docker/ingress/` (`nginx.ingress.conf`) |
 | **20/09** | Orchestration & Flotte | **Superviseur Olympe (Port 9230)** : Module de gestion de cycle de vie (`olympe/lifecycle_manager.py`) et serveur FastAPI (`olympe/server.py`) assurant le provisioning automatique, le réveil à la demande (*Wake-on-Demand*), la mise en veille (*Scale-to-Zero*) et la télémétrie consolidée | `olympe/`, `docker-compose.olympe.yml` (10 tests unitaires) |
 | **20/09** | Client & Vitrine | **Unification de l'accès client** : UI PWA (`apps/ui-client`) adaptée au préfixe dynamique `/t/{tenant_slug}/` avec détection de réveil Olympe. Assainissement complet du site vitrine (`Site_Hermes-core/client.html`) : suppression définitive des mots de passe en clair / bypass POC, passage à Supabase IAM souverain et redirection unifiée | `apps/ui-client`, `Site_Hermes-core` |
+| **23/09** | Exploitation & IAM | **Cockpit Orso Ops & IAM Superadmin (KAN-30)** : Déploiement en production sur `https://ops.orso-agents.fr`, grille tarifaire 99€/169€/279€ HT, feature gating des 4 agents avec périodes d'essai, authentification IAM Superadmin Supabase Auth avec écran de login dédié et résolution dynamique des emails clients. 20 tests unitaires passés à 100%. | `orso-core` / `ops.orso-agents.fr` |
 
 ---
 
@@ -86,11 +87,14 @@ Les informations de ce document s'appuient sur :
   - **KAN-27** (Guard JWT & isolation tenant) : Guard memoire haute performance implemente (`client_jwt.py`), routes `/api/client/` verrouillees, 13 tests unitaires valides via `scripts/run_tests.sh`.
   - **Recette concrète Live (16/09)** : Conteneurs Docker (`orso_financia_backend` et `orso_financia_ui`) relies au tenant `financia-solutions`. Connexion de Sophie Martin valide en direct (HTTP 200), streaming temps reel avec l'agent Jerome fonctionnel, et rejet cross-tenant de Claire Dubois (CommerciaLink) prouve en direct (HTTP 403).
   - **KAN-28 (20/09 - Ingress Dynamique & Olympe Lifecycle)** : Arbitrage de l'Option B (URL unique `app.orso-agents.fr`), Ingress Nginx dynamique résolvant à chaud les conteneurs clients (`orso_client_{slug}`) via le DNS Docker interne (`127.0.0.11`), serveur Olympe (port 9230) pour le wake-on-demand/provisioning, UI PWA adaptée (`/t/{tenant_slug}/`) et assainissement complet de `client.html` sur la vitrine. Spécification détaillée : `docs/3_Technique/spec_kan28_ingress_olympe_lifecycle.md`. 27 tests unitaires passés à 100%.
-  - **KAN-30 (21/09 - Cockpit Orso Ops, Stripe Billing & Activation Granulaire des Agents)** : Implémentation du Cockpit d'Administration Opérations et Commercial hébergé sur le superviseur Olympe (port 9230) et routé via le sous-domaine `ops.orso-agents.fr`.
+  - **KAN-30 (21/09 - 23/09 - Cockpit Orso Ops, Stripe Billing & IAM Superadmin)** : Implémentation et déploiement en production du Cockpit d'Administration Opérations et Commercial hébergé sur le superviseur Olympe (port 9230) et routé sur **`https://ops.orso-agents.fr`**.
     - Gestion centralisée des clients (`public.tenants`), contacts DAF/dirigeants et suivi des conteneurs physiques de la flotte.
+    - Résolution dynamique des emails réels des clients par interconnexion directe avec l'API Admin de Supabase (`/auth/v1/admin/users`).
     - Intégration de la grille tarifaire officielle : **Starter (1 agent - 99 € HT/m)**, **Duo (2 agents - 169 € HT/m)**, **Flotte Complète (4 agents - 279 € HT/m)** avec suivi du MRR, de l'ARR et réconciliation Stripe Billing / factures PDF.
     - Matrice de feature toggling des 4 agents (Jérôme, Lucas, Clara, Victor) avec activation en 1-clic et paramétrage de périodes d'essai temporaires (7j, 14j, 30j) répercutées instantanément sans redémarrage de conteneur.
-    - Application SPA React 19 / Vite / Tailwind CSS 4 compilée dans `apps/ui-ops/dist` et servie directement par Olympe. Suite de tests unitaires validée à 100% (`test_ops_manager.py`).
+    - **Sécurisation IAM Superadmin (`olympe/auth.py`)** : Authentification auprès de Supabase Auth avec vérification stricte du rôle `superadmin`, protection des endpoints `/api/olympe/ops/*` (rejet 401 sans jeton, rejet 403 pour compte client classique).
+    - Application SPA React 19 / Vite / Tailwind CSS 4 (`apps/ui-ops`) avec écran de login dark theme (`LoginView.tsx`), mémorisation de session et profil admin dans la Navbar. Suite de 20 tests unitaires validée à 100% (`test_ops_auth.py`, `test_ops_manager.py`).
+
 
 ---
 

@@ -8,6 +8,7 @@ accéder au Cockpit Orso Ops (ops.orso-agents.fr) et à ses APIs.
 import json
 import logging
 import os
+import time
 import urllib.error
 import urllib.request
 from typing import Any, Dict, Optional
@@ -19,6 +20,18 @@ security_bearer = HTTPBearer(auto_error=False)
 
 # Token factice pour les tests locaux ou mode déconnecté
 MOCK_SUPERADMIN_TOKEN = "mock-superadmin-session-token-9230"
+
+# Cache mémoire TTL pour éviter les requêtes HTTP redondantes vers Supabase /auth/v1/user
+_TOKEN_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
+_TOKEN_CACHE_TTL = 60.0  # 60 secondes de validité en cache
+
+
+def clear_token_cache(token: Optional[str] = None) -> None:
+    """Vide le cache de validation de token (sur logout ou globalement)."""
+    if token:
+        _TOKEN_CACHE.pop(token, None)
+    else:
+        _TOKEN_CACHE.clear()
 
 
 def _get_supabase_config(
@@ -117,21 +130,32 @@ def verify_superadmin_token(
     service_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Valide un jeton de session auprès de Supabase Auth et garantit le rôle 'superadmin'."""
+    now = time.time()
+
+    # 1. Vérification dans le cache mémoire TTL (ultra-rapide, évite les allers-retours HTTP)
+    if token in _TOKEN_CACHE:
+        cached_time, cached_user = _TOKEN_CACHE[token]
+        if now - cached_time < _TOKEN_CACHE_TTL:
+            return cached_user
+        _TOKEN_CACHE.pop(token, None)
+
     url, key = _get_supabase_config(supabase_url, service_key)
 
     # Mode fallback pour tests unitaires
     if (not url or not key) and token == MOCK_SUPERADMIN_TOKEN:
-        return {
+        user_mock = {
             "id": "mock-admin-id-001",
             "email": "admin@orso-agents.fr",
             "full_name": "Thibaut Quinzain",
             "role": "superadmin",
         }
+        _TOKEN_CACHE[token] = (now, user_mock)
+        return user_mock
 
     if not url or not key:
         raise HTTPException(status_code=401, detail="Service d'authentification non configuré.")
 
-    # 1. Validation du jeton auprès de Supabase Auth
+    # 2. Validation du jeton auprès de Supabase Auth
     req = urllib.request.Request(
         f"{url}/auth/v1/user",
         headers={
@@ -157,12 +181,14 @@ def verify_superadmin_token(
     if user_role != "superadmin":
         raise HTTPException(status_code=403, detail="Accès refusé : habilitation Superadmin requise.")
 
-    return {
+    admin_profile = {
         "id": user.get("id"),
         "email": user.get("email"),
         "full_name": user_meta.get("full_name") or "Administrateur Orso",
         "role": "superadmin",
     }
+    _TOKEN_CACHE[token] = (now, admin_profile)
+    return admin_profile
 
 
 async def require_superadmin(

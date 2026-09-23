@@ -76,6 +76,10 @@ class OpsManager:
         # État en mémoire / cache pour le mode sans base distante ou le développement local
         self._mock_tenants: Dict[str, Dict[str, Any]] = self._init_seed_data()
 
+        # Cache mémoire TTL pour la table de correspondance auth.users (évite les requêtes Supabase répétitives)
+        self._cached_auth_emails: Optional[tuple[float, Dict[str, str]]] = None
+        self._auth_emails_ttl: float = 60.0  # 60 secondes
+
     def _init_seed_data(self) -> Dict[str, Dict[str, Any]]:
         """Données d'amorçage réalistes représentant les premiers clients du projet Orso."""
         return {
@@ -313,7 +317,11 @@ class OpsManager:
             return None
 
     def _fetch_supabase_auth_users(self) -> Dict[str, str]:
-        """Récupère la table de correspondance user_id -> email via l'API Admin Supabase."""
+        """Récupère la table de correspondance user_id -> email via l'API Admin Supabase (avec cache TTL 60s)."""
+        now = time.time()
+        if self._cached_auth_emails and (now - self._cached_auth_emails[0] < self._auth_emails_ttl):
+            return self._cached_auth_emails[1]
+
         if not self.supabase_url or not self.supabase_key:
             return {}
 
@@ -331,9 +339,13 @@ class OpsManager:
             with urllib.request.urlopen(req, timeout=5.0) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 users = data.get("users", [])
-                return {u["id"]: u.get("email", "") for u in users if "id" in u}
+                mapping = {u["id"]: u.get("email", "") for u in users if "id" in u}
+                self._cached_auth_emails = (now, mapping)
+                return mapping
         except Exception as e:
             _log.warning("Échec récupération des utilisateurs Supabase Auth: %s", e)
+            if self._cached_auth_emails:
+                return self._cached_auth_emails[1]
             return {}
 
     # ── Endpoints Métier Ops ──────────────────────────────────────────────────

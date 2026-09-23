@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from olympe.auth import authenticate_superadmin, require_superadmin
+from olympe.auth import authenticate_superadmin, clear_token_cache, require_superadmin
 from olympe.lifecycle_manager import DockerLifecycleManager
 from olympe.ops_manager import OpsManager
 
@@ -165,6 +165,7 @@ async def ops_me(admin: Dict[str, Any] = Depends(require_superadmin)):
 @app.post("/api/olympe/ops/auth/logout")
 async def ops_logout():
     """Déconnexion de session superadmin."""
+    clear_token_cache()
     return {"success": True, "message": "Déconnexion réussie."}
 
 

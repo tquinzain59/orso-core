@@ -123,7 +123,7 @@ export const App: React.FC = () => {
       await wakeContainer(slug);
       await loadData();
     } catch (e: any) {
-      alert("Erreur lors du réveil du conteneur : " + e.message);
+      setError("Erreur lors du réveil du conteneur : " + (e.message || "Échec"));
     }
   };
 
@@ -133,7 +133,7 @@ export const App: React.FC = () => {
       await suspendContainer(slug);
       await loadData();
     } catch (e: any) {
-      alert("Erreur lors de la mise en veille : " + e.message);
+      setError("Erreur lors de la mise en veille : " + (e.message || "Échec"));
     }
   };
 
