@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AgentId, ChatMessage, ActionCardData } from '@/types';
 import { ORSO_AGENTS } from '@/lib/data';
-import { getAgentWelcomeMessage, sendUserPrompt, checkBackendHealth } from '@/lib/api';
+import { sendUserPrompt, checkBackendHealth } from '@/lib/api';
 import { ActionCard } from '@/components/ActionCard';
 import { QuickActions } from '@/components/QuickActions';
 import {
@@ -34,8 +34,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ activeAgentId }) => {
 
   // Initialize or reload conversation when active agent changes
   useEffect(() => {
-    const welcome = getAgentWelcomeMessage(activeAgentId);
-    setMessages([welcome]);
+    setMessages([]);
     setStreamingText('');
     setIsLoading(false);
   }, [activeAgentId]);
@@ -88,8 +87,9 @@ export const ChatView: React.FC<ChatViewProps> = ({ activeAgentId }) => {
   };
 
   const handleResetChat = () => {
-    const welcome = getAgentWelcomeMessage(activeAgentId);
-    setMessages([welcome]);
+    setMessages([]);
+    setStreamingText('');
+    setIsLoading(false);
   };
 
   const handleUpdateActionStatus = (actionId: string, status: ActionCardData['status'], feedback?: string) => {
@@ -161,57 +161,99 @@ export const ChatView: React.FC<ChatViewProps> = ({ activeAgentId }) => {
       </div>
 
       {/* Messages Scroll Area */}
-      <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-6 space-y-6">
-        {messages.map((msg) => {
-          const isUser = msg.role === 'user';
-          return (
+      <div className={`flex-1 overflow-y-auto px-4 sm:px-6 py-6 ${messages.length === 0 ? 'flex flex-col justify-center' : 'space-y-6'}`}>
+        {messages.length === 0 && !isLoading ? (
+          <div className="flex flex-col items-center justify-center text-center p-6 max-w-xl mx-auto my-auto animate-in fade-in duration-300">
             <div
-              key={msg.id}
-              className={`flex gap-3 max-w-3xl ${isUser ? 'ml-auto flex-row-reverse' : 'mr-auto'}`}
+              className={`w-16 h-16 rounded-2xl flex items-center justify-center text-3xl mb-4 shadow-xl ${currentAgent.themeColor.bg} border ${currentAgent.themeColor.border}`}
             >
-              {/* Avatar Icon */}
-              <div
-                className={`w-8 h-8 rounded-xl flex items-center justify-center text-sm shrink-0 mt-0.5 select-none ${
-                  isUser
-                    ? 'bg-blue-600 text-white shadow-md shadow-blue-900/40'
-                    : `${currentAgent.themeColor.bg} border ${currentAgent.themeColor.border} text-white`
-                }`}
-              >
-                {isUser ? <User className="w-4 h-4" /> : currentAgent.avatar}
-              </div>
+              {currentAgent.avatar}
+            </div>
+            <h3 className="text-lg font-bold text-white mb-1">
+              Discussion avec {currentAgent.name}
+            </h3>
+            <span className={`text-xs px-2.5 py-0.5 rounded-full border font-semibold mb-3 ${currentAgent.themeColor.badge}`}>
+              {currentAgent.role}
+            </span>
+            <p className="text-xs text-slate-400 mb-8 leading-relaxed max-w-md">
+              {currentAgent.description}
+            </p>
 
-              {/* Message Content Bubble */}
-              <div className="space-y-1 max-w-[88%] sm:max-w-[82%]">
-                <div className="flex items-center gap-2 px-1">
-                  <span className="text-xs font-semibold text-slate-300">
-                    {isUser ? 'Vous' : currentAgent.name}
-                  </span>
-                  <span className="text-[10px] text-slate-500">{msg.timestamp}</span>
-                </div>
-
-                <div
-                  className={`p-4 rounded-2xl text-sm leading-relaxed ${
-                    isUser
-                      ? 'bg-blue-600 text-white rounded-tr-sm shadow-md'
-                      : 'bg-slate-900/95 border border-slate-800/90 text-slate-200 rounded-tl-sm shadow-sm'
-                  }`}
-                >
-                  <div className="whitespace-pre-wrap space-y-2">
-                    {msg.content}
-                  </div>
-
-                  {/* Interactive Action Card inside message */}
-                  {msg.actionCard && (
-                    <ActionCard
-                      action={msg.actionCard}
-                      onUpdateStatus={handleUpdateActionStatus}
-                    />
-                  )}
-                </div>
+            <div className="w-full space-y-2.5">
+              <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider text-left">
+                Suggestions pour démarrer :
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-left">
+                {currentAgent.quickActions.map((qa, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => handleSendMessage(qa.prompt)}
+                    disabled={isLoading}
+                    className="p-3.5 rounded-xl bg-slate-900/90 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 text-xs text-slate-200 transition-all hover:scale-[1.01] active:scale-[0.99] flex flex-col gap-1.5 shadow-sm group"
+                  >
+                    <span className="font-semibold text-white group-hover:text-blue-400 transition-colors">
+                      {qa.label}
+                    </span>
+                    <span className="text-[11px] text-slate-400 line-clamp-2">
+                      {qa.prompt}
+                    </span>
+                  </button>
+                ))}
               </div>
             </div>
-          );
-        })}
+          </div>
+        ) : (
+          messages.map((msg) => {
+            const isUser = msg.role === 'user';
+            return (
+              <div
+                key={msg.id}
+                className={`flex gap-3 max-w-3xl ${isUser ? 'ml-auto flex-row-reverse' : 'mr-auto'}`}
+              >
+                {/* Avatar Icon */}
+                <div
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center text-sm shrink-0 mt-0.5 select-none ${
+                    isUser
+                      ? 'bg-blue-600 text-white shadow-md shadow-blue-900/40'
+                      : `${currentAgent.themeColor.bg} border ${currentAgent.themeColor.border} text-white`
+                  }`}
+                >
+                  {isUser ? <User className="w-4 h-4" /> : currentAgent.avatar}
+                </div>
+
+                {/* Message Content Bubble */}
+                <div className="space-y-1 max-w-[88%] sm:max-w-[82%]">
+                  <div className="flex items-center gap-2 px-1">
+                    <span className="text-xs font-semibold text-slate-300">
+                      {isUser ? 'Vous' : currentAgent.name}
+                    </span>
+                    <span className="text-[10px] text-slate-500">{msg.timestamp}</span>
+                  </div>
+
+                  <div
+                    className={`p-4 rounded-2xl text-sm leading-relaxed ${
+                      isUser
+                        ? 'bg-blue-600 text-white rounded-tr-sm shadow-md'
+                        : 'bg-slate-900/95 border border-slate-800/90 text-slate-200 rounded-tl-sm shadow-sm'
+                    }`}
+                  >
+                    <div className="whitespace-pre-wrap space-y-2">
+                      {msg.content}
+                    </div>
+
+                    {/* Interactive Action Card inside message */}
+                    {msg.actionCard && (
+                      <ActionCard
+                        action={msg.actionCard}
+                        onUpdateStatus={handleUpdateActionStatus}
+                      />
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })
+        )}
 
         {/* Live Streaming or Thinking Indicator */}
         {isLoading && (

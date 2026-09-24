@@ -234,7 +234,7 @@ export async function checkBackendHealth(): Promise<{ online: boolean; llmConnec
   return { online: false, llmConnected: false };
 }
 
-// Generate an initial welcome message for the selected agent
+// Generate an initial welcome message for the selected agent (neutral, no fake metrics)
 export function getAgentWelcomeMessage(agentId: AgentId): ChatMessage {
   const timestamp = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
   switch (agentId) {
@@ -243,30 +243,15 @@ export function getAgentWelcomeMessage(agentId: AgentId): ChatMessage {
         id: 'welcome-jerome',
         agentId: 'jerome',
         role: 'assistant',
-        content: `Bonjour ! Je suis **Jérôme**, votre assistant dédié au recouvrement et à la protection de votre trésorerie.\n\nJ'ai analysé vos factures ce matin : **3 factures** présentent un retard de paiement supérieur à 15 jours pour un montant total de **8 420 €**.\n\nQue souhaitez-vous faire aujourd'hui ?`,
+        content: `Bonjour ! Je suis **Jérôme**, votre assistant dédié au recouvrement et à la protection de votre trésorerie.\n\nComment puis-je vous aider aujourd'hui ?`,
         timestamp,
-        actionCard: {
-          id: 'action-sample-1',
-          agentId: 'jerome',
-          title: 'Proposition de relance amiable (Niveau 1)',
-          type: 'invoice_reminder',
-          recipientName: 'SARL Bâtiment Moderne',
-          recipientContact: 'comptabilite@batiment-moderne.fr',
-          amount: 4520.00,
-          dueDate: '15 Août 2026',
-          invoiceNumber: 'FAC-2026-089',
-          channel: 'email',
-          draftSubject: 'Rappel amical : Facture FAC-2026-089 en attente de règlement',
-          draftContent: `Bonjour,\n\nSauf erreur de notre part, nous constatons que la facture FAC-2026-089 d'un montant de 4 520,00 € TTC arrivée à échéance le 15/08/2026 demeure à ce jour impayée.\n\nPourriez-vous nous confirmer la programmation de son règlement ou nous transmettre l'ordre de virement ?\n\nBien cordialement,\nLe service comptabilité`,
-          status: 'pending',
-        },
       };
     case 'lucas':
       return {
         id: 'welcome-lucas',
         agentId: 'lucas',
         role: 'assistant',
-        content: `Bonjour ! Je suis **Lucas**, votre commercial et chasseur d'opportunités.\n\nJ'ai pré-qualifié **4 nouveaux prospects** dans votre zone géographique cible qui recrutent activement et correspondent à votre offre.\n\nSouhaitez-vous que je vous présente la liste ou que je prépare les e-mails d'approche personnalisés ?`,
+        content: `Bonjour ! Je suis **Lucas**, votre commercial et chasseur d'opportunités.\n\nComment puis-je vous aider aujourd'hui ?`,
         timestamp,
       };
     case 'clara':
@@ -274,7 +259,7 @@ export function getAgentWelcomeMessage(agentId: AgentId): ChatMessage {
         id: 'welcome-clara',
         agentId: 'clara',
         role: 'assistant',
-        content: `Bonjour ! Je suis **Clara**, votre responsable support client et SAV.\n\nTous les tickets de la matinée ont reçu une première réponse. Aucun incident majeur n'est signalé sur vos services.\n\nComment puis-je vous aider ?`,
+        content: `Bonjour ! Je suis **Clara**, votre responsable support client et SAV.\n\nComment puis-je vous aider aujourd'hui ?`,
         timestamp,
       };
     case 'victor':
@@ -282,11 +267,12 @@ export function getAgentWelcomeMessage(agentId: AgentId): ChatMessage {
         id: 'welcome-victor',
         agentId: 'victor',
         role: 'assistant',
-        content: `Bonjour ! Je suis **Victor**, votre veilleur marchés publics.\n\nLe BOAMP a publié **2 consultations publiques** très pertinentes ce matin dans votre domaine d'activité en région Hauts-de-France.\n\nSouhaitez-vous consulter les fiches de synthèse des critères de sélection ?`,
+        content: `Bonjour ! Je suis **Victor**, votre veilleur marchés publics.\n\nComment puis-je vous aider aujourd'hui ?`,
         timestamp,
       };
   }
 }
+
 
 // Send user prompt to agent via real backend SSE stream with fallback
 export async function sendUserPrompt(
