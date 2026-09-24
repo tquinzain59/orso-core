@@ -3,6 +3,11 @@ import QRCode from 'qrcode';
 import { SAMPLE_CHANNELS } from '@/lib/data';
 import { MessagingChannel } from '@/types';
 import {
+  fetchClientChannels,
+  addChannelAllowedUser,
+  removeChannelAllowedUser,
+} from '@/lib/api';
+import {
   MessageSquare,
   QrCode,
   Smartphone,
@@ -24,6 +29,14 @@ export const ChannelsView: React.FC = () => {
   const [showUsersModal, setShowUsersModal] = useState<string | null>(null);
   const [newAllowedUser, setNewAllowedUser] = useState('');
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchClientChannels().then((data) => {
+      if (data && data.length > 0) {
+        setChannels(data);
+      }
+    });
+  }, []);
 
   // Generate QR Code on demand
   const handleOpenQrModal = async () => {
@@ -65,26 +78,65 @@ export const ChannelsView: React.FC = () => {
     setTimeout(() => setToastMessage(null), 4000);
   };
 
-  const handleAddAllowedUser = (channelId: string) => {
-    if (!newAllowedUser.trim()) return;
-    setChannels((prev) =>
-      prev.map((c) =>
-        c.id === channelId ? { ...c, allowedUsers: [...c.allowedUsers, newAllowedUser.trim()] } : c
-      )
-    );
+  const handleAddAllowedUser = async (channelId: string) => {
+    const user = newAllowedUser.trim();
+    if (!user) return;
     setNewAllowedUser('');
-    setToastMessage('Utilisateur ajouté à la liste autorisée.');
-    setTimeout(() => setToastMessage(null), 3000);
+    try {
+      const res = await addChannelAllowedUser(channelId, user);
+      if (res.allowed_users) {
+        setChannels((prev) =>
+          prev.map((c) =>
+            c.id === channelId ? { ...c, allowedUsers: res.allowed_users! } : c
+          )
+        );
+      } else {
+        setChannels((prev) =>
+          prev.map((c) =>
+            c.id === channelId ? { ...c, allowedUsers: [...c.allowedUsers, user] } : c
+          )
+        );
+      }
+      setToastMessage('Utilisateur ajouté à la liste autorisée.');
+    } catch {
+      setChannels((prev) =>
+        prev.map((c) =>
+          c.id === channelId ? { ...c, allowedUsers: [...c.allowedUsers, user] } : c
+        )
+      );
+      setToastMessage('Utilisateur ajouté.');
+    } finally {
+      setTimeout(() => setToastMessage(null), 3000);
+    }
   };
 
-  const handleRemoveAllowedUser = (channelId: string, userToRemove: string) => {
-    setChannels((prev) =>
-      prev.map((c) =>
-        c.id === channelId
-          ? { ...c, allowedUsers: c.allowedUsers.filter((u) => u !== userToRemove) }
-          : c
-      )
-    );
+  const handleRemoveAllowedUser = async (channelId: string, userToRemove: string) => {
+    try {
+      const res = await removeChannelAllowedUser(channelId, userToRemove);
+      if (res.allowed_users) {
+        setChannels((prev) =>
+          prev.map((c) =>
+            c.id === channelId ? { ...c, allowedUsers: res.allowed_users! } : c
+          )
+        );
+      } else {
+        setChannels((prev) =>
+          prev.map((c) =>
+            c.id === channelId
+              ? { ...c, allowedUsers: c.allowedUsers.filter((u) => u !== userToRemove) }
+              : c
+          )
+        );
+      }
+    } catch {
+      setChannels((prev) =>
+        prev.map((c) =>
+          c.id === channelId
+            ? { ...c, allowedUsers: c.allowedUsers.filter((u) => u !== userToRemove) }
+            : c
+        )
+      );
+    }
   };
 
   const activeChannelForUsers = channels.find((c) => c.id === showUsersModal);

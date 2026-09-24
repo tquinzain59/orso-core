@@ -50,7 +50,818 @@ class ActionExecuteRequest(BaseModel):
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Métadonnées complémentaires")
 
 
-# ── Catalogues des Agents & Chargement des Profils ──────────────────────────
+class ChannelUserRequest(BaseModel):
+    user: str = Field(..., description="Numéro ou identifiant de l'utilisateur à autoriser")
+
+
+# ── Catalogues des Agents, Interfaces et Données Métier en Base ────────────
+
+ALL_AGENTS_METADATA: List[Dict[str, Any]] = [
+    {
+        "id": "jerome",
+        "name": "Jérôme",
+        "role": "Credit Manager & Recouvrement",
+        "subtitle": "Credit Manager • ADV • Prévention des impayés",
+        "department": "Trésorerie & Finance",
+        "avatar": "💼",
+        "themeColor": {
+            "bg": "bg-blue-950/40",
+            "border": "border-blue-700/50",
+            "text": "text-blue-400",
+            "accent": "bg-blue-600 hover:bg-blue-500",
+            "badge": "bg-blue-900/60 text-blue-300 border-blue-700/60",
+        },
+        "status": "online",
+        "description": "Veille sur votre trésorerie, suit la balance âgée, analyse la solvabilité de vos clients et gère vos relances sans stress.",
+        "skills": ["balance_agee", "veille_bodacc", "fiche_credit", "relance_amiable"],
+        "quickActions": [
+            {"label": "📊 État de la balance âgée", "prompt": "Quelle est la situation actuelle de notre balance âgée et le total des retards ?"},
+            {"label": "⚠️ Retards de plus de 30 jours", "prompt": "Peux-tu me lister les factures en retard de plus de 30 jours et les actions à engager ?"},
+            {"label": "🔍 Vérifier un SIREN / Client", "prompt": "Je souhaite vérifier la santé financière et le scoring d’un client via son SIREN."},
+            {"label": "✉️ Proposer les relances du jour", "prompt": "Quelles sont les relances prioritaires à effectuer aujourd’hui auprès de nos débiteurs ?"},
+        ],
+    },
+    {
+        "id": "lucas",
+        "name": "Lucas",
+        "role": "Commercial & Prospection (SDR)",
+        "subtitle": "Pipeline • Relance devis • Acquisition B2B",
+        "department": "Développement Commercial",
+        "avatar": "🎯",
+        "themeColor": {
+            "bg": "bg-purple-950/40",
+            "border": "border-purple-700/50",
+            "text": "text-purple-400",
+            "accent": "bg-purple-600 hover:bg-purple-500",
+            "badge": "bg-purple-900/60 text-purple-300 border-purple-700/60",
+        },
+        "status": "online",
+        "description": "Détecte de nouveaux prospects qualifiés, prépare vos e-mails d’approche et enrichit automatiquement votre CRM.",
+        "skills": ["relance_devis", "scoring_prospects", "enrichissement_siren"],
+        "quickActions": [
+            {"label": "🚀 Synthèse du pipeline", "prompt": "Fais-moi un point sur l’état de notre pipeline commercial et les leads qualifiés cette semaine."},
+            {"label": "🎯 Nouveaux prospects ciblés", "prompt": "Trouve et liste 5 entreprises cibles correspondant à notre client idéal dans le secteur B2B."},
+            {"label": "✍️ Rédiger une approche froide", "prompt": "Rédige une proposition d’approche personnalisée pour un dirigeant de PME industrielle."},
+        ],
+    },
+    {
+        "id": "clara",
+        "name": "Clara",
+        "role": "Support Client & SAV",
+        "subtitle": "SAV • Litiges facturation • Satisfaction",
+        "department": "Relation Client",
+        "avatar": "💬",
+        "themeColor": {
+            "bg": "bg-emerald-950/40",
+            "border": "border-emerald-700/50",
+            "text": "text-emerald-400",
+            "accent": "bg-emerald-600 hover:bg-emerald-500",
+            "badge": "bg-emerald-900/60 text-emerald-300 border-emerald-700/60",
+        },
+        "status": "online",
+        "description": "Assiste vos clients 24/7 sur les questions courantes, suit les demandes en attente et prépare les escalades critiques.",
+        "skills": ["gestion_litiges", "faq_intelligente", "satisfaction_client"],
+        "quickActions": [
+            {"label": "🎫 Demandes en attente", "prompt": "Y a-t-il des demandes de clients non traitées ou des réclamations urgentes aujourd’hui ?"},
+            {"label": "💡 Suggestions d’amélioration FAQ", "prompt": "Quelles sont les 3 questions récurrentes que nos clients ont posées cette semaine ?"},
+        ],
+    },
+    {
+        "id": "victor",
+        "name": "Victor",
+        "role": "Spécialiste Appels d’Offres",
+        "subtitle": "BOAMP • Dossiers d'appels d'offres • Conformité",
+        "department": "Marchés Publics",
+        "avatar": "📜",
+        "themeColor": {
+            "bg": "bg-amber-950/40",
+            "border": "border-amber-700/50",
+            "text": "text-amber-400",
+            "accent": "bg-amber-600 hover:bg-amber-500",
+            "badge": "bg-amber-900/60 text-amber-300 border-amber-700/60",
+        },
+        "status": "online",
+        "description": "Veille sur le BOAMP et le TED, analyse les dossiers de consultation (DCE) et prépare vos mémoires techniques.",
+        "skills": ["veille_boamp", "analyse_dce", "attestations_legales"],
+        "quickActions": [
+            {"label": "🏛️ Opportunités BOAMP du jour", "prompt": "Quels nouveaux appels d’offres correspondent à nos compétences sur notre région ?"},
+            {"label": "📑 Synthèse d’un DCE", "prompt": "Je t’ai déposé un cahier des charges, peux-tu m’en extraire les critères d’élimination et de notation ?"},
+        ],
+    },
+]
+
+# Référentiel des tenants et agents activés en base (miroir Supabase KAN-26 / KAN-30 / KAN-31)
+_SEED_TENANTS: Dict[str, Dict[str, Any]] = {
+    "financia-solutions": {
+        "id": "f3e25379-6531-479e-b276-3b3185e7421b",
+        "name": "Financia Solutions",
+        "agents_enabled": ["jerome"],
+    },
+    "commercialink": {
+        "id": "9a38ef87-19d2-45e3-9821-2efbb91081a9",
+        "name": "CommerciaLink",
+        "agents_enabled": ["lucas"],
+    },
+    "helpdesk360": {
+        "id": "88997766500033",
+        "name": "HelpDesk360",
+        "agents_enabled": ["clara"],
+    },
+    "batipro-services": {
+        "id": "c56b8290-7f28-4a11-893d-47209118a72e",
+        "name": "BatiPro Services",
+        "agents_enabled": ["victor"],
+    },
+    "eurotech-conseil": {
+        "id": "e88d1234-9abc-4def-0123-456789abcdef",
+        "name": "EuroTech Conseil",
+        "agents_enabled": ["jerome", "lucas", "clara", "victor"],
+    },
+}
+
+_SEED_INTEGRATIONS: Dict[str, List[Dict[str, Any]]] = {
+    "financia-solutions": [
+        {
+            "id": "pennylane",
+            "name": "Pennylane",
+            "category": "erp",
+            "provider": "Pennylane API",
+            "description": "Synchronisation bidirectionnelle des factures de vente, des règlements clients et de la balance comptable.",
+            "status": "connected",
+            "lastSync": "Il y a 14 min",
+            "metricLabel": "Factures suivies",
+            "metricValue": "284 factures (142 580 €)",
+            "accountDetails": "Compte Entreprise Pro • Clé active",
+        },
+        {
+            "id": "sellsy",
+            "name": "Sellsy CRM & Factures",
+            "category": "erp",
+            "provider": "Sellsy v2",
+            "description": "Extraction des devis signés, des factures échues et des contacts décideurs.",
+            "status": "pending",
+            "lastSync": "Configuration en attente",
+            "metricLabel": "Statut",
+            "metricValue": "En attente du jeton OAuth",
+            "accountDetails": "Non associé",
+        },
+        {
+            "id": "odoo",
+            "name": "Odoo ERP",
+            "category": "erp",
+            "provider": "Odoo XML-RPC",
+            "description": "Module Comptabilité et Ventes pour PME.",
+            "status": "disconnected",
+            "lastSync": "Jamais synchronisé",
+            "accountDetails": "Non configuré",
+        },
+        {
+            "id": "google-workspace",
+            "name": "Google Workspace (Gmail)",
+            "category": "mail",
+            "provider": "Google OAuth",
+            "description": "Envoi des relances amiables et réception des justificatifs de paiement des clients.",
+            "status": "connected",
+            "lastSync": "Temps réel (Actif)",
+            "metricLabel": "Relances du mois",
+            "metricValue": "38 e-mails transmis",
+            "accountDetails": "direction@finarecee20.fr",
+        },
+        {
+            "id": "microsoft-365",
+            "name": "Microsoft 365 (Outlook)",
+            "category": "mail",
+            "provider": "Graph API",
+            "description": "Alternative messagerie entreprise pour l’envoi et le suivi des courriels.",
+            "status": "disconnected",
+            "accountDetails": "Non connecté",
+        },
+        {
+            "id": "pappers",
+            "name": "Pappers API & Scoring",
+            "category": "legal",
+            "provider": "Pappers Open Data",
+            "description": "Fiche financière complète, score de défaillance, bilans et dirigeants légaux des tiers.",
+            "status": "connected",
+            "lastSync": "Temps réel",
+            "metricLabel": "Analyses effectuées",
+            "metricValue": "46 vérifications ce mois",
+            "accountDetails": "Accès illimité actif",
+        },
+        {
+            "id": "bodacc",
+            "name": "Veille Légale BODACC",
+            "category": "legal",
+            "provider": "DILA Open Data",
+            "description": "Surveillance proactive des procédures collectives (redressements, liquidations judiciaires).",
+            "status": "connected",
+            "lastSync": "Ce matin à 06:00",
+            "metricLabel": "Alerte active",
+            "metricValue": "0 procédure détectée",
+            "accountDetails": "Flux quotidien officiel",
+        },
+        {
+            "id": "hubspot",
+            "name": "HubSpot CRM",
+            "category": "crm",
+            "provider": "HubSpot API",
+            "description": "Synchronisation des contacts commerciaux, création de deals et suivi des échanges.",
+            "status": "connected",
+            "lastSync": "Il y a 1 heure",
+            "metricLabel": "Prospects qualifiés",
+            "metricValue": "18 leads par Lucas",
+            "accountDetails": "Instance connectée",
+        },
+    ],
+    "commercialink": [
+        {
+            "id": "hubspot",
+            "name": "HubSpot CRM",
+            "category": "crm",
+            "provider": "HubSpot API",
+            "description": "Synchronisation des contacts commerciaux, création de deals et suivi des échanges.",
+            "status": "connected",
+            "lastSync": "Il y a 10 min",
+            "metricLabel": "Prospects chauds",
+            "metricValue": "34 leads qualifiés",
+            "accountDetails": "HubSpot Pro - Pipeline Ventes",
+        },
+        {
+            "id": "sellsy",
+            "name": "Sellsy CRM & Devis",
+            "category": "erp",
+            "provider": "Sellsy v2",
+            "description": "Gestion des devis et propositions commerciales B2B.",
+            "status": "connected",
+            "lastSync": "Il y a 25 min",
+            "metricLabel": "Devis en attente",
+            "metricValue": "12 devis (89 400 €)",
+            "accountDetails": "Instance Sellsy active",
+        },
+        {
+            "id": "google-workspace",
+            "name": "Google Workspace (Gmail)",
+            "category": "mail",
+            "provider": "Google OAuth",
+            "description": "Envoi des séquences de prospection commerciale et relances de devis.",
+            "status": "connected",
+            "lastSync": "Temps réel",
+            "metricLabel": "Emails envoyés",
+            "metricValue": "112 prises de contact",
+            "accountDetails": "claire.dubois@servicallc322.com",
+        },
+        {
+            "id": "pappers",
+            "name": "Pappers API & Scoring",
+            "category": "legal",
+            "provider": "Pappers Open Data",
+            "description": "Enrichissement des données de contact et santé financière des prospects.",
+            "status": "connected",
+            "lastSync": "Temps réel",
+            "metricLabel": "Fiches enrichies",
+            "metricValue": "68 entreprises vérifiées",
+            "accountDetails": "Accès Standard",
+        },
+    ],
+    "helpdesk360": [
+        {
+            "id": "google-workspace",
+            "name": "Google Workspace",
+            "category": "mail",
+            "provider": "Google OAuth",
+            "description": "Réception et traitement automatique des tickets clients et réclamations.",
+            "status": "connected",
+            "lastSync": "Temps réel",
+            "metricLabel": "Tickets traités",
+            "metricValue": "54 réclamations résolues",
+            "accountDetails": "support@recoviaa60a.fr",
+        },
+        {
+            "id": "hubspot",
+            "name": "HubSpot Service Hub",
+            "category": "crm",
+            "provider": "HubSpot API",
+            "description": "Gestion de la base de connaissances et de la satisfaction client.",
+            "status": "connected",
+            "lastSync": "Il y a 5 min",
+            "metricLabel": "CSAT moyen",
+            "metricValue": "96% de satisfaction",
+            "accountDetails": "Instance HelpDesk Pro",
+        },
+    ],
+    "batipro-services": [
+        {
+            "id": "bodacc",
+            "name": "Veille Légale BODACC & BOAMP",
+            "category": "legal",
+            "provider": "DILA Open Data",
+            "description": "Surveillance quotidienne des avis de marchés publics BTP.",
+            "status": "connected",
+            "lastSync": "Ce matin à 06:00",
+            "metricLabel": "Appels d’offres ciblés",
+            "metricValue": "7 opportunités détectées",
+            "accountDetails": "Flux BOAMP BTP",
+        },
+        {
+            "id": "pappers",
+            "name": "Pappers API & Scoring",
+            "category": "legal",
+            "provider": "Pappers Open Data",
+            "description": "Vérification de solvabilité et attestations légales (DC1, DC2).",
+            "status": "connected",
+            "lastSync": "Temps réel",
+            "metricLabel": "Vérifications",
+            "metricValue": "19 dossiers montés",
+            "accountDetails": "Compte Pro BTP",
+        },
+    ],
+    "eurotech-conseil": [
+        {
+            "id": "pennylane",
+            "name": "Pennylane",
+            "category": "erp",
+            "provider": "Pennylane API",
+            "description": "Synchronisation comptable et facturation clients complète.",
+            "status": "connected",
+            "lastSync": "Il y a 10 min",
+            "metricLabel": "Factures suivies",
+            "metricValue": "512 factures (340 000 €)",
+            "accountDetails": "Pennylane Enterprise",
+        },
+        {
+            "id": "hubspot",
+            "name": "HubSpot CRM",
+            "category": "crm",
+            "provider": "HubSpot API",
+            "description": "Pipeline d’affaires et scoring commercial B2B.",
+            "status": "connected",
+            "lastSync": "Il y a 20 min",
+            "metricLabel": "Pipeline actif",
+            "metricValue": "48 opportunités",
+            "accountDetails": "HubSpot Enterprise",
+        },
+        {
+            "id": "google-workspace",
+            "name": "Google Workspace",
+            "category": "mail",
+            "provider": "Google OAuth",
+            "description": "Messagerie entreprise connectée aux 4 agents.",
+            "status": "connected",
+            "lastSync": "Temps réel",
+            "metricLabel": "E-mails gérés",
+            "metricValue": "240 échanges automatisés",
+            "accountDetails": "direction@ventelinkc009.com",
+        },
+        {
+            "id": "pappers",
+            "name": "Pappers API & Scoring",
+            "category": "legal",
+            "provider": "Pappers Open Data",
+            "description": "Analyses financières et conformité des partenaires.",
+            "status": "connected",
+            "lastSync": "Temps réel",
+            "metricLabel": "Audits tiers",
+            "metricValue": "94 analyses ce mois",
+            "accountDetails": "Accès Illimité",
+        },
+        {
+            "id": "bodacc",
+            "name": "Veille Légale BODACC",
+            "category": "legal",
+            "provider": "DILA Open Data",
+            "description": "Surveillance des partenaires et fournisseurs.",
+            "status": "connected",
+            "lastSync": "Ce matin à 06:00",
+            "metricLabel": "Alertes",
+            "metricValue": "0 défaillance détectée",
+            "accountDetails": "Flux actif",
+        },
+    ],
+}
+
+_SEED_CHANNELS: Dict[str, List[Dict[str, Any]]] = {
+    "financia-solutions": [
+        {
+            "id": "whatsapp",
+            "name": "WhatsApp Business",
+            "tagline": "Liaison directe avec vos clients & tiers",
+            "description": "Permet à Jérôme et Lucas de dialoguer directement par WhatsApp pour obtenir des confirmations de virement ou qualifier des prospects.",
+            "status": "connected",
+            "connectedAccount": "+33 6 42 00 12 34 (Numéro Entreprise)",
+            "allowedUsers": ["+33642001234", "+33612345678"],
+            "stats": {"messagesToday": 12, "activeSessions": 3},
+        },
+        {
+            "id": "telegram",
+            "name": "Telegram (Console Dirigeant)",
+            "tagline": "Notifications et alertes prioritaires sur mobile",
+            "description": "Votre canal direct pour recevoir les alertes BODACC urgentes, vérifier un client via /check et consulter vos chiffres sans ouvrir votre ordinateur.",
+            "status": "connected",
+            "connectedAccount": "@OrsoDirigeantBot (Lié à votre compte)",
+            "allowedUsers": ["741298453 (Dirigeant)"],
+            "stats": {"messagesToday": 4, "activeSessions": 1},
+        },
+        {
+            "id": "email",
+            "name": "Email Gateway",
+            "tagline": "Envoi automatique et suivi des réponses",
+            "description": "Canal de relance par défaut pour l’envoi des courriers de relance niveau 1, 2 et mise en demeure.",
+            "status": "connected",
+            "connectedAccount": "recouvrement@finarecee20.fr",
+            "allowedUsers": ["sophie.martin@finarecee20.fr", "direction@finarecee20.fr"],
+            "stats": {"messagesToday": 26, "activeSessions": 8},
+        },
+    ],
+    "commercialink": [
+        {
+            "id": "whatsapp",
+            "name": "WhatsApp Business",
+            "tagline": "Liaison directe avec vos prospects",
+            "description": "Permet à Lucas de dialoguer sur WhatsApp pour la prise de rendez-vous commercial.",
+            "status": "connected",
+            "connectedAccount": "+33 1 56 78 90 12",
+            "allowedUsers": ["+33156789012"],
+            "stats": {"messagesToday": 18, "activeSessions": 5},
+        },
+        {
+            "id": "email",
+            "name": "Email Gateway",
+            "tagline": "Séquences de prospection commerciale",
+            "description": "Envoi des devis et séquences de relance commerciale.",
+            "status": "connected",
+            "connectedAccount": "commercial@servicallc322.com",
+            "allowedUsers": ["claire.dubois@servicallc322.com"],
+            "stats": {"messagesToday": 42, "activeSessions": 12},
+        },
+    ],
+    "helpdesk360": [
+        {
+            "id": "whatsapp",
+            "name": "WhatsApp SAV Client",
+            "tagline": "Assistance réactive en direct",
+            "description": "Prise en charge instantanée des questions récurrentes des clients.",
+            "status": "connected",
+            "connectedAccount": "+33 9 12 34 56 78",
+            "allowedUsers": ["+33912345678"],
+            "stats": {"messagesToday": 29, "activeSessions": 7},
+        },
+        {
+            "id": "email",
+            "name": "Support Mail Gateway",
+            "tagline": "Gestion des dossiers réclamations",
+            "description": "Accusés de réception et résolution des litiges factures.",
+            "status": "connected",
+            "connectedAccount": "support@recoviaa60a.fr",
+            "allowedUsers": ["h.bernard@recoviaa60a.fr"],
+            "stats": {"messagesToday": 63, "activeSessions": 15},
+        },
+    ],
+    "batipro-services": [
+        {
+            "id": "telegram",
+            "name": "Telegram Alertes Marchés",
+            "tagline": "Notification instantanée des nouveaux appels d’offres",
+            "description": "Alerte dès qu’un marché public BTP correspond aux critères de qualification.",
+            "status": "connected",
+            "connectedAccount": "@BatiProMarchesBot",
+            "allowedUsers": ["julien.lefevre@batiprof38f.fr"],
+            "stats": {"messagesToday": 5, "activeSessions": 1},
+        },
+        {
+            "id": "email",
+            "name": "Email AO Gateway",
+            "tagline": "Dépôt des dossiers de candidature",
+            "description": "Correspondance avec les acheteurs publics et plateformes DCE.",
+            "status": "connected",
+            "connectedAccount": "marches@batiprof38f.fr",
+            "allowedUsers": ["julien.lefevre@batiprof38f.fr"],
+            "stats": {"messagesToday": 8, "activeSessions": 2},
+        },
+    ],
+    "eurotech-conseil": [
+        {
+            "id": "whatsapp",
+            "name": "WhatsApp Business Pro",
+            "tagline": "Canal client & prospects unifié",
+            "description": "Liaison directe pour Jérôme, Lucas et Clara.",
+            "status": "connected",
+            "connectedAccount": "+33 6 98 76 54 32",
+            "allowedUsers": ["+33698765432"],
+            "stats": {"messagesToday": 35, "activeSessions": 9},
+        },
+        {
+            "id": "telegram",
+            "name": "Telegram Direction Console",
+            "tagline": "Console mobile d’arbitrage pour dirigeants",
+            "description": "Arbitrage 1-clic pour les relances, devis et litiges.",
+            "status": "connected",
+            "connectedAccount": "@EuroTechDirigeantBot",
+            "allowedUsers": ["amelie.petit@ventelinkc009.com"],
+            "stats": {"messagesToday": 14, "activeSessions": 3},
+        },
+        {
+            "id": "email",
+            "name": "Email Suite Gateway",
+            "tagline": "Relances, devis et service client",
+            "description": "Passerelle mail unifiée pour la flotte d’agents.",
+            "status": "connected",
+            "connectedAccount": "contact@ventelinkc009.com",
+            "allowedUsers": ["amelie.petit@ventelinkc009.com"],
+            "stats": {"messagesToday": 78, "activeSessions": 22},
+        },
+    ],
+}
+
+
+def _get_tenant_enabled_agents(
+    tenant_id: Optional[str] = None,
+    tenant_slug: Optional[str] = None,
+    auth_agents: Optional[List[str]] = None,
+) -> List[str]:
+    """Résout la liste des agents activés pour un client depuis Supabase ou le référentiel de base."""
+    # 1. Si spécifié explicitement dans le jeton JWT
+    if auth_agents and isinstance(auth_agents, list) and len(auth_agents) > 0:
+        return [a for a in auth_agents if a in ["jerome", "lucas", "clara", "victor"]]
+
+    # 2. Si Supabase est accessible : interroger public.tenant_instances
+    supabase_url = os.environ.get("SUPABASE_URL", "").strip()
+    service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    if supabase_url and service_key and tenant_id:
+        try:
+            url = f"{supabase_url}/rest/v1/tenant_instances?tenant_id=eq.{tenant_id}&select=agents_enabled"
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "apikey": service_key,
+                    "Authorization": f"Bearer {service_key}",
+                    "User-Agent": "OrsoCore/1.0",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=3.0) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                if data and len(data) > 0:
+                    raw_agents = data[0].get("agents_enabled")
+                    if isinstance(raw_agents, list):
+                        return [a for a in raw_agents if a in ["jerome", "lucas", "clara", "victor"]]
+                    elif isinstance(raw_agents, dict) and "active" in raw_agents:
+                        return [a for a in raw_agents["active"] if a in ["jerome", "lucas", "clara", "victor"]]
+        except Exception as e:
+            _log.debug("Erreur lecture agents_enabled Supabase: %s", e)
+
+    # 3. Référentiel local / amorçage par slug ou tenant_id
+    slug = (tenant_slug or "").lower()
+    if not slug and tenant_id:
+        for t_slug, t_info in _SEED_TENANTS.items():
+            if t_info.get("id") == tenant_id:
+                slug = t_slug
+                break
+
+    if slug in _SEED_TENANTS:
+        return _SEED_TENANTS[slug].get("agents_enabled", ["jerome"])
+
+    # Fallback par défaut
+    return ["jerome"]
+
+
+def _get_tenant_integrations(
+    tenant_id: Optional[str] = None,
+    tenant_slug: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Charge les interfaces et outils connectés pour ce tenant depuis Supabase ou le référentiel de base."""
+    supabase_url = os.environ.get("SUPABASE_URL", "").strip()
+    service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    if supabase_url and service_key and tenant_id:
+        try:
+            url = f"{supabase_url}/rest/v1/tenant_integrations?tenant_id=eq.{tenant_id}&select=*&order=created_at.asc"
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "apikey": service_key,
+                    "Authorization": f"Bearer {service_key}",
+                    "User-Agent": "OrsoCore/1.0",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=3.0) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                if data and len(data) > 0:
+                    result = []
+                    for row in data:
+                        result.append({
+                            "id": row.get("integration_id") or row.get("id"),
+                            "name": row.get("name"),
+                            "category": row.get("category"),
+                            "provider": row.get("provider"),
+                            "description": row.get("description"),
+                            "status": row.get("status", "disconnected"),
+                            "lastSync": row.get("last_sync"),
+                            "metricLabel": row.get("metric_label"),
+                            "metricValue": row.get("metric_value"),
+                            "accountDetails": row.get("account_details"),
+                        })
+                    return result
+        except Exception as e:
+            _log.debug("Erreur lecture tenant_integrations Supabase: %s", e)
+
+    slug = (tenant_slug or "").lower()
+    if not slug and tenant_id:
+        for t_slug, t_info in _SEED_TENANTS.items():
+            if t_info.get("id") == tenant_id:
+                slug = t_slug
+                break
+    if slug not in _SEED_INTEGRATIONS:
+        slug = "financia-solutions"
+
+    return list(_SEED_INTEGRATIONS.get(slug, []))
+
+
+def _sync_tenant_integration(
+    tenant_id: Optional[str],
+    tenant_slug: Optional[str],
+    integration_id: str,
+) -> Optional[Dict[str, Any]]:
+    """Déclenche la resynchronisation d'une interface connectée et met à jour son horodatage."""
+    slug = (tenant_slug or "").lower()
+    if not slug and tenant_id:
+        for t_slug, t_info in _SEED_TENANTS.items():
+            if t_info.get("id") == tenant_id:
+                slug = t_slug
+                break
+    if slug not in _SEED_INTEGRATIONS:
+        slug = "financia-solutions"
+
+    updated = None
+    for item in _SEED_INTEGRATIONS.get(slug, []):
+        if item["id"] == integration_id:
+            item["lastSync"] = "À l'instant"
+            item["status"] = "connected"
+            updated = item
+            break
+
+    supabase_url = os.environ.get("SUPABASE_URL", "").strip()
+    service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    if supabase_url and service_key and tenant_id:
+        try:
+            url = f"{supabase_url}/rest/v1/tenant_integrations?tenant_id=eq.{tenant_id}&integration_id=eq.{integration_id}"
+            payload = json.dumps({"last_sync": "À l'instant", "status": "connected"}).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=payload,
+                headers={
+                    "apikey": service_key,
+                    "Authorization": f"Bearer {service_key}",
+                    "Content-Type": "application/json",
+                    "Prefer": "return=representation",
+                },
+                method="PATCH",
+            )
+            urllib.request.urlopen(req, timeout=3.0)
+        except Exception as e:
+            _log.debug("Erreur patch tenant_integrations Supabase: %s", e)
+
+    return updated
+
+
+def _get_tenant_channels(
+    tenant_id: Optional[str] = None,
+    tenant_slug: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Charge les canaux de communication pour ce tenant depuis Supabase ou le référentiel de base."""
+    supabase_url = os.environ.get("SUPABASE_URL", "").strip()
+    service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    if supabase_url and service_key and tenant_id:
+        try:
+            url = f"{supabase_url}/rest/v1/tenant_channels?tenant_id=eq.{tenant_id}&select=*&order=created_at.asc"
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "apikey": service_key,
+                    "Authorization": f"Bearer {service_key}",
+                    "User-Agent": "OrsoCore/1.0",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=3.0) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                if data and len(data) > 0:
+                    result = []
+                    for row in data:
+                        result.append({
+                            "id": row.get("channel_id") or row.get("id"),
+                            "name": row.get("name"),
+                            "tagline": row.get("tagline"),
+                            "description": row.get("description"),
+                            "status": row.get("status", "connected"),
+                            "connectedAccount": row.get("connected_account"),
+                            "allowedUsers": row.get("allowed_users", []),
+                            "stats": row.get("stats", {"messagesToday": 0, "activeSessions": 0}),
+                        })
+                    return result
+        except Exception as e:
+            _log.debug("Erreur lecture tenant_channels Supabase: %s", e)
+
+    slug = (tenant_slug or "").lower()
+    if not slug and tenant_id:
+        for t_slug, t_info in _SEED_TENANTS.items():
+            if t_info.get("id") == tenant_id:
+                slug = t_slug
+                break
+    if slug not in _SEED_CHANNELS:
+        slug = "financia-solutions"
+
+    return list(_SEED_CHANNELS.get(slug, []))
+
+
+def _add_channel_user(
+    tenant_id: Optional[str],
+    tenant_slug: Optional[str],
+    channel_id: str,
+    user: str,
+) -> List[str]:
+    """Ajoute un utilisateur autorisé à un canal de discussion."""
+    slug = (tenant_slug or "").lower()
+    if not slug and tenant_id:
+        for t_slug, t_info in _SEED_TENANTS.items():
+            if t_info.get("id") == tenant_id:
+                slug = t_slug
+                break
+    if slug not in _SEED_CHANNELS:
+        slug = "financia-solutions"
+
+    clean_user = user.strip()
+    users: List[str] = []
+    for c in _SEED_CHANNELS.get(slug, []):
+        if c["id"] == channel_id:
+            if clean_user and clean_user not in c["allowedUsers"]:
+                c["allowedUsers"].append(clean_user)
+            users = c["allowedUsers"]
+            break
+
+    supabase_url = os.environ.get("SUPABASE_URL", "").strip()
+    service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    if supabase_url and service_key and tenant_id and users:
+        try:
+            url = f"{supabase_url}/rest/v1/tenant_channels?tenant_id=eq.{tenant_id}&channel_id=eq.{channel_id}"
+            payload = json.dumps({"allowed_users": users}).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=payload,
+                headers={
+                    "apikey": service_key,
+                    "Authorization": f"Bearer {service_key}",
+                    "Content-Type": "application/json",
+                },
+                method="PATCH",
+            )
+            urllib.request.urlopen(req, timeout=3.0)
+        except Exception as e:
+            _log.debug("Erreur update tenant_channels Supabase: %s", e)
+
+    return users
+
+
+def _remove_channel_user(
+    tenant_id: Optional[str],
+    tenant_slug: Optional[str],
+    channel_id: str,
+    user: str,
+) -> List[str]:
+    """Retire un utilisateur autorisé d'un canal de discussion."""
+    slug = (tenant_slug or "").lower()
+    if not slug and tenant_id:
+        for t_slug, t_info in _SEED_TENANTS.items():
+            if t_info.get("id") == tenant_id:
+                slug = t_slug
+                break
+    if slug not in _SEED_CHANNELS:
+        slug = "financia-solutions"
+
+    users: List[str] = []
+    for c in _SEED_CHANNELS.get(slug, []):
+        if c["id"] == channel_id:
+            c["allowedUsers"] = [u for u in c["allowedUsers"] if u != user]
+            users = c["allowedUsers"]
+            break
+
+    supabase_url = os.environ.get("SUPABASE_URL", "").strip()
+    service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    if supabase_url and service_key and tenant_id:
+        try:
+            url = f"{supabase_url}/rest/v1/tenant_channels?tenant_id=eq.{tenant_id}&channel_id=eq.{channel_id}"
+            payload = json.dumps({"allowed_users": users}).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=payload,
+                headers={
+                    "apikey": service_key,
+                    "Authorization": f"Bearer {service_key}",
+                    "Content-Type": "application/json",
+                },
+                method="PATCH",
+            )
+            urllib.request.urlopen(req, timeout=3.0)
+        except Exception as e:
+            _log.debug("Erreur update tenant_channels Supabase: %s", e)
+
+    return users
 
 def _find_profile_dir(agent_id: str) -> Optional[Path]:
     """Localise le dossier du profil de l'agent dans les emplacements possibles."""
@@ -375,6 +1186,7 @@ async def client_auth_login(req: ClientLoginRequest, request: Request):
             "tenant_id": token_tenant_id,
             "tenant_slug": token_tenant_slug,
             "name": token_tenant_slug.replace("-", " ").title() if token_tenant_slug else "Client",
+            "agents": _get_tenant_enabled_agents(token_tenant_id, token_tenant_slug),
         },
     }
 
@@ -393,8 +1205,15 @@ async def client_auth_login(req: ClientLoginRequest, request: Request):
 @router.get("/api/client/auth/me")
 async def client_auth_me(auth: Dict[str, Any] = Depends(verify_client_access)):
     """Retourne les informations du client actuellement connecté."""
-    tenant = auth.get("tenant") or auth.get("app_metadata") or {}
+    tenant = dict(auth.get("tenant") or auth.get("app_metadata") or {})
     user_meta = auth.get("user_metadata") or {}
+    tenant_id = tenant.get("tenant_id") or os.environ.get("ORSO_CLIENT_ID")
+    tenant_slug = tenant.get("tenant_slug") or os.environ.get("ORSO_CLIENT_SLUG")
+    tenant["agents"] = _get_tenant_enabled_agents(
+        tenant_id=tenant_id,
+        tenant_slug=tenant_slug,
+        auth_agents=tenant.get("agents"),
+    )
     return {
         "authenticated": True,
         "user": {
@@ -417,56 +1236,94 @@ async def client_auth_logout():
 
 @router.get("/api/client/agents")
 async def list_agents(auth: Dict[str, Any] = Depends(verify_client_access)):
-    """Retourne la liste détaillée des agents Orso autorisés pour ce client."""
-    agents_data = [
-        {
-            "id": "jerome",
-            "name": "Jérôme",
-            "role": "Recouvrement & Trésorerie",
-            "subtitle": "Credit Manager • ADV • Prévention des impayés",
-            "avatar": "blue",
-            "status": "online",
-            "description": "Analyse les balances âgées, détecte les retards de paiement et génère les relances amiables conformes L.441-10.",
-            "skills": ["balance_agee", "veille_bodacc", "fiche_credit", "relance_amiable"],
-        },
-        {
-            "id": "lucas",
-            "name": "Lucas",
-            "role": "Commercial & Prospection",
-            "subtitle": "Pipeline • Relance devis • Acquisition B2B",
-            "avatar": "purple",
-            "status": "online",
-            "description": "Qualifie les leads, identifie les signaux d'achat et relance vos propositions commerciales.",
-            "skills": ["relance_devis", "scoring_prospects", "enrichissement_siren"],
-        },
-        {
-            "id": "clara",
-            "name": "Clara",
-            "role": "Support & Relation Client",
-            "subtitle": "SAV • Litiges facturation • Satisfaction",
-            "avatar": "emerald",
-            "status": "online",
-            "description": "Traite les réclamations clients, dénoue les blocages sur factures et préserve le lien de confiance.",
-            "skills": ["gestion_litiges", "faq_intelligente", "satisfaction_client"],
-        },
-        {
-            "id": "victor",
-            "name": "Victor",
-            "role": "Veille & Marchés Publics",
-            "subtitle": "BOAMP • Dossiers d'appels d'offres • Conformité",
-            "avatar": "amber",
-            "status": "online",
-            "description": "Surveille les appels d'offres publics pertinents et prépare les pièces administratives (DC1, DC2).",
-            "skills": ["veille_boamp", "analyse_dce", "attestations_legales"],
-        },
-    ]
+    """Retourne la liste détaillée des agents Orso autorisés et activés pour ce client depuis la base."""
+    tenant = dict(auth.get("tenant") or auth.get("app_metadata") or {})
+    tenant_id = tenant.get("tenant_id") or os.environ.get("ORSO_CLIENT_ID")
+    tenant_slug = tenant.get("tenant_slug") or os.environ.get("ORSO_CLIENT_SLUG")
+    auth_agents = tenant.get("agents")
 
-    # Si le jeton restreint les agents actifs pour ce tenant
-    allowed_agents = auth.get("tenant", {}).get("agents")
-    if allowed_agents and isinstance(allowed_agents, list):
-        agents_data = [a for a in agents_data if a["id"] in allowed_agents]
+    allowed_ids = _get_tenant_enabled_agents(
+        tenant_id=tenant_id,
+        tenant_slug=tenant_slug,
+        auth_agents=auth_agents,
+    )
 
-    return {"agents": agents_data, "tenant": auth.get("tenant", {})}
+    # Filtrage strict : seuls les agents activés pour ce client sont renvoyés
+    agents_data = [a for a in ALL_AGENTS_METADATA if a["id"] in allowed_ids]
+    tenant["agents"] = allowed_ids
+
+    return {"agents": agents_data, "tenant": tenant}
+
+
+@router.get("/api/client/integrations")
+async def list_integrations(auth: Dict[str, Any] = Depends(verify_client_access)):
+    """Retourne la liste des interfaces et outils connectés pour ce client depuis la base."""
+    tenant = auth.get("tenant") or auth.get("app_metadata") or {}
+    tenant_id = tenant.get("tenant_id") or os.environ.get("ORSO_CLIENT_ID")
+    tenant_slug = tenant.get("tenant_slug") or os.environ.get("ORSO_CLIENT_SLUG")
+    integrations = _get_tenant_integrations(tenant_id=tenant_id, tenant_slug=tenant_slug)
+    return {"integrations": integrations}
+
+
+@router.post("/api/client/integrations/{integration_id}/sync")
+async def sync_integration(
+    integration_id: str,
+    auth: Dict[str, Any] = Depends(verify_client_access),
+):
+    """Déclenche la resynchronisation d'une interface connectée et met à jour la base."""
+    tenant = auth.get("tenant") or auth.get("app_metadata") or {}
+    tenant_id = tenant.get("tenant_id") or os.environ.get("ORSO_CLIENT_ID")
+    tenant_slug = tenant.get("tenant_slug") or os.environ.get("ORSO_CLIENT_SLUG")
+    updated = _sync_tenant_integration(
+        tenant_id=tenant_id,
+        tenant_slug=tenant_slug,
+        integration_id=integration_id,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Interface introuvable.")
+    return {
+        "success": True,
+        "integration": updated,
+        "message": f"Synchronisation réussie avec {updated['name']} !",
+    }
+
+
+@router.get("/api/client/channels")
+async def list_channels(auth: Dict[str, Any] = Depends(verify_client_access)):
+    """Retourne la liste des canaux de discussion connectés pour ce client depuis la base."""
+    tenant = auth.get("tenant") or auth.get("app_metadata") or {}
+    tenant_id = tenant.get("tenant_id") or os.environ.get("ORSO_CLIENT_ID")
+    tenant_slug = tenant.get("tenant_slug") or os.environ.get("ORSO_CLIENT_SLUG")
+    channels = _get_tenant_channels(tenant_id=tenant_id, tenant_slug=tenant_slug)
+    return {"channels": channels}
+
+
+@router.post("/api/client/channels/{channel_id}/users")
+async def add_channel_user(
+    channel_id: str,
+    req: ChannelUserRequest,
+    auth: Dict[str, Any] = Depends(verify_client_access),
+):
+    """Ajoute un utilisateur autorisé sur un canal de messagerie dans la base."""
+    tenant = auth.get("tenant") or auth.get("app_metadata") or {}
+    tenant_id = tenant.get("tenant_id") or os.environ.get("ORSO_CLIENT_ID")
+    tenant_slug = tenant.get("tenant_slug") or os.environ.get("ORSO_CLIENT_SLUG")
+    users = _add_channel_user(tenant_id, tenant_slug, channel_id, req.user)
+    return {"success": True, "channel_id": channel_id, "allowed_users": users}
+
+
+@router.delete("/api/client/channels/{channel_id}/users/{user:path}")
+async def remove_channel_user(
+    channel_id: str,
+    user: str,
+    auth: Dict[str, Any] = Depends(verify_client_access),
+):
+    """Retire un utilisateur autorisé sur un canal de messagerie dans la base."""
+    tenant = auth.get("tenant") or auth.get("app_metadata") or {}
+    tenant_id = tenant.get("tenant_id") or os.environ.get("ORSO_CLIENT_ID")
+    tenant_slug = tenant.get("tenant_slug") or os.environ.get("ORSO_CLIENT_SLUG")
+    users = _remove_channel_user(tenant_id, tenant_slug, channel_id, user)
+    return {"success": True, "channel_id": channel_id, "allowed_users": users}
 
 
 # ── Extraction des Cartes d'Actions depuis la réponse LLM ───────────────────

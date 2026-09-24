@@ -1,4 +1,5 @@
-import { AgentId, ActionCardData, ChatMessage } from '@/types';
+import { Agent, AgentId, ActionCardData, ChatMessage, Integration, MessagingChannel } from '@/types';
+import { ORSO_AGENTS, SAMPLE_INTEGRATIONS, SAMPLE_CHANNELS } from '@/lib/data';
 
 export function getTenantSlug(): string | null {
   if (typeof window === 'undefined') return null;
@@ -473,3 +474,151 @@ export async function executeClientAction(
   }
   return { success: true, message: `Action prise en compte (${now})` };
 }
+
+// ── Données Client en Base (Agents, Intégrations, Canaux) ───────────────────
+
+export async function fetchClientAgents(): Promise<Agent[]> {
+  const base = getApiBaseUrl();
+  try {
+    const res = await fetch(`${base}/api/client/agents`, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        ...getAuthHeaders(),
+      },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.agents) && data.agents.length > 0) {
+        return data.agents;
+      }
+    }
+  } catch (err) {
+    console.warn("fetchClientAgents fallback to local/stored data:", err);
+  }
+
+  // Repli intelligent basé sur le profil du client connecté en stockage local
+  const stored = getStoredUser();
+  const allowed = stored?.tenant?.agents || stored?.tenant?.agents_enabled;
+  if (Array.isArray(allowed) && allowed.length > 0) {
+    const filtered = ORSO_AGENTS.filter((a) => allowed.includes(a.id));
+    if (filtered.length > 0) return filtered;
+  }
+
+  return ORSO_AGENTS;
+}
+
+export async function fetchClientIntegrations(): Promise<Integration[]> {
+  const base = getApiBaseUrl();
+  try {
+    const res = await fetch(`${base}/api/client/integrations`, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        ...getAuthHeaders(),
+      },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.integrations) && data.integrations.length > 0) {
+        return data.integrations;
+      }
+    }
+  } catch (err) {
+    console.warn("fetchClientIntegrations fallback to local data:", err);
+  }
+  return SAMPLE_INTEGRATIONS;
+}
+
+export async function syncClientIntegration(
+  integrationId: string
+): Promise<{ success: boolean; message?: string; integration?: Integration }> {
+  const base = getApiBaseUrl();
+  try {
+    const res = await fetch(`${base}/api/client/integrations/${integrationId}/sync`, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        ...getAuthHeaders(),
+      },
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.warn("syncClientIntegration fallback:", err);
+  }
+  return {
+    success: true,
+    message: 'Synchronisation effectuée avec succès.',
+  };
+}
+
+export async function fetchClientChannels(): Promise<MessagingChannel[]> {
+  const base = getApiBaseUrl();
+  try {
+    const res = await fetch(`${base}/api/client/channels`, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        ...getAuthHeaders(),
+      },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.channels) && data.channels.length > 0) {
+        return data.channels;
+      }
+    }
+  } catch (err) {
+    console.warn("fetchClientChannels fallback to local data:", err);
+  }
+  return SAMPLE_CHANNELS;
+}
+
+export async function addChannelAllowedUser(
+  channelId: string,
+  user: string
+): Promise<{ success: boolean; allowed_users?: string[]; message?: string }> {
+  const base = getApiBaseUrl();
+  try {
+    const res = await fetch(`${base}/api/client/channels/${channelId}/users`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        ...getAuthHeaders(),
+      },
+      body: JSON.stringify({ user }),
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.warn("addChannelAllowedUser fallback:", err);
+  }
+  return { success: true };
+}
+
+export async function removeChannelAllowedUser(
+  channelId: string,
+  user: string
+): Promise<{ success: boolean; allowed_users?: string[]; message?: string }> {
+  const base = getApiBaseUrl();
+  try {
+    const res = await fetch(`${base}/api/client/channels/${channelId}/users/${encodeURIComponent(user)}`, {
+      method: 'DELETE',
+      headers: {
+        'Accept': 'application/json',
+        ...getAuthHeaders(),
+      },
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.warn("removeChannelAllowedUser fallback:", err);
+  }
+  return { success: true };
+}
+

@@ -372,3 +372,119 @@ def test_client_auth_login_cross_tenant_rejection(monkeypatch):
     assert "financia-solutions" not in res.json()["detail"]
 
 
+def test_client_agents_filtering_only_enabled_agents(monkeypatch):
+    """Vérifie que seuls les agents activés pour le client sont renvoyés."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from hermes_cli.web_routers.client_ui import router
+
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", "test-jwt-secret")
+    monkeypatch.delenv("ORSO_CLIENT_ID", raising=False)
+    monkeypatch.delenv("ORSO_CLIENT_SLUG", raising=False)
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    # 1. Financia Solutions : seul Jérôme est activé
+    token_financia = _make_test_jwt(tenant_id="f3e25379-6531-479e-b276-3b3185e7421b", tenant_slug="financia-solutions", agents=["jerome"])
+    res = client.get("/api/client/agents", headers={"Authorization": f"Bearer {token_financia}"})
+    assert res.status_code == 200
+    agents = res.json()["agents"]
+    assert len(agents) == 1
+    assert agents[0]["id"] == "jerome"
+    assert agents[0]["name"] == "Jérôme"
+    assert "themeColor" in agents[0]
+    assert "quickActions" in agents[0]
+
+    # 2. CommerciaLink : seul Lucas est activé
+    token_comm = _make_test_jwt(tenant_id="9a38ef87-19d2-45e3-9821-2efbb91081a9", tenant_slug="commercialink", agents=["lucas"])
+    res_comm = client.get("/api/client/agents", headers={"Authorization": f"Bearer {token_comm}"})
+    assert res_comm.status_code == 200
+    agents_comm = res_comm.json()["agents"]
+    assert len(agents_comm) == 1
+    assert agents_comm[0]["id"] == "lucas"
+
+    # 3. EuroTech : 4 agents activés
+    token_euro = _make_test_jwt(tenant_id="e88d1234-9abc-4def-0123-456789abcdef", tenant_slug="eurotech-conseil", agents=["jerome", "lucas", "clara", "victor"])
+    res_euro = client.get("/api/client/agents", headers={"Authorization": f"Bearer {token_euro}"})
+    assert res_euro.status_code == 200
+    agents_euro = res_euro.json()["agents"]
+    assert len(agents_euro) == 4
+    euro_ids = [a["id"] for a in agents_euro]
+    assert set(euro_ids) == {"jerome", "lucas", "clara", "victor"}
+
+
+def test_client_integrations_endpoint_and_sync(monkeypatch):
+    """Vérifie la lecture des interfaces connectées et la resynchronisation en base."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from hermes_cli.web_routers.client_ui import router
+
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", "test-jwt-secret")
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    token = _make_test_jwt(tenant_id="f3e25379-6531-479e-b276-3b3185e7421b", tenant_slug="financia-solutions")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 1. Lecture de la liste des intégrations
+    res = client.get("/api/client/integrations", headers=headers)
+    assert res.status_code == 200
+    integrations = res.json()["integrations"]
+    assert len(integrations) >= 5
+    ids = [i["id"] for i in integrations]
+    assert "pennylane" in ids
+    assert "pappers" in ids
+
+    # 2. Resynchronisation d'une interface
+    res_sync = client.post("/api/client/integrations/pennylane/sync", headers=headers)
+    assert res_sync.status_code == 200
+    data_sync = res_sync.json()
+    assert data_sync["success"] is True
+    assert data_sync["integration"]["lastSync"] == "À l'instant"
+    assert data_sync["integration"]["status"] == "connected"
+
+
+def test_client_channels_endpoint_and_user_management(monkeypatch):
+    """Vérifie la lecture des canaux et l'ajout/suppression d'utilisateurs autorisés."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from hermes_cli.web_routers.client_ui import router
+
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", "test-jwt-secret")
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    token = _make_test_jwt(tenant_id="f3e25379-6531-479e-b276-3b3185e7421b", tenant_slug="financia-solutions")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 1. Lecture des canaux
+    res = client.get("/api/client/channels", headers=headers)
+    assert res.status_code == 200
+    channels = res.json()["channels"]
+    channel_ids = [c["id"] for c in channels]
+    assert "whatsapp" in channel_ids
+    assert "telegram" in channel_ids
+    assert "email" in channel_ids
+
+    # 2. Ajout d'un utilisateur sur WhatsApp
+    res_add = client.post(
+        "/api/client/channels/whatsapp/users",
+        headers=headers,
+        json={"user": "+33699887766"},
+    )
+    assert res_add.status_code == 200
+    assert "+33699887766" in res_add.json()["allowed_users"]
+
+    # 3. Suppression de l'utilisateur
+    res_del = client.delete(
+        "/api/client/channels/whatsapp/users/+33699887766",
+        headers=headers,
+    )
+    assert res_del.status_code == 200
+    assert "+33699887766" not in res_del.json()["allowed_users"]
+
+
+

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { AgentId } from '@/types';
+import { Agent, AgentId } from '@/types';
 import { AgentSelector } from '@/components/AgentSelector';
 import { ChatView } from '@/pages/ChatView';
 import { IntegrationsView } from '@/pages/IntegrationsView';
@@ -13,6 +13,7 @@ import {
   setClientToken,
   getStoredUser,
   wakeTenantEnvironment,
+  fetchClientAgents,
 } from '@/lib/api';
 import {
   MessageSquare,
@@ -32,6 +33,7 @@ type Tab = 'chat' | 'integrations' | 'channels';
 export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<Tab>('chat');
   const [activeAgentId, setActiveAgentId] = useState<AgentId>('jerome');
+  const [availableAgents, setAvailableAgents] = useState<Agent[]>([]);
   const [companyName, setCompanyName] = useState<string>('');
   const [userName, setUserName] = useState<string>('');
   const [userRole, setUserRole] = useState<string>('');
@@ -49,6 +51,23 @@ export const App: React.FC = () => {
   const [loginPassword, setLoginPassword] = useState<string>('TempOrso2026!Financia');
   const [showLoginModal, setShowLoginModal] = useState<boolean>(false);
 
+  // Chargement dynamique des agents activés pour le tenant courant
+  const refreshAgents = async (preferredAgentId?: AgentId) => {
+    try {
+      const agents = await fetchClientAgents();
+      if (agents && agents.length > 0) {
+        setAvailableAgents(agents);
+        setActiveAgentId((prev) => {
+          const candidate = preferredAgentId || prev;
+          const found = agents.some((a) => a.id === candidate);
+          return found ? candidate : agents[0].id;
+        });
+      }
+    } catch (err) {
+      console.warn('Erreur chargement agents client:', err);
+    }
+  };
+
   // Synchronisation de la session au démarrage
   useEffect(() => {
     checkBackendHealth().then(setBackendStatus);
@@ -63,6 +82,21 @@ export const App: React.FC = () => {
       window.history.replaceState({}, document.title, cleanUrl);
     }
 
+    // Paramètre initial d'agent demandé dans l'URL
+    let initialAgentParam: AgentId | undefined = undefined;
+    const agentParam = params.get('agent')?.toLowerCase();
+    if (agentParam) {
+      if (agentParam === 'recouvrement' || agentParam === 'jerome') {
+        initialAgentParam = 'jerome';
+      } else if (agentParam === 'commercial' || agentParam === 'lucas') {
+        initialAgentParam = 'lucas';
+      } else if (agentParam === 'support' || agentParam === 'service client' || agentParam === 'clara') {
+        initialAgentParam = 'clara';
+      } else if (agentParam === 'ao' || agentParam === "appel d'offres" || agentParam === 'victor') {
+        initialAgentParam = 'victor';
+      }
+    }
+
     // 2. Vérification de la session auprès du backend
     checkSessionMe().then((res) => {
       if (res.authenticated && res.user) {
@@ -70,6 +104,7 @@ export const App: React.FC = () => {
         setCompanyName(res.tenant?.name || res.tenant?.tenant_slug?.replace('-', ' ').toUpperCase() || 'Financia Solutions');
         setUserName(res.user?.full_name || res.user?.email || 'Sophie Martin');
         setUserRole(res.user?.role || 'DAF');
+        refreshAgents(initialAgentParam);
       } else {
         const stored = getStoredUser();
         if (stored && getClientToken()) {
@@ -77,27 +112,15 @@ export const App: React.FC = () => {
           setCompanyName(stored.tenant?.name || 'Financia Solutions');
           setUserName(stored.full_name || 'Sophie Martin');
           setUserRole(stored.role || 'DAF');
+          refreshAgents(initialAgentParam);
         } else {
           setIsAuthenticated(false);
           setShowLoginModal(true);
+          refreshAgents(initialAgentParam);
         }
       }
       setAuthLoading(false);
     });
-
-    // 3. Lecture des paramètres de sélection d'agent
-    const agentParam = params.get('agent')?.toLowerCase();
-    if (agentParam) {
-      if (agentParam === 'recouvrement' || agentParam === 'jerome') {
-        setActiveAgentId('jerome');
-      } else if (agentParam === 'commercial' || agentParam === 'lucas') {
-        setActiveAgentId('lucas');
-      } else if (agentParam === 'support' || agentParam === 'service client' || agentParam === 'clara') {
-        setActiveAgentId('clara');
-      } else if (agentParam === 'ao' || agentParam === "appel d'offres" || agentParam === 'victor') {
-        setActiveAgentId('victor');
-      }
-    }
   }, []);
 
   const handleLogin = async (e?: React.FormEvent, customEmail?: string, customPass?: string) => {
@@ -134,6 +157,7 @@ export const App: React.FC = () => {
       setUserName(res.user?.full_name || res.user?.email || 'Sophie Martin');
       setUserRole(res.user?.role || 'DAF');
       checkBackendHealth().then(setBackendStatus);
+      await refreshAgents();
     } else {
       setAuthLoading(false);
       setAuthError(res.error || 'Identifiants invalides.');
@@ -146,6 +170,7 @@ export const App: React.FC = () => {
     setCompanyName('');
     setUserName('');
     setUserRole('');
+    setAvailableAgents([]);
     setShowLoginModal(true);
   };
 
@@ -288,6 +313,7 @@ export const App: React.FC = () => {
             <AgentSelector
               activeAgentId={activeAgentId}
               onSelectAgent={(id) => setActiveAgentId(id)}
+              agents={availableAgents}
             />
           </div>
 
@@ -301,7 +327,12 @@ export const App: React.FC = () => {
 
       {/* Main Content Area */}
       <main className="flex-1 overflow-hidden flex flex-col">
-        {currentTab === 'chat' && <ChatView activeAgentId={activeAgentId} />}
+        {currentTab === 'chat' && (
+          <ChatView
+            activeAgentId={activeAgentId}
+            availableAgents={availableAgents}
+          />
+        )}
         {currentTab === 'integrations' && <IntegrationsView />}
         {currentTab === 'channels' && <ChannelsView />}
       </main>

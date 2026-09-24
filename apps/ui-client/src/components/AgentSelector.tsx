@@ -5,15 +5,19 @@ import { ORSO_AGENTS } from '@/lib/data';
 interface AgentSelectorProps {
   activeAgentId: AgentId;
   onSelectAgent: (agentId: AgentId) => void;
+  agents?: Agent[];
 }
 
 export const AgentSelector: React.FC<AgentSelectorProps> = ({
   activeAgentId,
   onSelectAgent,
+  agents,
 }) => {
+  const displayAgents = agents && agents.length > 0 ? agents : ORSO_AGENTS;
+
   return (
     <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
-      {ORSO_AGENTS.map((agent: Agent) => {
+      {displayAgents.map((agent: Agent) => {
         const isActive = agent.id === activeAgentId;
         return (
           <button

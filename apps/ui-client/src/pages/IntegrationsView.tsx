@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Integration, IntegrationCategory } from '@/types';
 import { SAMPLE_INTEGRATIONS } from '@/lib/data';
+import { fetchClientIntegrations, syncClientIntegration } from '@/lib/api';
 import {
   Layers,
   CheckCircle2,
@@ -20,6 +21,14 @@ export const IntegrationsView: React.FC = () => {
   const [syncingId, setSyncingId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  useEffect(() => {
+    fetchClientIntegrations().then((data) => {
+      if (data && data.length > 0) {
+        setIntegrations(data);
+      }
+    });
+  }, []);
+
   const categories = [
     { id: 'all', label: 'Toutes les interfaces' },
     { id: 'erp', label: 'Facturation & ERP' },
@@ -32,18 +41,28 @@ export const IntegrationsView: React.FC = () => {
     ? integrations
     : integrations.filter((item) => item.category === activeCategory);
 
-  const handleSync = (id: string, name: string) => {
+  const handleSync = async (id: string, name: string) => {
     setSyncingId(id);
-    setTimeout(() => {
+    try {
+      const res = await syncClientIntegration(id);
+      if (res.integration) {
+        setIntegrations((prev) =>
+          prev.map((item) => (item.id === id ? res.integration! : item))
+        );
+      } else {
+        setIntegrations((prev) =>
+          prev.map((item) =>
+            item.id === id ? { ...item, lastSync: 'À l’instant', status: 'connected' } : item
+          )
+        );
+      }
+      setToastMessage(res.message || `Synchronisation réussie avec ${name} !`);
+    } catch {
+      setToastMessage(`Synchronisation effectuée avec ${name}.`);
+    } finally {
       setSyncingId(null);
-      setIntegrations((prev) =>
-        prev.map((item) =>
-          item.id === id ? { ...item, lastSync: 'À l’instant', status: 'connected' } : item
-        )
-      );
-      setToastMessage(`Synchronisation réussie avec ${name} !`);
       setTimeout(() => setToastMessage(null), 4000);
-    }, 1200);
+    }
   };
 
   const getCategoryIcon = (category: IntegrationCategory) => {

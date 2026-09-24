@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { AgentId, ChatMessage, ActionCardData } from '@/types';
+import { Agent, AgentId, ChatMessage, ActionCardData } from '@/types';
 import { ORSO_AGENTS } from '@/lib/data';
 import { sendUserPrompt, checkBackendHealth } from '@/lib/api';
 import { ActionCard } from '@/components/ActionCard';
@@ -12,10 +12,12 @@ import {
 
 interface ChatViewProps {
   activeAgentId: AgentId;
+  availableAgents?: Agent[];
 }
 
-export const ChatView: React.FC<ChatViewProps> = ({ activeAgentId }) => {
-  const currentAgent = ORSO_AGENTS.find((a) => a.id === activeAgentId) || ORSO_AGENTS[0];
+export const ChatView: React.FC<ChatViewProps> = ({ activeAgentId, availableAgents }) => {
+  const agentsList = availableAgents && availableAgents.length > 0 ? availableAgents : ORSO_AGENTS;
+  const currentAgent = agentsList.find((a) => a.id === activeAgentId) || agentsList[0] || ORSO_AGENTS[0];
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
