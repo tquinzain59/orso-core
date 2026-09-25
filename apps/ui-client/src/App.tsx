@@ -19,7 +19,7 @@ import {
   MessageSquare,
   Layers,
   Smartphone,
-  ArrowLeft,
+  Globe,
   Lock,
   LogOut,
   ShieldCheck,
@@ -171,6 +171,7 @@ export const App: React.FC = () => {
     setUserName('');
     setUserRole('');
     setAvailableAgents([]);
+    setActiveAgentId('jerome');
     setShowLoginModal(true);
   };
 
@@ -291,14 +292,16 @@ export const App: React.FC = () => {
             </span>
           </div>
 
-          {/* Bouton Retour Espace Client */}
+          {/* Lien Site Vitrine */}
           <a
-            href="https://www.orso-agents.fr/client.html"
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white text-xs font-semibold shadow-md shadow-blue-900/30 transition-all active:scale-95"
-            title="Retour à mon tableau de bord client"
+            href="https://www.orso-agents.fr"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-850/80 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-slate-200 text-xs font-medium transition-all"
+            title="Consulter le site officiel orso-agents.fr"
           >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Espace Client</span>
+            <Globe className="w-3.5 h-3.5 text-blue-400" />
+            <span className="hidden sm:inline">Site Vitrine</span>
           </a>
         </div>
       </header>
