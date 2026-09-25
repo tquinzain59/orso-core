@@ -100,3 +100,45 @@ export TELEGRAM_BOT_TOKEN="votre_token_telegram_ici"
 ```
 
 Le filtre **Tirith** inspecte automatiquement tous les scripts dans `skills/` avant exécution, et la fonctionnalité **Secret Redaction** masque automatiquement les tokens et clés privées dans les logs de l'agent.
+
+---
+
+## 5. Configuration des Connecteurs Métiers (Interfaces & ERP)
+
+L'onglet **Interfaces & ERP** de l'UI Client (`/api/client/integrations`) sonde dynamiquement les variables d'environnement et la configuration Hermès pour refléter en direct l'état opérationnel des connecteurs :
+
+### Variables d'environnement pour ERP & Données Métiers (`.env`)
+```bash
+# Facturation & ERP
+PENNYLANE_API_KEY="votre_cle_api_pennylane"
+SELLSY_TOKEN="votre_jeton_sellsy"
+ODOO_URL="https://votre-instance.odoo.com"
+ODOO_DB="votre_base"
+ODOO_USERNAME="agent@entreprise.com"
+ODOO_PASSWORD="votre_mot_de_passe_ou_api_key"
+
+# CRM & Collaboration
+AIRTABLE_API_KEY="pat..."
+ATLASSIAN_DOMAIN="votre-domaine"
+JIRA_API_TOKEN="votre_token_jira"
+
+# Données Légales & Solvabilité
+PAPPERS_API_KEY="votre_cle_pappers"
+# Note : BODACC / DILA fonctionne en Open Data direct ou via la compétence 'consulter-bodacc-creditsafe'
+
+# Messageries & Bureautique
+GOOGLE_WORKSPACE_CREDENTIALS='{"client_id": "...", ...}'
+MICROSOFT_365_TOKEN="votre_token_graph_api"
+```
+
+### Serveurs MCP & Outils dans `config/hermes.yaml`
+Pour activer des serveurs MCP personnalisés ou des outils avancés :
+```yaml
+mcp_servers:
+  mon_erp_custom:
+    command: npx
+    args: ["-y", "@company/mcp-erp-server"]
+    env:
+      ERP_SECRET: "..."
+```
+Dès qu'une clé est injectée dans le conteneur ou que le serveur MCP est déclaré, l'interface client passe automatiquement le connecteur au statut **Connecté (Backoffice)** (🟢).
