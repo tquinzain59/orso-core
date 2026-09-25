@@ -142,3 +142,38 @@ mcp_servers:
       ERP_SECRET: "..."
 ```
 Dès qu'une clé est injectée dans le conteneur ou que le serveur MCP est déclaré, l'interface client passe automatiquement le connecteur au statut **Connecté (Backoffice)** (🟢).
+
+---
+
+## 6. Configuration des Canaux de Communication (Messageries & Omnicanal - KAN-32)
+
+L'onglet **Canaux** de l'UI Client (`/api/client/channels`) sonde en temps réel la configuration des passerelles externes du conteneur Hermès.
+
+### Variables d'environnement des Canaux (`.env`)
+```bash
+# 1. Telegram Bot
+TELEGRAM_BOT_TOKEN="123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ"
+
+# 2. WhatsApp Business Cloud API
+WHATSAPP_TOKEN="EAA..."
+WHATSAPP_PHONE_NUMBER_ID="1080843988243985"
+
+# 3. Email (SMTP standard ou Resend API)
+# Option A : SMTP
+SMTP_HOST="smtp.monentreprise.fr"
+SMTP_PORT="587"
+SMTP_USER="relances@monentreprise.fr"
+SMTP_PASSWORD="mot_de_passe_securise"
+SMTP_FROM="Jérôme - Credit Manager <relances@monentreprise.fr>"
+
+# Option B : Resend
+RESEND_API_KEY="re_..."
+
+# 4. Collaboration d'Équipe (Slack & Discord)
+SLACK_BOT_TOKEN="xoxb-..."
+DISCORD_BOT_TOKEN="MTE..."
+```
+
+### Contrôle d'Accès et Filtrage d'Identifiants (`allowedUsers`)
+Pour sécuriser les canaux interactifs (Telegram, Slack, WhatsApp), l'agent n'autorise que les identifiants déclarés dans sa liste blanche. Cette liste peut être gérée directement depuis l'UI Client dans la modale du canal, et persistée dans l'instance du client.
+

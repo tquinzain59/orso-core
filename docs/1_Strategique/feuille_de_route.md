@@ -52,18 +52,44 @@ Ce document présente l'historique exhaustif des jalons de développement franch
   * Déploiement conteneurisé Docker (`docker-compose.yml`) et configuration Vercel SPA (`vercel.json`).
   * Dépôt GitHub : `https://github.com/tquinzain59/App_Hermes-core.git`.
 
+### 📌 Jalon 7 : Architecture IAM Supabase Auth & Ingress Multi-Tenant (2026-09-16 - 2026-09-20)
+* **Description** : Refonte de la sécurité avec fournisseur d'identité souverain (Supabase Auth - KAN-26), guard JWT cryptographique sur le backend (`orso-core` - KAN-27), et routage ingress dynamique Nginx sans rechargement sous URL unique `app.orso-agents.fr` (KAN-28).
+* **Livrables** :
+  * Schéma PostgreSQL Supabase (`tenants`, `profiles`, `tenant_instances` avec RLS étanche).
+  * Reverse proxy Ingress résolvant à chaud les conteneurs clients (`127.0.0.11`) avec support complet SSE/WebSockets.
+  * Superviseur Olympe (port 9230) avec cycle de vie *Wake-on-Demand* et mise en veille *Scale-to-Zero*.
+
+### 📌 Jalon 8 : Cockpit Orso Ops & IAM Superadmin (2026-09-21 - 2026-09-23)
+* **Description** : Console d'exploitation et d'administration commerciale déployée en direct sur `https://ops.orso-agents.fr` (KAN-30).
+* **Livrables** :
+  * Interface React 19 / Tailwind 4 (`apps/ui-ops`) avec authentification IAM Superadmin Supabase (`olympe/auth.py`).
+  * Résolution automatique des emails réels des clients via l'API Admin Supabase.
+  * Grille tarifaire (Starter 99 € HT, Duo 169 € HT, Flotte Complète 279 € HT), réconciliation Stripe Billing et feature toggling des 4 agents avec périodes d'essai à chaud.
+
+### 📌 Jalon 9 : Raccordement dynamique des Interfaces & ERP au Backoffice Hermès (2026-09-25)
+* **Description** : Suppression totale des données factices de l'onglet *Interfaces & ERP* de l'UI Client et sondage en temps réel du conteneur Hermès (KAN-31).
+* **Livrables** :
+  * Routeur de détection `_probe_hermes_backoffice_integrations` dans `hermes_cli/web_routers/client_ui.py` (Pennylane, Sellsy, Odoo, Airtable, Jira, Supabase, Pappers, BODACC Open Data, outils natifs Playwright/Web, serveurs MCP).
+  * Statuts réels (Connecté, En attente/Libre, Non configuré) et modale de synchronisation / test en direct.
+  * Déploiement en production sur `prod-fr-002.orso-agents.fr` et publication Confluence Page 3964930.
+
+### 📌 Jalon 10 : Raccordement dynamique des Canaux de Messagerie & Omnicanal (2026-09-25)
+* **Description** : Raccordement transparent de l'onglet *Canaux* au backoffice Hermès Gateway et purge des métriques simulées (KAN-32).
+* **Livrables** :
+  * Routeur de détection `_probe_hermes_backoffice_channels` sondant les variables réelles (`TELEGRAM_BOT_TOKEN`, `WHATSAPP_TOKEN`, `SMTP_HOST`/`RESEND_API_KEY`, `SLACK_BOT_TOKEN`, `DISCORD_BOT_TOKEN`).
+  * Modale guidée d'activation étape par étape (@BotFather, Cloud API, SMTP) avec bouton de vérification de liaison.
+  * Badge d'état de la passerelle Hermès Gateway et contrôle d'accès persistant par listes blanches (`allowedUsers`).
+  * Déploiement en direct sur `prod-fr-002.orso-agents.fr`, test automatisé de non-régression et publication Confluence Page 3997698.
+
 ---
 
 ## 2. Jalons Futurs (Roadmap Court & Moyen Terme)
 
-### 🚀 Jalon 7 : Industrialisation Multi-Conteneurs de la Flotte
-* Déploiement des 3 conteneurs d'agents additionnels : `hermes_commercial_agent` (port 9231), `hermes_support_agent` (port 9232), `hermes_ao_agent` (port 9233).
-* Orchestration unifiée via Docker Compose interconnectant les agents au superviseur `olympe-core` (port 9230).
-
-### 🚀 Jalon 8 : Synchronisation Bidirectionnelle ERP (Writeback)
+### 🚀 Jalon 11 : Synchronisation Bidirectionnelle ERP (Writeback)
 * Lettrage comptable automatique dans les ERP (Pennylane, Sellsy, Odoo) dès confirmation d'un règlement.
 * Génération automatique d'avoirs/notes de crédit après accord du gestionnaire.
 
-### 🚀 Jalon 9 : Paiement Immédiat & Recouvrement par LRAR
+### 🚀 Jalon 12 : Paiement Immédiat & Recouvrement par LRAR
 * Intégration d'un module de paiement par carte bancaire (Stripe / Payplug) directement dans les liens de relance WhatsApp/Chat.
 * Envoi automatisé de Lettres Recommandées Électroniques (LRE) avec valeur légale (via API AR24 / Maileva) lors du passage en contentieux.
+
