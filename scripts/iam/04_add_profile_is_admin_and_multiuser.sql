@@ -46,7 +46,9 @@ BEGIN
       'agents', COALESCE(user_tenant.agents_enabled, '["jerome"]'::jsonb)
     ));
     -- Injection directe au premier niveau de app_metadata pour compatibilité
-    claims := jsonb_set(claims, '{app_metadata,is_admin}', to_jsonb(COALESCE(user_tenant.is_admin, FALSE)));
+    IF claims ? 'app_metadata' THEN
+      claims := jsonb_set(claims, '{app_metadata,is_admin}', to_jsonb(COALESCE(user_tenant.is_admin, FALSE)));
+    END IF;
   END IF;
 
   event := jsonb_set(event, '{claims}', claims);
