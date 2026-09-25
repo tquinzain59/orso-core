@@ -163,7 +163,7 @@ def test_api_olympe_wake_not_found(api_client):
     with patch("olympe.server.manager.wake_tenant", return_value={"success": False, "status": "not_found"}):
         resp = api_client.post("/api/olympe/tenants/wake/client-inexistant")
         assert resp.status_code == 404
-        assert "n'a pas été trouvé" in resp.json()["detail"]
+        assert "Client introuvable" in resp.json()["detail"]
 
 
 def test_api_olympe_wake_success(api_client):

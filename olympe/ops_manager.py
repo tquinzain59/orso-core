@@ -17,7 +17,8 @@ _log = logging.getLogger("orso.olympe.ops")
 
 # Grille tarifaire officielle Orso Agents (prix mensuels HT)
 TIER_PRICING = {
-    "1_agent": {"price_ht": 99.00, "max_agents": 1, "label": "Starter (1 agent)"},
+    "none": {"price_ht": 0.00, "max_agents": 0, "label": "Aucun abonnement"},
+    "1_agent": {"price_ht": 0.00, "max_agents": 1, "label": "Starter (1 agent)"},
     "2_agents": {"price_ht": 169.00, "max_agents": 2, "label": "Duo (2 agents)"},
     "4_agents": {"price_ht": 279.00, "max_agents": 4, "label": "Flotte Complète (4 agents)"},
     "custom": {"price_ht": 0.00, "max_agents": 4, "label": "Sur mesure"},
@@ -164,7 +165,7 @@ class OpsManager:
                 "siret": "78451236900021",
                 "slug": "commercialink",
                 "sector": "Distribution B2B",
-                "status": "active",
+                "status": "none",
                 "created_at": "2026-09-05T14:15:00Z",
                 "contact": {
                     "full_name": "Claire Dubois",
@@ -193,21 +194,21 @@ class OpsManager:
                     },
                 ],
                 "instance": {
-                    "container_name": "orso_client_commercialink",
-                    "internal_route_key": "orso_client_commercialink",
-                    "status": "ready",
-                    "environment_status": "active",
+                    "container_name": None,
+                    "internal_route_key": None,
+                    "status": "not_provisioned",
+                    "environment_status": "inactive",
                 },
                 "agents_enabled": {
-                    "active": ["jerome", "lucas"],
+                    "active": [],
                     "trials": {},
                 },
                 "subscription": {
                     "id": "sub_commercialink_002",
-                    "tier_id": "2_agents",
-                    "tier_label": "Duo (2 agents)",
-                    "price_ht": 169.00,
-                    "status": "active",
+                    "tier_id": "none",
+                    "tier_label": "Aucun abonnement",
+                    "price_ht": 0.00,
+                    "status": "none",
                     "current_period_start": "2026-09-05T00:00:00Z",
                     "current_period_end": "2026-10-05T00:00:00Z",
                     "stripe_customer_id": "cus_comm_3211",
@@ -261,13 +262,13 @@ class OpsManager:
                     },
                 ],
                 "instance": {
-                    "container_name": "orso_client_batipro_services",
-                    "internal_route_key": "orso_client_batipro_services",
-                    "status": "ready",
-                    "environment_status": "active",
+                    "container_name": None,
+                    "internal_route_key": None,
+                    "status": "not_provisioned",
+                    "environment_status": "inactive",
                 },
                 "agents_enabled": {
-                    "active": ["jerome", "victor"],
+                    "active": [],
                     "trials": {
                         "jerome": {
                             "is_trial": True,
@@ -285,10 +286,10 @@ class OpsManager:
                 },
                 "subscription": {
                     "id": "sub_trial_batipro",
-                    "tier_id": "2_agents",
-                    "tier_label": "Duo (Essai 14 jours)",
+                    "tier_id": "none",
+                    "tier_label": "Aucun abonnement",
                     "price_ht": 0.00,
-                    "status": "trialing",
+                    "status": "none",
                     "current_period_start": "2026-09-18T00:00:00Z",
                     "current_period_end": "2026-10-02T23:59:59Z",
                     "stripe_customer_id": "cus_batipro_pending",
@@ -303,7 +304,7 @@ class OpsManager:
                 "siret": "55566677700044",
                 "slug": "hexatech",
                 "sector": "Édition Logicielle SaaS",
-                "status": "active",
+                "status": "none",
                 "created_at": "2026-09-10T11:00:00Z",
                 "contact": {
                     "full_name": "Marc Vasseur",
@@ -341,21 +342,21 @@ class OpsManager:
                     },
                 ],
                 "instance": {
-                    "container_name": "orso_client_hexatech",
-                    "internal_route_key": "orso_client_hexatech",
-                    "status": "ready",
-                    "environment_status": "active",
+                    "container_name": None,
+                    "internal_route_key": None,
+                    "status": "not_provisioned",
+                    "environment_status": "inactive",
                 },
                 "agents_enabled": {
-                    "active": ["jerome", "lucas", "clara", "victor"],
+                    "active": [],
                     "trials": {},
                 },
                 "subscription": {
                     "id": "sub_hexatech_full",
-                    "tier_id": "4_agents",
-                    "tier_label": "Flotte Complète (4 agents)",
-                    "price_ht": 279.00,
-                    "status": "active",
+                    "tier_id": "none",
+                    "tier_label": "Aucun abonnement",
+                    "price_ht": 0.00,
+                    "status": "none",
                     "current_period_start": "2026-09-10T00:00:00Z",
                     "current_period_end": "2026-10-10T00:00:00Z",
                     "stripe_customer_id": "cus_hexa_555",
@@ -471,16 +472,16 @@ class OpsManager:
                 instances = t.get("tenant_instances", [])
                 instance_info = instances[0] if instances else {}
 
-                agents_data = instance_info.get("agents_enabled") or cached.get("agents_enabled", {"active": ["jerome"], "trials": {}})
+                agents_data = instance_info.get("agents_enabled") or cached.get("agents_enabled", {"active": [], "trials": {}})
                 if isinstance(agents_data, list):
                     agents_data = {"active": agents_data, "trials": {}}
 
                 sub = cached.get("subscription") or {
                     "id": f"sub_{t.get('slug')}",
-                    "tier_id": "1_agent",
-                    "tier_label": "Starter (1 agent)",
-                    "price_ht": 99.00,
-                    "status": "active",
+                    "tier_id": "none",
+                    "tier_label": "Aucun abonnement",
+                    "price_ht": 0.00,
+                    "status": "none",
                     "current_period_start": t.get("created_at"),
                     "current_period_end": t.get("created_at"),
                 }
@@ -504,7 +505,7 @@ class OpsManager:
                     "users": user_list,
                     "instance": {
                         "container_name": instance_info.get("docker_container_name") or f"orso_client_{t.get('slug')}",
-                        "status": instance_info.get("status", "ready"),
+                        "status": instance_info.get("status", "not_provisioned"),
                     },
                     "agents_enabled": agents_data,
                     "subscription": sub,
@@ -679,6 +680,24 @@ class OpsManager:
 
         Met à jour public.tenant_instances dans Supabase de façon atomique.
         """
+        # VERROU 1 & 2 : Validation d'abonnement et de quota
+        tenant = self.get_tenant_detail(tenant_id)
+        if not tenant:
+            raise ValueError("Client introuvable.")
+        
+        sub = tenant.get("subscription", {})
+        sub_status = sub.get("status", "none")
+        tier_id = sub.get("tier_id", "none")
+        
+        if sub_status not in ["active", "trialing"] and len(active_agents) > 0:
+            raise ValueError("Impossible d'activer des agents sans abonnement actif.")
+            
+        pricing = TIER_PRICING.get(tier_id, TIER_PRICING["custom"])
+        max_agents = pricing.get("max_agents", 0)
+        
+        if len(active_agents) > max_agents and tier_id != "custom":
+            raise ValueError(f"Quota dépassé : le forfait {pricing.get('label')} n'autorise que {max_agents} agent(s).")
+            
         clean_active = [a for a in active_agents if a in ["jerome", "lucas", "clara", "victor"]]
         clean_trials = trials_config or {}
 
@@ -733,6 +752,24 @@ class OpsManager:
             sub["price_ht"] = pricing["price_ht"]
             sub["status"] = status
             sub["updated_at"] = _format_timestamp()
+            
+            # VERROU 3 : Purge des agents et instance en cas de résiliation / downgrade
+            max_agents = pricing.get("max_agents", 0)
+            current_agents = self._mock_tenants[tenant_id].get("agents_enabled", {}).get("active", [])
+            
+            if status in ["none", "inactive", "canceled"] or tier_id == "none":
+                self._mock_tenants[tenant_id]["agents_enabled"]["active"] = []
+                self._mock_tenants[tenant_id]["instance"]["status"] = "not_provisioned"
+                self._mock_tenants[tenant_id]["instance"]["environment_status"] = "inactive"
+                if self.supabase_url and self.supabase_key:
+                    self._query_supabase(f"tenant_instances?tenant_id=eq.{tenant_id}", method="PATCH", payload={"agents_enabled": [], "status": "not_provisioned", "environment_status": "inactive"})
+            elif len(current_agents) > max_agents and tier_id != "custom":
+                # Downgrade: troncature automatique
+                new_agents = current_agents[:max_agents]
+                self._mock_tenants[tenant_id]["agents_enabled"]["active"] = new_agents
+                if self.supabase_url and self.supabase_key:
+                    self._query_supabase(f"tenant_instances?tenant_id=eq.{tenant_id}", method="PATCH", payload={"agents_enabled": new_agents})
+
 
         return {
             "success": True,

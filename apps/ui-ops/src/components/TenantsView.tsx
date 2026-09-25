@@ -123,6 +123,8 @@ export const TenantsView: React.FC<TenantsViewProps> = ({
                 filteredTenants.map((t) => {
                   const hasTrials = Object.keys(t.agents_enabled.trials).length > 0;
                   const isContainerReady = t.instance?.status === "ready";
+                  const isNotProvisioned = t.instance?.status === "not_provisioned" || !t.instance?.status;
+                  const hasNoSubscription = t.subscription.status === "none" || t.subscription.status === "inactive" || t.subscription.tier_id === "none";
 
                   return (
                     <tr key={t.id} className="hover:bg-slate-800/40 transition-colors">
@@ -157,10 +159,16 @@ export const TenantsView: React.FC<TenantsViewProps> = ({
 
                       {/* Statut Commercial */}
                       <td className="py-4 px-4">
-                        {t.status === "active" && !hasTrials && (
+                        {t.status === "active" && !hasTrials && !hasNoSubscription && (
                           <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                             <CheckCircle2 className="w-3.5 h-3.5" />
                             <span>Client Actif</span>
+                          </span>
+                        )}
+                        {hasNoSubscription && (
+                          <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-500/10 text-slate-400 border border-slate-500/20">
+                            <AlertTriangle className="w-3.5 h-3.5" />
+                            <span>Sans abonnement</span>
                           </span>
                         )}
                         {hasTrials && (
@@ -180,7 +188,7 @@ export const TenantsView: React.FC<TenantsViewProps> = ({
                       {/* Forfait */}
                       <td className="py-4 px-4">
                         <div className="font-bold text-white text-sm">
-                          {t.subscription.price_ht > 0 ? `${t.subscription.price_ht} € HT/m` : "Gratuit (Essai)"}
+                          {hasNoSubscription ? "0 € HT/m" : (t.subscription.price_ht > 0 ? `${t.subscription.price_ht} € HT/m` : "Gratuit (Essai)")}
                         </div>
                         <div className="text-xs text-slate-400">{t.subscription.tier_label}</div>
                       </td>
@@ -188,6 +196,9 @@ export const TenantsView: React.FC<TenantsViewProps> = ({
                       {/* Agents Déployés */}
                       <td className="py-4 px-4">
                         <div className="flex flex-wrap gap-1.5 max-w-xs">
+                          {t.agents_enabled.active.length === 0 && (
+                            <span className="text-xs px-2.5 py-1 rounded-lg border font-medium bg-slate-800 border-slate-700 text-slate-400">Aucun agent activé</span>
+                          )}
                           {t.agents_enabled.active.map((agentId) => {
                             const meta = AGENTS_CATALOG[agentId];
                             const trialInfo = t.agents_enabled.trials[agentId];
@@ -218,34 +229,36 @@ export const TenantsView: React.FC<TenantsViewProps> = ({
                         <div className="flex items-center space-x-2">
                           <span
                             className={`w-2.5 h-2.5 rounded-full ${
-                              isContainerReady ? "bg-emerald-400 animate-pulse" : "bg-slate-600"
+                              isContainerReady ? "bg-emerald-400 animate-pulse" : (isNotProvisioned ? "bg-slate-700" : "bg-amber-400")
                             }`}
                           ></span>
                           <span className="text-xs font-mono font-medium text-slate-300">
-                            {isContainerReady ? "En ligne" : "En veille"}
+                            {isContainerReady ? "En ligne" : (isNotProvisioned ? "Non provisionné" : "En veille")}
                           </span>
                         </div>
-                        <div className="flex space-x-1 mt-1.5">
-                          {!isContainerReady ? (
-                            <button
-                              onClick={() => onWakeContainer(t.slug)}
-                              title="Réveiller le conteneur"
-                              className="px-2 py-0.5 rounded bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 text-[10px] font-bold border border-emerald-500/20 flex items-center space-x-1"
-                            >
-                              <Play className="w-2.5 h-2.5" />
-                              <span>Wake</span>
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => onSuspendContainer(t.slug)}
-                              title="Mettre en veille (Stop)"
-                              className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 text-[10px] font-bold border border-slate-700 flex items-center space-x-1"
-                            >
-                              <Square className="w-2.5 h-2.5" />
-                              <span>Stop</span>
-                            </button>
-                          )}
-                        </div>
+                        {!isNotProvisioned && (
+                          <div className="flex space-x-1 mt-1.5">
+                            {!isContainerReady ? (
+                              <button
+                                onClick={() => onWakeContainer(t.slug)}
+                                title="Réveiller le conteneur"
+                                className="px-2 py-0.5 rounded bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 text-[10px] font-bold border border-emerald-500/20 flex items-center space-x-1"
+                              >
+                                <Play className="w-2.5 h-2.5" />
+                                <span>Wake</span>
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => onSuspendContainer(t.slug)}
+                                title="Mettre en veille (Stop)"
+                                className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 text-[10px] font-bold border border-slate-700 flex items-center space-x-1"
+                              >
+                                <Square className="w-2.5 h-2.5" />
+                                <span>Stop</span>
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </td>
 
                       {/* Bouton Action */}

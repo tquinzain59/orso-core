@@ -101,6 +101,14 @@ async def get_status(tenant_slug: str):
 @app.post("/api/olympe/tenants/wake/{tenant_slug}")
 async def wake_tenant(tenant_slug: str):
     """Réveille un conteneur placé en veille (Wake-on-Demand)."""
+    # VERROU 4 : Interdiction de wake sans abonnement
+    tenant = ops_manager.get_tenant_detail(tenant_slug)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Client introuvable.")
+    sub_status = tenant.get("subscription", {}).get("status", "none")
+    if sub_status not in ["active", "trialing"]:
+        raise HTTPException(status_code=403, detail="Impossible de démarrer le conteneur : ce client n'a aucun abonnement actif.")
+        
     _log.info("Demande de réveil reçue pour : %s", tenant_slug)
     res = manager.wake_tenant(tenant_slug, wait_healthy=True)
     if not res.get("success") and res.get("status") == "not_found":
@@ -203,12 +211,15 @@ async def get_tenant(tenant_id: str, admin: Dict[str, Any] = Depends(require_sup
 @app.post("/api/olympe/ops/tenants/{tenant_id}/agents")
 async def update_agents(tenant_id: str, req: UpdateAgentsRequest, admin: Dict[str, Any] = Depends(require_superadmin)):
     """Active/désactive des agents et paramètre les périodes d'essai pour un client."""
-    res = ops_manager.update_tenant_agents(
-        tenant_id=tenant_id,
-        active_agents=req.active,
-        trials_config=req.trials,
-    )
-    return res
+    try:
+        res = ops_manager.update_tenant_agents(
+            tenant_id=tenant_id,
+            active_agents=req.active,
+            trials_config=req.trials,
+        )
+        return res
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.post("/api/olympe/ops/tenants/{tenant_id}/subscription")

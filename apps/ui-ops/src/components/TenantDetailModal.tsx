@@ -192,7 +192,7 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
 
   // Calcul du forfait suggéré
   const nbActivePaid = activeAgents.filter((a) => !trials[a]).length;
-  let suggestedTierLabel = "Aucun";
+  let suggestedTierLabel = "Aucun abonnement (0 € HT)";
   if (nbActivePaid === 1) {
     suggestedTierLabel = "Starter (1 agent - 99 € HT)";
   } else if (nbActivePaid === 2) {
@@ -200,6 +200,9 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
   } else if (nbActivePaid >= 3) {
     suggestedTierLabel = "Flotte Complète (4 agents - 279 € HT)";
   }
+  
+  const hasNoSubscription = tenant.subscription.status === "none" || tenant.subscription.status === "inactive" || tenant.subscription.tier_id === "none";
+
 
   const isReady = tenant.instance?.status === "ready";
 
@@ -542,16 +545,24 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
 
           {/* Section 2 : Matrice d'Activation des Agents & Périodes d'Essai */}
           <div>
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <h3 className="text-base font-bold text-white">Gestion des Agents Déployés</h3>
-                <p className="text-xs text-slate-400">
-                  Activez ou désactivez les agents en 1-clic. Définissez une période d'essai pour les nouveaux modules.
-                </p>
+            <div className="flex flex-col mb-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-base font-bold text-white">Gestion des Agents Déployés</h3>
+                  <p className="text-xs text-slate-400">
+                    Activez ou désactivez les agents en 1-clic. Définissez une période d'essai pour les nouveaux modules.
+                  </p>
+                </div>
+                <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-800 text-sky-400 border border-slate-700">
+                  {activeAgents.length} agent(s) activé(s)
+                </span>
               </div>
-              <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-800 text-sky-400 border border-slate-700">
-                {activeAgents.length} agent(s) activé(s)
-              </span>
+              {hasNoSubscription && (
+                <div className="p-3 bg-amber-500/10 border border-amber-500/30 text-amber-400 rounded-xl text-xs font-medium flex items-center space-x-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>Aucun abonnement actif. Sélectionnez un forfait ou activez une période d'essai pour pouvoir déployer des agents.</span>
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -587,9 +598,10 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
                       {/* Switch Button */}
                       <button
                         onClick={() => handleToggleAgent(agentId)}
+                        disabled={hasNoSubscription && !isEnabled}
                         className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
                           isEnabled ? "bg-sky-500" : "bg-slate-700"
-                        }`}
+                        } ${hasNoSubscription && !isEnabled ? "opacity-50 cursor-not-allowed" : ""}`}
                       >
                         <span
                           className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
@@ -675,8 +687,9 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
               {[
+                { id: "none", label: "Aucun abonnement", price: "0 € HT" },
                 { id: "1_agent", label: "Starter (1 agent)", price: "99 € HT" },
                 { id: "2_agents", label: "Duo (2 agents)", price: "169 € HT" },
                 { id: "4_agents", label: "Flotte (4 agents)", price: "279 € HT" },
