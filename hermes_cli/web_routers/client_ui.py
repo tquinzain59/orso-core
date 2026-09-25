@@ -13,7 +13,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
@@ -187,11 +187,12 @@ _SEED_INTEGRATIONS: Dict[str, List[Dict[str, Any]]] = {
             "category": "erp",
             "provider": "Pennylane API",
             "description": "Synchronisation bidirectionnelle des factures de vente, des règlements clients et de la balance comptable.",
-            "status": "connected",
-            "lastSync": "Il y a 14 min",
-            "metricLabel": "Factures suivies",
-            "metricValue": "284 factures (142 580 €)",
-            "accountDetails": "Compte Entreprise Pro • Clé active",
+            "status": "disconnected",
+            "lastSync": "Jamais synchronisé",
+            "metricLabel": "Configuration Hermès",
+            "metricValue": "Clé API non configurée",
+            "accountDetails": "Requiert PENNYLANE_API_KEY",
+            "configKey": "PENNYLANE_API_KEY",
         },
         {
             "id": "sellsy",
@@ -199,11 +200,12 @@ _SEED_INTEGRATIONS: Dict[str, List[Dict[str, Any]]] = {
             "category": "erp",
             "provider": "Sellsy v2",
             "description": "Extraction des devis signés, des factures échues et des contacts décideurs.",
-            "status": "pending",
-            "lastSync": "Configuration en attente",
-            "metricLabel": "Statut",
-            "metricValue": "En attente du jeton OAuth",
-            "accountDetails": "Non associé",
+            "status": "disconnected",
+            "lastSync": "Jamais synchronisé",
+            "metricLabel": "Configuration Hermès",
+            "metricValue": "Clé API non configurée",
+            "accountDetails": "Requiert SELLSY_TOKEN",
+            "configKey": "SELLSY_TOKEN",
         },
         {
             "id": "odoo",
@@ -213,7 +215,10 @@ _SEED_INTEGRATIONS: Dict[str, List[Dict[str, Any]]] = {
             "description": "Module Comptabilité et Ventes pour PME.",
             "status": "disconnected",
             "lastSync": "Jamais synchronisé",
-            "accountDetails": "Non configuré",
+            "metricLabel": "Configuration Hermès",
+            "metricValue": "Instance non paramétrée",
+            "accountDetails": "Requiert ODOO_URL",
+            "configKey": "ODOO_URL",
         },
         {
             "id": "google-workspace",
@@ -221,11 +226,12 @@ _SEED_INTEGRATIONS: Dict[str, List[Dict[str, Any]]] = {
             "category": "mail",
             "provider": "Google OAuth",
             "description": "Envoi des relances amiables et réception des justificatifs de paiement des clients.",
-            "status": "connected",
-            "lastSync": "Temps réel (Actif)",
-            "metricLabel": "Relances du mois",
-            "metricValue": "38 e-mails transmis",
-            "accountDetails": "direction@finarecee20.fr",
+            "status": "disconnected",
+            "lastSync": "Jamais synchronisé",
+            "metricLabel": "Messagerie",
+            "metricValue": "Compte non connecté",
+            "accountDetails": "Requiert OAuth Google",
+            "configKey": "GOOGLE_WORKSPACE_CREDENTIALS",
         },
         {
             "id": "microsoft-365",
@@ -234,7 +240,11 @@ _SEED_INTEGRATIONS: Dict[str, List[Dict[str, Any]]] = {
             "provider": "Graph API",
             "description": "Alternative messagerie entreprise pour l’envoi et le suivi des courriels.",
             "status": "disconnected",
-            "accountDetails": "Non connecté",
+            "lastSync": "Jamais synchronisé",
+            "metricLabel": "Messagerie",
+            "metricValue": "Compte non connecté",
+            "accountDetails": "Requiert MICROSOFT_365_TOKEN",
+            "configKey": "MICROSOFT_365_TOKEN",
         },
         {
             "id": "pappers",
@@ -242,11 +252,12 @@ _SEED_INTEGRATIONS: Dict[str, List[Dict[str, Any]]] = {
             "category": "legal",
             "provider": "Pappers Open Data",
             "description": "Fiche financière complète, score de défaillance, bilans et dirigeants légaux des tiers.",
-            "status": "connected",
-            "lastSync": "Temps réel",
-            "metricLabel": "Analyses effectuées",
-            "metricValue": "46 vérifications ce mois",
-            "accountDetails": "Accès illimité actif",
+            "status": "pending",
+            "lastSync": "Données publiques",
+            "metricLabel": "Mode Découverte",
+            "metricValue": "Open Data libre (Sans clé)",
+            "accountDetails": "Optionnel : PAPPERS_API_KEY",
+            "configKey": "PAPPERS_API_KEY",
         },
         {
             "id": "bodacc",
@@ -255,10 +266,11 @@ _SEED_INTEGRATIONS: Dict[str, List[Dict[str, Any]]] = {
             "provider": "DILA Open Data",
             "description": "Surveillance proactive des procédures collectives (redressements, liquidations judiciaires).",
             "status": "connected",
-            "lastSync": "Ce matin à 06:00",
-            "metricLabel": "Alerte active",
-            "metricValue": "0 procédure détectée",
-            "accountDetails": "Flux quotidien officiel",
+            "lastSync": "Temps réel",
+            "metricLabel": "Compétence Hermès",
+            "metricValue": "Skill actif (BODACC Open Data)",
+            "accountDetails": "Flux officiel DILA",
+            "configKey": "BODACC_OPEN_DATA",
         },
         {
             "id": "hubspot",
@@ -266,11 +278,12 @@ _SEED_INTEGRATIONS: Dict[str, List[Dict[str, Any]]] = {
             "category": "crm",
             "provider": "HubSpot API",
             "description": "Synchronisation des contacts commerciaux, création de deals et suivi des échanges.",
-            "status": "connected",
-            "lastSync": "Il y a 1 heure",
-            "metricLabel": "Prospects qualifiés",
-            "metricValue": "18 leads par Lucas",
-            "accountDetails": "Instance connectée",
+            "status": "disconnected",
+            "lastSync": "Jamais synchronisé",
+            "metricLabel": "Configuration Hermès",
+            "metricValue": "Clé API non configurée",
+            "accountDetails": "Requiert HUBSPOT_API_KEY",
+            "configKey": "HUBSPOT_API_KEY",
         },
     ],
     "commercialink": [
@@ -280,11 +293,12 @@ _SEED_INTEGRATIONS: Dict[str, List[Dict[str, Any]]] = {
             "category": "crm",
             "provider": "HubSpot API",
             "description": "Synchronisation des contacts commerciaux, création de deals et suivi des échanges.",
-            "status": "connected",
-            "lastSync": "Il y a 10 min",
-            "metricLabel": "Prospects chauds",
-            "metricValue": "34 leads qualifiés",
-            "accountDetails": "HubSpot Pro - Pipeline Ventes",
+            "status": "disconnected",
+            "lastSync": "Jamais synchronisé",
+            "metricLabel": "Configuration Hermès",
+            "metricValue": "Clé API non configurée",
+            "accountDetails": "Requiert HUBSPOT_API_KEY",
+            "configKey": "HUBSPOT_API_KEY",
         },
         {
             "id": "sellsy",
@@ -292,11 +306,12 @@ _SEED_INTEGRATIONS: Dict[str, List[Dict[str, Any]]] = {
             "category": "erp",
             "provider": "Sellsy v2",
             "description": "Gestion des devis et propositions commerciales B2B.",
-            "status": "connected",
-            "lastSync": "Il y a 25 min",
-            "metricLabel": "Devis en attente",
-            "metricValue": "12 devis (89 400 €)",
-            "accountDetails": "Instance Sellsy active",
+            "status": "disconnected",
+            "lastSync": "Jamais synchronisé",
+            "metricLabel": "Configuration Hermès",
+            "metricValue": "Clé API non configurée",
+            "accountDetails": "Requiert SELLSY_TOKEN",
+            "configKey": "SELLSY_TOKEN",
         },
         {
             "id": "google-workspace",
@@ -304,11 +319,12 @@ _SEED_INTEGRATIONS: Dict[str, List[Dict[str, Any]]] = {
             "category": "mail",
             "provider": "Google OAuth",
             "description": "Envoi des séquences de prospection commerciale et relances de devis.",
-            "status": "connected",
-            "lastSync": "Temps réel",
-            "metricLabel": "Emails envoyés",
-            "metricValue": "112 prises de contact",
-            "accountDetails": "claire.dubois@servicallc322.com",
+            "status": "disconnected",
+            "lastSync": "Jamais synchronisé",
+            "metricLabel": "Messagerie",
+            "metricValue": "Compte non connecté",
+            "accountDetails": "Requiert OAuth Google",
+            "configKey": "GOOGLE_WORKSPACE_CREDENTIALS",
         },
         {
             "id": "pappers",
@@ -316,11 +332,12 @@ _SEED_INTEGRATIONS: Dict[str, List[Dict[str, Any]]] = {
             "category": "legal",
             "provider": "Pappers Open Data",
             "description": "Enrichissement des données de contact et santé financière des prospects.",
-            "status": "connected",
-            "lastSync": "Temps réel",
-            "metricLabel": "Fiches enrichies",
-            "metricValue": "68 entreprises vérifiées",
-            "accountDetails": "Accès Standard",
+            "status": "pending",
+            "lastSync": "Données publiques",
+            "metricLabel": "Mode Découverte",
+            "metricValue": "Open Data libre (Sans clé)",
+            "accountDetails": "Optionnel : PAPPERS_API_KEY",
+            "configKey": "PAPPERS_API_KEY",
         },
     ],
     "helpdesk360": [
@@ -330,11 +347,12 @@ _SEED_INTEGRATIONS: Dict[str, List[Dict[str, Any]]] = {
             "category": "mail",
             "provider": "Google OAuth",
             "description": "Réception et traitement automatique des tickets clients et réclamations.",
-            "status": "connected",
-            "lastSync": "Temps réel",
-            "metricLabel": "Tickets traités",
-            "metricValue": "54 réclamations résolues",
-            "accountDetails": "support@recoviaa60a.fr",
+            "status": "disconnected",
+            "lastSync": "Jamais synchronisé",
+            "metricLabel": "Messagerie",
+            "metricValue": "Compte non connecté",
+            "accountDetails": "Requiert OAuth Google",
+            "configKey": "GOOGLE_WORKSPACE_CREDENTIALS",
         },
         {
             "id": "hubspot",
@@ -342,11 +360,12 @@ _SEED_INTEGRATIONS: Dict[str, List[Dict[str, Any]]] = {
             "category": "crm",
             "provider": "HubSpot API",
             "description": "Gestion de la base de connaissances et de la satisfaction client.",
-            "status": "connected",
-            "lastSync": "Il y a 5 min",
-            "metricLabel": "CSAT moyen",
-            "metricValue": "96% de satisfaction",
-            "accountDetails": "Instance HelpDesk Pro",
+            "status": "disconnected",
+            "lastSync": "Jamais synchronisé",
+            "metricLabel": "Configuration Hermès",
+            "metricValue": "Clé API non configurée",
+            "accountDetails": "Requiert HUBSPOT_API_KEY",
+            "configKey": "HUBSPOT_API_KEY",
         },
     ],
     "batipro-services": [
@@ -357,10 +376,11 @@ _SEED_INTEGRATIONS: Dict[str, List[Dict[str, Any]]] = {
             "provider": "DILA Open Data",
             "description": "Surveillance quotidienne des avis de marchés publics BTP.",
             "status": "connected",
-            "lastSync": "Ce matin à 06:00",
-            "metricLabel": "Appels d’offres ciblés",
-            "metricValue": "7 opportunités détectées",
+            "lastSync": "Temps réel",
+            "metricLabel": "Compétence Hermès",
+            "metricValue": "Skill actif (BODACC Open Data)",
             "accountDetails": "Flux BOAMP BTP",
+            "configKey": "BODACC_OPEN_DATA",
         },
         {
             "id": "pappers",
@@ -368,11 +388,12 @@ _SEED_INTEGRATIONS: Dict[str, List[Dict[str, Any]]] = {
             "category": "legal",
             "provider": "Pappers Open Data",
             "description": "Vérification de solvabilité et attestations légales (DC1, DC2).",
-            "status": "connected",
-            "lastSync": "Temps réel",
-            "metricLabel": "Vérifications",
-            "metricValue": "19 dossiers montés",
+            "status": "pending",
+            "lastSync": "Données publiques",
+            "metricLabel": "Mode Découverte",
+            "metricValue": "Open Data libre (Sans clé)",
             "accountDetails": "Compte Pro BTP",
+            "configKey": "PAPPERS_API_KEY",
         },
     ],
     "eurotech-conseil": [
@@ -382,11 +403,12 @@ _SEED_INTEGRATIONS: Dict[str, List[Dict[str, Any]]] = {
             "category": "erp",
             "provider": "Pennylane API",
             "description": "Synchronisation comptable et facturation clients complète.",
-            "status": "connected",
-            "lastSync": "Il y a 10 min",
-            "metricLabel": "Factures suivies",
-            "metricValue": "512 factures (340 000 €)",
-            "accountDetails": "Pennylane Enterprise",
+            "status": "disconnected",
+            "lastSync": "Jamais synchronisé",
+            "metricLabel": "Configuration Hermès",
+            "metricValue": "Clé API non configurée",
+            "accountDetails": "Requiert PENNYLANE_API_KEY",
+            "configKey": "PENNYLANE_API_KEY",
         },
         {
             "id": "hubspot",
@@ -394,11 +416,12 @@ _SEED_INTEGRATIONS: Dict[str, List[Dict[str, Any]]] = {
             "category": "crm",
             "provider": "HubSpot API",
             "description": "Pipeline d’affaires et scoring commercial B2B.",
-            "status": "connected",
-            "lastSync": "Il y a 20 min",
-            "metricLabel": "Pipeline actif",
-            "metricValue": "48 opportunités",
-            "accountDetails": "HubSpot Enterprise",
+            "status": "disconnected",
+            "lastSync": "Jamais synchronisé",
+            "metricLabel": "Configuration Hermès",
+            "metricValue": "Clé API non configurée",
+            "accountDetails": "Requiert HUBSPOT_API_KEY",
+            "configKey": "HUBSPOT_API_KEY",
         },
         {
             "id": "google-workspace",
@@ -406,11 +429,12 @@ _SEED_INTEGRATIONS: Dict[str, List[Dict[str, Any]]] = {
             "category": "mail",
             "provider": "Google OAuth",
             "description": "Messagerie entreprise connectée aux 4 agents.",
-            "status": "connected",
-            "lastSync": "Temps réel",
-            "metricLabel": "E-mails gérés",
-            "metricValue": "240 échanges automatisés",
-            "accountDetails": "direction@ventelinkc009.com",
+            "status": "disconnected",
+            "lastSync": "Jamais synchronisé",
+            "metricLabel": "Messagerie",
+            "metricValue": "Compte non connecté",
+            "accountDetails": "Requiert OAuth Google",
+            "configKey": "GOOGLE_WORKSPACE_CREDENTIALS",
         },
         {
             "id": "pappers",
@@ -418,11 +442,12 @@ _SEED_INTEGRATIONS: Dict[str, List[Dict[str, Any]]] = {
             "category": "legal",
             "provider": "Pappers Open Data",
             "description": "Analyses financières et conformité des partenaires.",
-            "status": "connected",
-            "lastSync": "Temps réel",
-            "metricLabel": "Audits tiers",
-            "metricValue": "94 analyses ce mois",
-            "accountDetails": "Accès Illimité",
+            "status": "pending",
+            "lastSync": "Données publiques",
+            "metricLabel": "Mode Découverte",
+            "metricValue": "Open Data libre (Sans clé)",
+            "accountDetails": "Optionnel : PAPPERS_API_KEY",
+            "configKey": "PAPPERS_API_KEY",
         },
         {
             "id": "bodacc",
@@ -431,10 +456,11 @@ _SEED_INTEGRATIONS: Dict[str, List[Dict[str, Any]]] = {
             "provider": "DILA Open Data",
             "description": "Surveillance des partenaires et fournisseurs.",
             "status": "connected",
-            "lastSync": "Ce matin à 06:00",
-            "metricLabel": "Alertes",
-            "metricValue": "0 défaillance détectée",
+            "lastSync": "Temps réel",
+            "metricLabel": "Compétence Hermès",
+            "metricValue": "Skill actif (BODACC Open Data)",
             "accountDetails": "Flux actif",
+            "configKey": "BODACC_OPEN_DATA",
         },
     ],
 }
@@ -623,11 +649,193 @@ def _get_tenant_enabled_agents(
     return ["jerome"]
 
 
-def _get_tenant_integrations(
+_SYNC_OVERRIDES: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+
+def _probe_hermes_backoffice_integrations(
     tenant_id: Optional[str] = None,
     tenant_slug: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Charge les interfaces et outils connectés pour ce tenant depuis Supabase ou le référentiel de base."""
+    """Inspecte dynamiquement le backoffice Hermès (.env, config.yaml, skills, outils natifs)
+    pour retourner l'état réel et vérifié des interfaces de l'organisation.
+    """
+    slug = (tenant_slug or "").lower()
+    if not slug and tenant_id:
+        for t_slug, t_info in _SEED_TENANTS.items():
+            if t_info.get("id") == tenant_id:
+                slug = t_slug
+                break
+    if not slug or slug not in _SEED_INTEGRATIONS:
+        slug = "financia-solutions"
+
+    # 1. Base catalog for this tenant
+    base_catalog = _SEED_INTEGRATIONS.get(slug, [])
+    probed_integrations: List[Dict[str, Any]] = []
+
+    for item in base_catalog:
+        entry = dict(item)
+        int_id = entry.get("id")
+        config_key = entry.get("configKey")
+
+        # Détection des clés réelles dans os.environ
+        is_configured = False
+        if config_key and os.environ.get(config_key, "").strip():
+            is_configured = True
+        elif int_id == "pennylane" and (os.environ.get("PENNYLANE_API_KEY") or os.environ.get("PENNYLANE_TOKEN")):
+            is_configured = True
+        elif int_id == "sellsy" and (os.environ.get("SELLSY_TOKEN") or os.environ.get("SELLSY_API_KEY")):
+            is_configured = True
+        elif int_id == "odoo" and (os.environ.get("ODOO_URL") or os.environ.get("ODOO_HOST")):
+            is_configured = True
+        elif int_id == "hubspot" and (os.environ.get("HUBSPOT_API_KEY") or os.environ.get("HUBSPOT_ACCESS_TOKEN")):
+            is_configured = True
+        elif int_id == "pappers" and os.environ.get("PAPPERS_API_KEY", "").strip():
+            is_configured = True
+        elif int_id == "google-workspace" and (os.environ.get("GOOGLE_WORKSPACE_CREDENTIALS") or os.environ.get("GMAIL_APP_PASSWORD")):
+            is_configured = True
+        elif int_id == "microsoft-365" and (os.environ.get("MICROSOFT_365_TOKEN") or os.environ.get("MS_GRAPH_TOKEN")):
+            is_configured = True
+
+        if is_configured:
+            entry["status"] = "connected"
+            entry["metricLabel"] = "Statut Backoffice"
+            entry["metricValue"] = "Connecteur actif (Clé .env)"
+            entry["accountDetails"] = "Configuré dans le backoffice Hermès"
+            entry["lastSync"] = "Temps réel"
+        elif int_id == "bodacc":
+            entry["status"] = "connected"
+            entry["metricLabel"] = "Compétence Hermès"
+            entry["metricValue"] = "Skill actif (BODACC Open Data)"
+            entry["accountDetails"] = "Flux officiel DILA"
+            entry["lastSync"] = "Temps réel"
+        elif int_id == "pappers":
+            entry["status"] = "pending"
+            entry["metricLabel"] = "Mode Découverte"
+            entry["metricValue"] = "Open Data libre (Sans clé)"
+            entry["accountDetails"] = "Optionnel : PAPPERS_API_KEY"
+            entry["lastSync"] = "Données publiques"
+        else:
+            entry["status"] = "disconnected"
+            entry["metricLabel"] = "Configuration Hermès"
+            entry["metricValue"] = "Clé API non configurée"
+            req_var = config_key or (int_id.upper() + "_API_KEY")
+            entry["accountDetails"] = f"Requiert {req_var}"
+            entry["lastSync"] = "Jamais synchronisé"
+
+        # Application des surcharges manuelles de synchronisation
+        override_key = (slug, int_id)
+        if override_key in _SYNC_OVERRIDES:
+            entry.update(_SYNC_OVERRIDES[override_key])
+
+        probed_integrations.append(entry)
+
+    # 2. Outils Backoffice réels et actifs
+    backoffice_tools: List[Dict[str, Any]] = []
+
+    if os.environ.get("SUPABASE_URL"):
+        backoffice_tools.append({
+            "id": "supabase",
+            "name": "Supabase IAM & Base",
+            "category": "tools",
+            "provider": "Supabase Cloud",
+            "description": "Authentification JWT des dirigeants, contrôle d'accès RLS et isolation des données.",
+            "status": "connected",
+            "lastSync": "Temps réel",
+            "metricLabel": "Infrastructure IAM",
+            "metricValue": "Opérationnel (Temps réel)",
+            "accountDetails": "Projet Supabase connecté",
+            "configKey": "SUPABASE_URL",
+        })
+
+    if os.environ.get("AIRTABLE_API_KEY"):
+        backoffice_tools.append({
+            "id": "airtable",
+            "name": "Airtable API",
+            "category": "tools",
+            "provider": "Airtable REST",
+            "description": "Bases de données relationnelles, tables de suivi et registres opérationnels.",
+            "status": "connected",
+            "lastSync": "Temps réel",
+            "metricLabel": "Statut Backoffice",
+            "metricValue": "Clé API active (.env)",
+            "accountDetails": "Base Airtable connectée",
+            "configKey": "AIRTABLE_API_KEY",
+        })
+
+    if os.environ.get("ATLASSIAN_DOMAIN") or os.environ.get("JIRA_API_TOKEN") or os.environ.get("ATLASSIAN_API_TOKEN"):
+        domain = os.environ.get("ATLASSIAN_DOMAIN", "Jira Cloud")
+        backoffice_tools.append({
+            "id": "atlassian-jira",
+            "name": "Atlassian Jira Cloud",
+            "category": "tools",
+            "provider": "Atlassian REST API",
+            "description": "Gestion des tickets de réclamation, incidents et suivi opérationnel des agents.",
+            "status": "connected",
+            "lastSync": "Temps réel",
+            "metricLabel": "Domaine Atlassian",
+            "metricValue": f"Connecté ({domain})",
+            "accountDetails": os.environ.get("ATLASSIAN_EMAIL", "Compte configuré"),
+            "configKey": "JIRA_API_TOKEN",
+        })
+
+    # Outils natifs Hermès
+    backoffice_tools.append({
+        "id": "hermes-web-search",
+        "name": "Recherche Web Hermès",
+        "category": "tools",
+        "provider": "Hermès Toolset",
+        "description": "Outil natif de veille, recherche et extraction web autonome pour les agents.",
+        "status": "connected",
+        "lastSync": "Permanent",
+        "metricLabel": "Moteur de recherche",
+        "metricValue": "Actif (DuckDuckGo / Tavily)",
+        "accountDetails": "Outil agent natif",
+    })
+
+    backoffice_tools.append({
+        "id": "hermes-browser",
+        "name": "Navigateur Web Autonome",
+        "category": "tools",
+        "provider": "Playwright / Chrome",
+        "description": "Navigation web autonome, lecture de portails en ligne et capture d'écrans.",
+        "status": "connected",
+        "lastSync": "Permanent",
+        "metricLabel": "Automatisation",
+        "metricValue": "Prêt pour les agents",
+        "accountDetails": "Moteur de rendu headless",
+    })
+
+    # Serveurs MCP déclarés dans config.yaml
+    try:
+        from hermes_cli.config import load_config
+        cfg = load_config()
+        mcp_servers = cfg.get("mcp_servers", {})
+        if isinstance(mcp_servers, dict):
+            for mcp_name, mcp_def in mcp_servers.items():
+                cmd = mcp_def.get("command", "Serveur configuré") if isinstance(mcp_def, dict) else "Actif"
+                backoffice_tools.append({
+                    "id": f"mcp-{mcp_name}",
+                    "name": f"Serveur MCP : {mcp_name.capitalize()}",
+                    "category": "tools",
+                    "provider": "Model Context Protocol",
+                    "description": f"Serveur MCP configuré dans le backoffice Hermès ({cmd}).",
+                    "status": "connected",
+                    "lastSync": "Temps réel",
+                    "metricLabel": "Protocole MCP",
+                    "metricValue": "Serveur actif",
+                    "accountDetails": str(cmd),
+                })
+    except Exception as e:
+        _log.debug("Erreur lecture serveurs MCP Hermès: %s", e)
+
+    for b_tool in backoffice_tools:
+        override_key = (slug, b_tool["id"])
+        if override_key in _SYNC_OVERRIDES:
+            b_tool.update(_SYNC_OVERRIDES[override_key])
+
+    all_integrations = probed_integrations + backoffice_tools
+
+    # Supabase data enrich
     supabase_url = os.environ.get("SUPABASE_URL", "").strip()
     service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
     if supabase_url and service_key and tenant_id:
@@ -644,34 +852,26 @@ def _get_tenant_integrations(
             with urllib.request.urlopen(req, timeout=3.0) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
                 if data and len(data) > 0:
-                    result = []
-                    for row in data:
-                        result.append({
-                            "id": row.get("integration_id") or row.get("id"),
-                            "name": row.get("name"),
-                            "category": row.get("category"),
-                            "provider": row.get("provider"),
-                            "description": row.get("description"),
-                            "status": row.get("status", "disconnected"),
-                            "lastSync": row.get("last_sync"),
-                            "metricLabel": row.get("metric_label"),
-                            "metricValue": row.get("metric_value"),
-                            "accountDetails": row.get("account_details"),
-                        })
-                    return result
+                    sb_map = {row.get("integration_id") or row.get("id"): row for row in data}
+                    for item in all_integrations:
+                        int_id = item["id"]
+                        if int_id in sb_map:
+                            sb_row = sb_map[int_id]
+                            sb_last_sync = sb_row.get("last_sync")
+                            if sb_last_sync and item["lastSync"] == "Jamais synchronisé":
+                                item["lastSync"] = sb_last_sync
         except Exception as e:
-            _log.debug("Erreur lecture tenant_integrations Supabase: %s", e)
+            _log.debug("Erreur enrichissement tenant_integrations Supabase: %s", e)
 
-    slug = (tenant_slug or "").lower()
-    if not slug and tenant_id:
-        for t_slug, t_info in _SEED_TENANTS.items():
-            if t_info.get("id") == tenant_id:
-                slug = t_slug
-                break
-    if slug not in _SEED_INTEGRATIONS:
-        slug = "financia-solutions"
+    return all_integrations
 
-    return list(_SEED_INTEGRATIONS.get(slug, []))
+
+def _get_tenant_integrations(
+    tenant_id: Optional[str] = None,
+    tenant_slug: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Charge les interfaces et outils connectés pour ce tenant depuis le backoffice Hermès."""
+    return _probe_hermes_backoffice_integrations(tenant_id=tenant_id, tenant_slug=tenant_slug)
 
 
 def _sync_tenant_integration(
@@ -686,20 +886,25 @@ def _sync_tenant_integration(
             if t_info.get("id") == tenant_id:
                 slug = t_slug
                 break
-    if slug not in _SEED_INTEGRATIONS:
+    if not slug or slug not in _SEED_INTEGRATIONS:
         slug = "financia-solutions"
 
+    integrations = _probe_hermes_backoffice_integrations(tenant_id=tenant_id, tenant_slug=slug)
     updated = None
-    for item in _SEED_INTEGRATIONS.get(slug, []):
+    for item in integrations:
         if item["id"] == integration_id:
             item["lastSync"] = "À l'instant"
             item["status"] = "connected"
+            _SYNC_OVERRIDES[(slug, integration_id)] = {
+                "lastSync": "À l'instant",
+                "status": "connected",
+            }
             updated = item
             break
 
     supabase_url = os.environ.get("SUPABASE_URL", "").strip()
     service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
-    if supabase_url and service_key and tenant_id:
+    if supabase_url and service_key and tenant_id and updated:
         try:
             url = f"{supabase_url}/rest/v1/tenant_integrations?tenant_id=eq.{tenant_id}&integration_id=eq.{integration_id}"
             payload = json.dumps({"last_sync": "À l'instant", "status": "connected"}).encode("utf-8")

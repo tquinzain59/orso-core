@@ -487,4 +487,45 @@ def test_client_channels_endpoint_and_user_management(monkeypatch):
     assert "+33699887766" not in res_del.json()["allowed_users"]
 
 
+def test_client_integrations_backoffice_real_detection(monkeypatch):
+    """Vérifie la détection dynamique des clés d'environnement et des outils réels du backoffice Hermès."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from hermes_cli.web_routers.client_ui import router
 
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", "test-jwt-secret")
+    monkeypatch.setenv("AIRTABLE_API_KEY", "pat.test.airtable.12345")
+    monkeypatch.setenv("PENNYLANE_API_KEY", "pennylane_secret_token_abc")
+    monkeypatch.delenv("SELLSY_TOKEN", raising=False)
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    token = _make_test_jwt(tenant_id="f3e25379-6531-479e-b276-3b3185e7421b", tenant_slug="financia-solutions")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    res = client.get("/api/client/integrations", headers=headers)
+    assert res.status_code == 200
+    integrations = res.json()["integrations"]
+    by_id = {i["id"]: i for i in integrations}
+
+    # 1. Pennylane avec clé API configurée
+    assert "pennylane" in by_id
+    assert by_id["pennylane"]["status"] == "connected"
+    assert by_id["pennylane"]["metricValue"] == "Connecteur actif (Clé .env)"
+
+    # 2. Sellsy sans clé configurée
+    assert "sellsy" in by_id
+    assert by_id["sellsy"]["status"] == "disconnected"
+    assert "Requiert SELLSY_TOKEN" in by_id["sellsy"]["accountDetails"]
+
+    # 3. Airtable détecté via le backoffice Hermès
+    assert "airtable" in by_id
+    assert by_id["airtable"]["status"] == "connected"
+    assert by_id["airtable"]["category"] == "tools"
+
+    # 4. Outils natifs Hermès
+    assert "hermes-web-search" in by_id
+    assert by_id["hermes-web-search"]["status"] == "connected"
+    assert by_id["hermes-web-search"]["category"] == "tools"

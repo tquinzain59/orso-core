@@ -49,7 +49,7 @@ export interface ChatMessage {
   isStreaming?: boolean;
 }
 
-export type IntegrationCategory = 'erp' | 'mail' | 'legal' | 'crm';
+export type IntegrationCategory = 'erp' | 'mail' | 'legal' | 'crm' | 'tools';
 
 export interface Integration {
   id: string;
@@ -62,6 +62,7 @@ export interface Integration {
   metricValue?: string;
   accountDetails?: string;
   provider: string;
+  configKey?: string;
 }
 
 export type ChannelId = 'whatsapp' | 'telegram' | 'email';
