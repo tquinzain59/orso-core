@@ -68,6 +68,14 @@ class LoginRequest(BaseModel):
     password: str = Field(..., description="Mot de passe superadmin")
 
 
+class CreateUserRequest(BaseModel):
+    email: str = Field(..., description="Adresse email de l'utilisateur (identifiant de connexion)")
+    password: Optional[str] = Field(None, description="Mot de passe initial")
+    full_name: str = Field(..., description="Nom complet du collaborateur")
+    role: str = Field("Membre", description="Rôle ou fonction dans la société (ex: DAF, Commercial, Dirigeant)")
+    is_admin: bool = Field(False, description="Définit si l'utilisateur possède les droits d'administration Orso")
+
+
 # ── Endpoints Supervision & Cycle de Vie Conteneurs ──────────────────────────
 
 @app.get("/health")
@@ -212,6 +220,37 @@ async def update_subscription(tenant_id: str, req: UpdateSubscriptionRequest, ad
         status=req.status or "active",
     )
     return res
+
+
+@app.get("/api/olympe/ops/tenants/{tenant_id}/users")
+async def list_tenant_users(tenant_id: str, admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Retourne la liste des utilisateurs d'un client."""
+    users = ops_manager.get_tenant_users(tenant_id)
+    return {"users": users}
+
+
+@app.post("/api/olympe/ops/tenants/{tenant_id}/users")
+async def create_user_for_tenant(tenant_id: str, req: CreateUserRequest, admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Crée un nouvel utilisateur pour un client donné."""
+    try:
+        user = ops_manager.create_tenant_user(
+            tenant_id=tenant_id,
+            email=req.email,
+            password=req.password,
+            full_name=req.full_name,
+            role=req.role,
+            is_admin=req.is_admin,
+        )
+        return {"success": True, "user": user}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/api/olympe/ops/tenants/{tenant_id}/users/{user_id}")
+async def delete_user_for_tenant(tenant_id: str, user_id: str, admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Supprime un utilisateur d'une organisation cliente."""
+    success = ops_manager.delete_tenant_user(tenant_id=tenant_id, user_id=user_id)
+    return {"success": success}
 
 
 @app.get("/api/olympe/ops/invoices")

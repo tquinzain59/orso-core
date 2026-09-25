@@ -20,12 +20,18 @@ export const TenantsView: React.FC<TenantsViewProps> = ({
   const [statusFilter, setStatusFilter] = useState<string>("all");
 
   const filteredTenants = tenants.filter((t) => {
+    const matchesUser = t.users?.some(
+      (u) =>
+        u.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        u.email.toLowerCase().includes(searchTerm.toLowerCase())
+    );
     const matchesSearch =
       t.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       t.slug.toLowerCase().includes(searchTerm.toLowerCase()) ||
       (t.siret && t.siret.includes(searchTerm)) ||
       t.contact.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      t.contact.email.toLowerCase().includes(searchTerm.toLowerCase());
+      t.contact.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      Boolean(matchesUser);
 
     if (!matchesSearch) return false;
     if (statusFilter === "all") return true;
@@ -132,7 +138,17 @@ export const TenantsView: React.FC<TenantsViewProps> = ({
 
                       {/* Contact */}
                       <td className="py-4 px-4 text-slate-300">
-                        <div className="font-semibold">{t.contact.full_name}</div>
+                        <div className="flex items-center space-x-2">
+                          <span className="font-semibold">{t.contact.full_name}</span>
+                          {t.users && t.users.length > 1 && (
+                            <span
+                              className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20"
+                              title={`${t.users.length} collaborateurs enregistrés pour ce client`}
+                            >
+                              +{t.users.length - 1}
+                            </span>
+                          )}
+                        </div>
                         <div className="text-xs text-slate-400">{t.contact.email}</div>
                         {t.contact.phone && (
                           <div className="text-xs text-slate-500 font-mono">{t.contact.phone}</div>

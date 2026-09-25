@@ -84,3 +84,10 @@ export interface MessagingChannel {
   syncStatus?: 'success' | 'idle' | 'offline' | 'error';
 }
 
+export interface ClientUser {
+  id: string;
+  email: string;
+  full_name: string;
+  role?: string;
+  is_admin?: boolean;
+}

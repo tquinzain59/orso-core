@@ -25,6 +25,17 @@ export interface TenantContact {
   role?: string;
 }
 
+export interface TenantUser {
+  id: string;
+  email: string;
+  full_name: string;
+  phone?: string;
+  role: string;
+  is_admin: boolean;
+  is_primary_contact?: boolean;
+  created_at?: string;
+}
+
 export interface TenantInstance {
   container_name: string;
   status: "ready" | "sleeping" | "paused" | "not_found" | string;
@@ -65,6 +76,7 @@ export interface Tenant {
   status: "active" | "trial" | "suspended" | "churn" | string;
   created_at: string;
   contact: TenantContact;
+  users?: TenantUser[];
   instance: TenantInstance;
   agents_enabled: {
     active: AgentId[];

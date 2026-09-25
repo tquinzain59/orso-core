@@ -118,3 +118,65 @@ def test_stripe_webhook_handling(api_client):
     resp = api_client.post("/api/olympe/ops/webhooks/stripe", json=payload)
     assert resp.status_code == 200
     assert resp.json()["status"] == "processed"
+
+
+def test_ops_manager_multi_users():
+    """Vérifie la présence et la structure multi-utilisateurs pour les clients."""
+    ops = OpsManager()
+    financia = ops.get_tenant_detail("financia-solutions")
+    assert financia is not None
+    assert "users" in financia
+    assert len(financia["users"]) >= 2
+
+    # Vérification des profils admin vs standard
+    sophie = next((u for u in financia["users"] if u["email"] == "sophie.martin@finarecee20.fr"), None)
+    assert sophie is not None
+    assert sophie["is_admin"] is True
+    assert sophie["role"] == "DAF"
+
+    lucas = next((u for u in financia["users"] if u["email"] == "lucas.compta@finarecee20.fr"), None)
+    assert lucas is not None
+    assert lucas["is_admin"] is False
+    assert lucas["role"] == "Comptable"
+
+
+def test_api_tenant_users_crud(api_client):
+    """Vérifie la création, la consultation et la suppression d'un utilisateur pour un client via l'API Olympe."""
+    # 1. Liste des utilisateurs
+    resp_users = api_client.get("/api/olympe/ops/tenants/financia-solutions/users")
+    assert resp_users.status_code == 200
+    users = resp_users.json()["users"]
+    initial_count = len(users)
+    assert initial_count >= 2
+
+    # 2. Création d'un nouvel utilisateur
+    new_user_payload = {
+        "email": "nicolas.treso@finarecee20.fr",
+        "full_name": "Nicolas Trésorier",
+        "role": "Trésorier",
+        "is_admin": False,
+    }
+    resp_create = api_client.post(
+        "/api/olympe/ops/tenants/financia-solutions/users",
+        json=new_user_payload,
+    )
+    assert resp_create.status_code == 200
+    created = resp_create.json()["user"]
+    assert created["email"] == "nicolas.treso@finarecee20.fr"
+    assert created["is_admin"] is False
+    assert created["role"] == "Trésorier"
+    user_id = created["id"]
+
+    # 3. Vérification de l'ajout
+    resp_after = api_client.get("/api/olympe/ops/tenants/financia-solutions/users")
+    users_after = resp_after.json()["users"]
+    assert len(users_after) == initial_count + 1
+
+    # 4. Suppression de l'utilisateur
+    resp_del = api_client.delete(f"/api/olympe/ops/tenants/financia-solutions/users/{user_id}")
+    assert resp_del.status_code == 200
+    assert resp_del.json()["success"] is True
+
+    # 5. Vérification post-suppression
+    resp_final = api_client.get("/api/olympe/ops/tenants/financia-solutions/users")
+    assert len(resp_final.json()["users"]) == initial_count

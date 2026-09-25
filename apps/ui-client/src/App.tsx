@@ -37,6 +37,7 @@ export const App: React.FC = () => {
   const [companyName, setCompanyName] = useState<string>('');
   const [userName, setUserName] = useState<string>('');
   const [userRole, setUserRole] = useState<string>('');
+  const [isAdmin, setIsAdmin] = useState<boolean>(true);
   const [backendStatus, setBackendStatus] = useState<{ online: boolean; version?: string }>({
     online: false,
   });
@@ -51,6 +52,13 @@ export const App: React.FC = () => {
   const [loginPassword, setLoginPassword] = useState<string>('TempOrso2026!Financia');
   const [showLoginModal, setShowLoginModal] = useState<boolean>(false);
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
+
+  // Redirection de sécurité : si non-admin, seul l'onglet chat est accessible
+  useEffect(() => {
+    if (!isAdmin && (currentTab === 'integrations' || currentTab === 'channels')) {
+      setCurrentTab('chat');
+    }
+  }, [isAdmin, currentTab]);
 
   // Chargement dynamique des agents activés pour le tenant courant
   const refreshAgents = async (preferredAgentId?: AgentId) => {
@@ -105,6 +113,7 @@ export const App: React.FC = () => {
         setCompanyName(res.tenant?.name || res.tenant?.tenant_slug?.replace('-', ' ').toUpperCase() || 'Financia Solutions');
         setUserName(res.user?.full_name || res.user?.email || 'Sophie Martin');
         setUserRole(res.user?.role || 'DAF');
+        setIsAdmin(Boolean(res.user?.is_admin ?? (res.user?.role === 'admin' || res.tenant?.role === 'admin')));
         refreshAgents(initialAgentParam);
       } else {
         const stored = getStoredUser();
@@ -113,6 +122,7 @@ export const App: React.FC = () => {
           setCompanyName(stored.tenant?.name || 'Financia Solutions');
           setUserName(stored.full_name || 'Sophie Martin');
           setUserRole(stored.role || 'DAF');
+          setIsAdmin(Boolean(stored.is_admin ?? (stored.role === 'admin' || stored.tenant?.role === 'admin')));
           refreshAgents(initialAgentParam);
         } else {
           setIsAuthenticated(false);
@@ -157,6 +167,7 @@ export const App: React.FC = () => {
       setCompanyName(res.tenant?.name || res.tenant?.tenant_slug?.replace('-', ' ').toUpperCase() || 'Financia Solutions');
       setUserName(res.user?.full_name || res.user?.email || 'Sophie Martin');
       setUserRole(res.user?.role || 'DAF');
+      setIsAdmin(Boolean(res.user?.is_admin ?? (res.user?.role === 'admin' || res.tenant?.role === 'admin')));
       checkBackendHealth().then(setBackendStatus);
       await refreshAgents();
     } else {
@@ -168,6 +179,7 @@ export const App: React.FC = () => {
   const handleLogout = async () => {
     await logoutClient();
     setIsAuthenticated(false);
+    setIsAdmin(false);
     setCompanyName('');
     setUserName('');
     setUserRole('');
@@ -225,29 +237,34 @@ export const App: React.FC = () => {
             <span>Discussion</span>
           </button>
 
-          <button
-            onClick={() => setCurrentTab('integrations')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-              currentTab === 'integrations'
-                ? 'bg-blue-600 text-white shadow-md shadow-blue-900/30 scale-100'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-            }`}
-          >
-            <Layers className="w-4 h-4" />
-            <span>Interfaces & ERP</span>
-          </button>
+          {/* Onglets Interfaces et Canaux réservés aux Administrateurs */}
+          {isAdmin && (
+            <>
+              <button
+                onClick={() => setCurrentTab('integrations')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                  currentTab === 'integrations'
+                    ? 'bg-blue-600 text-white shadow-md shadow-blue-900/30 scale-100'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                }`}
+              >
+                <Layers className="w-4 h-4" />
+                <span>Interfaces & ERP</span>
+              </button>
 
-          <button
-            onClick={() => setCurrentTab('channels')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-              currentTab === 'channels'
-                ? 'bg-blue-600 text-white shadow-md shadow-blue-900/30 scale-100'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
-            }`}
-          >
-            <Smartphone className="w-4 h-4" />
-            <span>Canaux (WhatsApp/Telegram)</span>
-          </button>
+              <button
+                onClick={() => setCurrentTab('channels')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                  currentTab === 'channels'
+                    ? 'bg-blue-600 text-white shadow-md shadow-blue-900/30 scale-100'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                }`}
+              >
+                <Smartphone className="w-4 h-4" />
+                <span>Canaux (WhatsApp/Telegram)</span>
+              </button>
+            </>
+          )}
         </nav>
 
         {/* Right Info and Navigation */}
@@ -262,6 +279,17 @@ export const App: React.FC = () => {
                 <span className="hidden lg:inline px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-950 text-blue-300 border border-blue-800">
                   {userRole}
                 </span>
+                {isAdmin ? (
+                  <span className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-800">
+                    <ShieldCheck className="w-3 h-3" />
+                    <span>Admin</span>
+                  </span>
+                ) : (
+                  <span className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-800 text-slate-400 border border-slate-700">
+                    <UserCheck className="w-3 h-3" />
+                    <span>Salarié</span>
+                  </span>
+                )}
               </div>
               <button
                 onClick={handleLogout}

@@ -97,6 +97,26 @@ class OpsManager:
                     "phone": "+33 6 12 34 56 78",
                     "role": "DAF",
                 },
+                "users": [
+                    {
+                        "id": "usr_financia_001",
+                        "email": "sophie.martin@finarecee20.fr",
+                        "full_name": "Sophie Martin",
+                        "role": "DAF",
+                        "is_admin": True,
+                        "is_primary_contact": True,
+                        "created_at": "2026-09-01T08:30:00Z",
+                    },
+                    {
+                        "id": "usr_financia_002",
+                        "email": "lucas.compta@finarecee20.fr",
+                        "full_name": "Lucas Bernard",
+                        "role": "Comptable",
+                        "is_admin": False,
+                        "is_primary_contact": False,
+                        "created_at": "2026-09-10T09:15:00Z",
+                    },
+                ],
                 "instance": {
                     "container_name": "orso_client_financia_solutions",
                     "internal_route_key": "orso_client_financia_solutions",
@@ -152,6 +172,26 @@ class OpsManager:
                     "phone": "+33 6 98 76 54 32",
                     "role": "Directrice Commerciale",
                 },
+                "users": [
+                    {
+                        "id": "usr_comm_001",
+                        "email": "claire.dubois@servicallc322.com",
+                        "full_name": "Claire Dubois",
+                        "role": "Directrice Commerciale",
+                        "is_admin": True,
+                        "is_primary_contact": True,
+                        "created_at": "2026-09-05T14:15:00Z",
+                    },
+                    {
+                        "id": "usr_comm_002",
+                        "email": "thomas.vente@servicallc322.com",
+                        "full_name": "Thomas Petit",
+                        "role": "Commercial B2B",
+                        "is_admin": False,
+                        "is_primary_contact": False,
+                        "created_at": "2026-09-12T11:00:00Z",
+                    },
+                ],
                 "instance": {
                     "container_name": "orso_client_commercialink",
                     "internal_route_key": "orso_client_commercialink",
@@ -200,6 +240,26 @@ class OpsManager:
                     "phone": "+33 6 45 67 89 01",
                     "role": "Gérant",
                 },
+                "users": [
+                    {
+                        "id": "usr_bati_001",
+                        "email": "julien.lefevre@batiprof38f.fr",
+                        "full_name": "Julien Lefèvre",
+                        "role": "Gérant",
+                        "is_admin": True,
+                        "is_primary_contact": True,
+                        "created_at": "2026-09-18T10:00:00Z",
+                    },
+                    {
+                        "id": "usr_bati_002",
+                        "email": "chantal.admin@batiprof38f.fr",
+                        "full_name": "Chantal Durand",
+                        "role": "Assistante de Direction",
+                        "is_admin": False,
+                        "is_primary_contact": False,
+                        "created_at": "2026-09-20T14:30:00Z",
+                    },
+                ],
                 "instance": {
                     "container_name": "orso_client_batipro_services",
                     "internal_route_key": "orso_client_batipro_services",
@@ -251,6 +311,35 @@ class OpsManager:
                     "phone": "+33 6 11 22 33 44",
                     "role": "CEO",
                 },
+                "users": [
+                    {
+                        "id": "usr_hexa_001",
+                        "email": "m.vasseur@hexatech.io",
+                        "full_name": "Marc Vasseur",
+                        "role": "CEO",
+                        "is_admin": True,
+                        "is_primary_contact": True,
+                        "created_at": "2026-09-10T11:00:00Z",
+                    },
+                    {
+                        "id": "usr_hexa_002",
+                        "email": "sarah.cto@hexatech.io",
+                        "full_name": "Sarah Bensaid",
+                        "role": "CTO",
+                        "is_admin": True,
+                        "is_primary_contact": False,
+                        "created_at": "2026-09-11T10:00:00Z",
+                    },
+                    {
+                        "id": "usr_hexa_003",
+                        "email": "hugo.support@hexatech.io",
+                        "full_name": "Hugo Moreau",
+                        "role": "Support Client",
+                        "is_admin": False,
+                        "is_primary_contact": False,
+                        "created_at": "2026-09-15T16:20:00Z",
+                    },
+                ],
                 "instance": {
                     "container_name": "orso_client_hexatech",
                     "internal_route_key": "orso_client_hexatech",
@@ -361,7 +450,24 @@ class OpsManager:
                 tenant_id = t.get("id")
                 cached = self._mock_tenants.get(tenant_id, {})
                 profiles = t.get("profiles", [])
-                primary_contact = profiles[0] if profiles else {}
+                user_list = []
+                for p in profiles:
+                    p_id = p.get("id")
+                    p_email = p.get("email") or auth_emails.get(p_id, "")
+                    user_list.append({
+                        "id": p_id,
+                        "email": p_email,
+                        "full_name": p.get("full_name") or "Utilisateur",
+                        "phone": p.get("phone", ""),
+                        "role": p.get("role") or "Membre",
+                        "is_admin": bool(p.get("is_admin", False) or p.get("role") == "admin"),
+                        "is_primary_contact": bool(p.get("is_primary_contact", False)),
+                        "created_at": p.get("created_at") or t.get("created_at"),
+                    })
+                if not user_list and cached.get("users"):
+                    user_list = list(cached.get("users", []))
+
+                primary_contact = next((u for u in user_list if u.get("is_primary_contact")), user_list[0] if user_list else {})
                 instances = t.get("tenant_instances", [])
                 instance_info = instances[0] if instances else {}
 
@@ -379,8 +485,7 @@ class OpsManager:
                     "current_period_end": t.get("created_at"),
                 }
 
-                contact_id = primary_contact.get("id")
-                email = primary_contact.get("email") or auth_emails.get(contact_id, "") or cached.get("contact", {}).get("email", "")
+                contact_email = primary_contact.get("email") or cached.get("contact", {}).get("email", "")
 
                 item = {
                     "id": tenant_id,
@@ -392,10 +497,11 @@ class OpsManager:
                     "created_at": t.get("created_at"),
                     "contact": {
                         "full_name": primary_contact.get("full_name", "Contact Principal"),
-                        "email": email,
+                        "email": contact_email,
                         "phone": primary_contact.get("phone", "") or cached.get("contact", {}).get("phone", ""),
                         "role": primary_contact.get("role", "Direction"),
                     },
+                    "users": user_list,
                     "instance": {
                         "container_name": instance_info.get("docker_container_name") or f"orso_client_{t.get('slug')}",
                         "status": instance_info.get("status", "ready"),
@@ -417,6 +523,151 @@ class OpsManager:
             if t["id"] == tenant_id or t.get("slug") == tenant_id:
                 return t
         return None
+
+    def get_tenant_users(self, tenant_id: str) -> List[Dict[str, Any]]:
+        """Retourne la liste complète des utilisateurs rattachés à un client."""
+        detail = self.get_tenant_detail(tenant_id)
+        if detail and "users" in detail:
+            return detail["users"]
+        return []
+
+    def create_tenant_user(
+        self,
+        tenant_id: str,
+        email: str,
+        password: Optional[str] = None,
+        full_name: str = "",
+        role: str = "Membre",
+        is_admin: bool = False,
+    ) -> Dict[str, Any]:
+        """Crée un nouvel utilisateur pour une organisation cliente.
+
+        Enregistre dans Supabase Auth (auth.users) et public.profiles si configuré,
+        ou dans le référentiel mémoire mock.
+        """
+        tenant_detail = self.get_tenant_detail(tenant_id)
+        if not tenant_detail:
+            raise ValueError(f"Organisation cliente {tenant_id} introuvable.")
+
+        actual_tenant_id = tenant_detail["id"]
+        tenant_slug = tenant_detail.get("slug", "")
+
+        user_password = password or f"Orso{int(time.time())}!"
+
+        # 1. Mode Supabase si configuré
+        if self.supabase_url and self.supabase_key:
+            admin_url = f"{self.supabase_url}/auth/v1/admin/users"
+            payload = {
+                "email": email,
+                "password": user_password,
+                "email_confirm": True,
+                "user_metadata": {
+                    "full_name": full_name,
+                    "role": role,
+                },
+                "app_metadata": {
+                    "tenant_id": actual_tenant_id,
+                    "tenant_slug": tenant_slug,
+                    "role": role,
+                    "is_admin": is_admin,
+                },
+            }
+            res_user = None
+            try:
+                req = urllib.request.Request(
+                    admin_url,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={
+                        "apikey": self.supabase_key,
+                        "Authorization": f"Bearer {self.supabase_key}",
+                        "Content-Type": "application/json",
+                        "User-Agent": "OrsoOlympeOps/1.0",
+                    },
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=5.0) as resp:
+                    res_user = json.loads(resp.read().decode("utf-8"))
+            except Exception as e:
+                _log.error("Échec création utilisateur Supabase Auth: %s", e)
+                raise ValueError(f"Impossible de créer l'utilisateur Supabase Auth : {e}")
+
+            user_id = res_user.get("id") if res_user else None
+            if not user_id:
+                raise ValueError("Identifiant utilisateur Supabase non renvoyé.")
+
+            # Insertion dans public.profiles
+            profile_payload = {
+                "id": user_id,
+                "tenant_id": actual_tenant_id,
+                "full_name": full_name,
+                "role": role,
+                "is_admin": is_admin,
+                "is_primary_contact": False,
+            }
+            self._query_supabase("profiles", method="POST", payload=profile_payload)
+            self._cached_auth_emails = None
+
+            created_user = {
+                "id": user_id,
+                "email": email,
+                "full_name": full_name,
+                "role": role,
+                "is_admin": is_admin,
+                "is_primary_contact": False,
+                "created_at": _format_timestamp(),
+            }
+            if actual_tenant_id in self._mock_tenants:
+                self._mock_tenants[actual_tenant_id].setdefault("users", []).append(created_user)
+            return created_user
+
+        # 2. Mode Mock Local
+        user_id = f"usr_{int(time.time())}_{len(self._mock_tenants)}"
+        created_user = {
+            "id": user_id,
+            "email": email,
+            "full_name": full_name,
+            "role": role,
+            "is_admin": is_admin,
+            "is_primary_contact": False,
+            "created_at": _format_timestamp(),
+        }
+        if actual_tenant_id in self._mock_tenants:
+            self._mock_tenants[actual_tenant_id].setdefault("users", []).append(created_user)
+
+        return created_user
+
+    def delete_tenant_user(self, tenant_id: str, user_id: str) -> bool:
+        """Supprime un utilisateur pour une organisation cliente."""
+        tenant_detail = self.get_tenant_detail(tenant_id)
+        if not tenant_detail:
+            return False
+        actual_tenant_id = tenant_detail["id"]
+
+        if self.supabase_url and self.supabase_key:
+            try:
+                self._query_supabase(f"profiles?id=eq.{user_id}", method="DELETE")
+                del_url = f"{self.supabase_url}/auth/v1/admin/users/{user_id}"
+                req = urllib.request.Request(
+                    del_url,
+                    headers={
+                        "apikey": self.supabase_key,
+                        "Authorization": f"Bearer {self.supabase_key}",
+                        "User-Agent": "OrsoOlympeOps/1.0",
+                    },
+                    method="DELETE",
+                )
+                with urllib.request.urlopen(req, timeout=5.0):
+                    pass
+                self._cached_auth_emails = None
+            except Exception as e:
+                _log.warning("Erreur suppression utilisateur Supabase: %s", e)
+
+        if actual_tenant_id in self._mock_tenants:
+            users = self._mock_tenants[actual_tenant_id].get("users", [])
+            self._mock_tenants[actual_tenant_id]["users"] = [u for u in users if u["id"] != user_id]
+            return True
+
+        return True
 
     def update_tenant_agents(
         self,

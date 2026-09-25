@@ -1,7 +1,26 @@
-import React, { useState } from "react";
-import { X, Save, Clock, CheckCircle, Play, Square, ExternalLink } from "lucide-react";
-import { Tenant, AgentId } from "../types";
+import React, { useState, useEffect } from "react";
+import {
+  X,
+  Save,
+  Clock,
+  CheckCircle,
+  Play,
+  Square,
+  ExternalLink,
+  Users,
+  UserPlus,
+  Shield,
+  ShieldCheck,
+  UserCheck,
+  Trash2,
+  RefreshCw,
+  AlertCircle,
+  Eye,
+  EyeOff,
+} from "lucide-react";
+import { Tenant, AgentId, TenantUser } from "../types";
 import { AGENTS_CATALOG } from "../data";
+import { fetchTenantUsers, createTenantUser, deleteTenantUser } from "../api";
 
 interface TenantDetailModalProps {
   tenant: Tenant | null;
@@ -39,8 +58,90 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
     tenant.subscription.tier_id
   );
 
+  // État local des utilisateurs
+  const [users, setUsers] = useState<TenantUser[]>(tenant.users || []);
+  const [isAddingUser, setIsAddingUser] = useState(false);
+  const [newEmail, setNewEmail] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [newFullName, setNewFullName] = useState("");
+  const [newRole, setNewRole] = useState("Membre");
+  const [newIsAdmin, setNewIsAdmin] = useState(false);
+  const [userSubmitting, setUserSubmitting] = useState(false);
+  const [userError, setUserError] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
+
   const [saving, setSaving] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Synchronisation des utilisateurs si nécessaire
+  useEffect(() => {
+    if (tenant?.id) {
+      fetchTenantUsers(tenant.id)
+        .then((res) => {
+          if (res && res.length > 0) setUsers(res);
+        })
+        .catch((err) => console.warn("Erreur chargement utilisateurs tenant:", err));
+    }
+  }, [tenant?.id]);
+
+  const generatePassword = () => {
+    const chars = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%";
+    let pass = "Orso26!";
+    for (let i = 0; i < 6; i++) {
+      pass += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    setNewPassword(pass);
+  };
+
+  const handleCreateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newEmail || !newFullName) {
+      setUserError("L'adresse email et le nom complet sont obligatoires.");
+      return;
+    }
+    setUserSubmitting(true);
+    setUserError(null);
+    try {
+      const created = await createTenantUser(tenant.id, {
+        email: newEmail.trim(),
+        password: newPassword.trim() || undefined,
+        full_name: newFullName.trim(),
+        role: newRole.trim() || "Membre",
+        is_admin: newIsAdmin,
+      });
+      setUsers((prev) => [...prev, created]);
+      setIsAddingUser(false);
+      setNewEmail("");
+      setNewPassword("");
+      setNewFullName("");
+      setNewRole("Membre");
+      setNewIsAdmin(false);
+      setToastMessage(`Utilisateur ${created.email} créé avec succès !`);
+      setTimeout(() => setToastMessage(null), 3000);
+    } catch (err: any) {
+      setUserError(err?.message || "Erreur lors de la création de l'utilisateur.");
+    } finally {
+      setUserSubmitting(false);
+    }
+  };
+
+  const handleDeleteUser = async (user: TenantUser) => {
+    if (user.is_primary_contact) {
+      alert("Le contact principal ne peut pas être supprimé directement.");
+      return;
+    }
+    if (!window.confirm(`Confirmez-vous la révocation du compte de ${user.full_name} (${user.email}) ?`)) {
+      return;
+    }
+    try {
+      await deleteTenantUser(tenant.id, user.id);
+      setUsers((prev) => prev.filter((u) => u.id !== user.id));
+      setToastMessage(`Utilisateur ${user.email} révoqué.`);
+      setTimeout(() => setToastMessage(null), 3000);
+    } catch (err: any) {
+      alert("Erreur suppression: " + err.message);
+    }
+  };
 
   // Toggle agent
   const handleToggleAgent = (agentId: AgentId) => {
@@ -201,6 +302,241 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
                   <ExternalLink className="w-4 h-4" />
                 </a>
               </div>
+            </div>
+          </div>
+
+          {/* Section : Collaborateurs & Droits d'Accès */}
+          <div className="p-5 rounded-3xl bg-slate-950/70 border border-slate-800 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center space-x-2">
+                  <Users className="w-4 h-4 text-sky-400" />
+                  <h3 className="text-base font-bold text-white">Collaborateurs & Accès Entreprise</h3>
+                  <span className="px-2 py-0.5 rounded-full text-xs font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20">
+                    {users.length} utilisateur{users.length > 1 ? "s" : ""}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mt-1">
+                  Gérez les utilisateurs autorisés à se connecter sur l'espace client. Le rôle Administrateur débloque les onglets Interfaces, ERP et Canaux.
+                </p>
+              </div>
+
+              {!isAddingUser && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsAddingUser(true);
+                    generatePassword();
+                  }}
+                  className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-sky-500 hover:bg-sky-400 text-slate-950 flex items-center space-x-1.5 transition-all self-start sm:self-auto shadow-md shadow-sky-500/10"
+                >
+                  <UserPlus className="w-3.5 h-3.5" />
+                  <span>+ Nouvel utilisateur</span>
+                </button>
+              )}
+            </div>
+
+            {/* Formulaire d'ajout d'utilisateur */}
+            {isAddingUser && (
+              <form onSubmit={handleCreateUser} className="p-4 rounded-2xl bg-slate-900 border border-sky-500/30 space-y-4">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                  <span className="text-xs font-bold text-white uppercase tracking-wider flex items-center space-x-1.5">
+                    <UserPlus className="w-3.5 h-3.5 text-sky-400" />
+                    <span>Créer un nouvel accès utilisateur</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAddingUser(false);
+                      setUserError(null);
+                    }}
+                    className="text-slate-400 hover:text-white text-xs"
+                  >
+                    Fermer
+                  </button>
+                </div>
+
+                {userError && (
+                  <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs flex items-center space-x-2">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{userError}</span>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {/* Email */}
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-1">
+                      Adresse email (Identifiant de login) *
+                    </label>
+                    <input
+                      type="email"
+                      required
+                      placeholder="nom.prenom@entreprise.fr"
+                      value={newEmail}
+                      onChange={(e) => setNewEmail(e.target.value)}
+                      className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-sky-500"
+                    />
+                  </div>
+
+                  {/* Mot de passe */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-medium text-slate-400">Mot de passe de connexion</label>
+                      <button
+                        type="button"
+                        onClick={generatePassword}
+                        className="text-[10px] text-sky-400 hover:text-sky-300 flex items-center space-x-1"
+                      >
+                        <RefreshCw className="w-2.5 h-2.5" />
+                        <span>Générer</span>
+                      </button>
+                    </div>
+                    <div className="relative">
+                      <input
+                        type={showPassword ? "text" : "password"}
+                        placeholder="Mot de passe sécurisé"
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        className="w-full px-3 py-1.5 pr-8 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder:text-slate-600 font-mono focus:outline-none focus:border-sky-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                      >
+                        {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Nom complet */}
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-1">Nom et Prénom *</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Marc Dupont"
+                      value={newFullName}
+                      onChange={(e) => setNewFullName(e.target.value)}
+                      className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-sky-500"
+                    />
+                  </div>
+
+                  {/* Rôle dans la société */}
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-1">Rôle dans la société</label>
+                    <input
+                      type="text"
+                      placeholder="ex: DAF, Commercial, Comptable, Assistant"
+                      value={newRole}
+                      onChange={(e) => setNewRole(e.target.value)}
+                      className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-sky-500"
+                    />
+                  </div>
+                </div>
+
+                {/* Switch Admin */}
+                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-between">
+                  <div className="pr-4">
+                    <div className="text-xs font-bold text-white flex items-center space-x-1.5">
+                      <Shield className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Droits Administrateur Client</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      Permet d'afficher et de paramétrer les onglets Interfaces, ERP et Canaux de discussion dans l'interface client. (Les utilisateurs standards accèdent uniquement à la Discussion).
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setNewIsAdmin(!newIsAdmin)}
+                    className={`w-11 h-6 flex items-center rounded-full p-1 transition-colors shrink-0 ${
+                      newIsAdmin ? "bg-emerald-500" : "bg-slate-800"
+                    }`}
+                  >
+                    <div
+                      className={`bg-white w-4 h-4 rounded-full shadow-md transform transition-transform ${
+                        newIsAdmin ? "translate-x-5" : "translate-x-0"
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-end space-x-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAddingUser(false);
+                      setUserError(null);
+                    }}
+                    className="px-3 py-1.5 rounded-xl text-xs text-slate-400 hover:text-white hover:bg-slate-800"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={userSubmitting}
+                    className="px-4 py-1.5 rounded-xl text-xs font-bold bg-sky-500 hover:bg-sky-400 text-slate-950 flex items-center space-x-1.5 disabled:opacity-50"
+                  >
+                    {userSubmitting ? "Création en cours..." : "Créer le collaborateur"}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* Liste des utilisateurs */}
+            <div className="space-y-2">
+              {users.map((u) => (
+                <div
+                  key={u.id || u.email}
+                  className="p-3 rounded-2xl bg-slate-900/90 border border-slate-800/80 flex items-center justify-between gap-3 hover:border-slate-700 transition-colors"
+                >
+                  <div className="flex items-center space-x-3 min-w-0">
+                    <div className="w-8 h-8 rounded-xl bg-slate-800 text-sky-400 border border-slate-700 font-bold text-xs flex items-center justify-center shrink-0">
+                      {u.full_name ? u.full_name[0].toUpperCase() : "U"}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center space-x-2">
+                        <span className="text-xs font-bold text-white truncate">{u.full_name}</span>
+                        {u.is_primary_contact && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 text-amber-300 border border-amber-500/20 shrink-0">
+                            Contact Principal
+                          </span>
+                        )}
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-800 text-slate-300 border border-slate-700 truncate">
+                          {u.role || "Membre"}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-slate-400 truncate mt-0.5">{u.email}</div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center space-x-2 shrink-0">
+                    {u.is_admin ? (
+                      <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                        <ShieldCheck className="w-3 h-3" />
+                        <span>Admin (Tous onglets)</span>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-800 text-slate-400 border border-slate-700">
+                        <UserCheck className="w-3 h-3" />
+                        <span>Discussion seule</span>
+                      </span>
+                    )}
+
+                    {!u.is_primary_contact && (
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteUser(u)}
+                        title="Révoquer l'accès"
+                        className="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-slate-800 rounded-lg transition-colors"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
 

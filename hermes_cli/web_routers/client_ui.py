@@ -1443,6 +1443,15 @@ async def client_auth_login(req: ClientLoginRequest, request: Request):
                     detail="Accès refusé : Vos identifiants ne vous permettent pas d'accéder à cette instance.",
                 )
 
+    raw_tenant = app_meta.get("tenant") if isinstance(app_meta.get("tenant"), dict) else {}
+    is_admin = bool(
+        app_meta.get("is_admin")
+        or raw_tenant.get("is_admin")
+        or user_meta.get("is_admin")
+        or app_meta.get("role") in ("admin", "direction", "superadmin")
+        or raw_tenant.get("role") in ("admin", "direction", "superadmin")
+    )
+
     response_data = {
         "success": True,
         "access_token": access_token,
@@ -1452,7 +1461,8 @@ async def client_auth_login(req: ClientLoginRequest, request: Request):
             "id": user_info.get("id"),
             "email": user_info.get("email"),
             "full_name": user_meta.get("full_name") or user_info.get("email"),
-            "role": app_meta.get("role", "client"),
+            "role": user_meta.get("role") or raw_tenant.get("role") or app_meta.get("role", "client"),
+            "is_admin": is_admin,
         },
         "tenant": {
             "tenant_id": token_tenant_id,
@@ -1479,6 +1489,7 @@ async def client_auth_me(auth: Dict[str, Any] = Depends(verify_client_access)):
     """Retourne les informations du client actuellement connecté."""
     tenant = dict(auth.get("tenant") or auth.get("app_metadata") or {})
     user_meta = auth.get("user_metadata") or {}
+    app_meta = auth.get("app_metadata") or {}
     tenant_id = tenant.get("tenant_id") or os.environ.get("ORSO_CLIENT_ID")
     tenant_slug = tenant.get("tenant_slug") or os.environ.get("ORSO_CLIENT_SLUG")
     tenant["agents"] = _get_tenant_enabled_agents(
@@ -1486,13 +1497,21 @@ async def client_auth_me(auth: Dict[str, Any] = Depends(verify_client_access)):
         tenant_slug=tenant_slug,
         auth_agents=tenant.get("agents"),
     )
+    is_admin = bool(
+        tenant.get("is_admin")
+        or app_meta.get("is_admin")
+        or user_meta.get("is_admin")
+        or tenant.get("role") in ("admin", "direction", "superadmin")
+        or app_meta.get("role") in ("admin", "direction", "superadmin")
+    )
     return {
         "authenticated": True,
         "user": {
             "id": auth.get("sub"),
             "email": auth.get("email"),
             "full_name": user_meta.get("full_name") or auth.get("email"),
-            "role": tenant.get("role", "client"),
+            "role": user_meta.get("role") or tenant.get("role", "client"),
+            "is_admin": is_admin,
         },
         "tenant": tenant,
     }

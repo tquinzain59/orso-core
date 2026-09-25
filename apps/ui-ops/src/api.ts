@@ -1,4 +1,4 @@
-import { Tenant, OpsStats, Invoice, AgentId, TrialConfig, AdminUser, LoginResponse } from "./types";
+import { Tenant, TenantUser, OpsStats, Invoice, AgentId, TrialConfig, AdminUser, LoginResponse } from "./types";
 
 const TOKEN_KEY = "orso_ops_auth_token";
 const USER_KEY = "orso_ops_auth_user";
@@ -199,3 +199,49 @@ export async function suspendContainer(slug: string): Promise<{ success: boolean
   });
   return res.json();
 }
+
+export async function fetchTenantUsers(tenantId: string): Promise<TenantUser[]> {
+  const res = await fetch(`${getBaseUrl()}/api/olympe/ops/tenants/${tenantId}/users`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(`Erreur récupération utilisateurs (${res.status})`);
+  }
+  const data = await res.json();
+  return data.users || [];
+}
+
+export async function createTenantUser(
+  tenantId: string,
+  payload: {
+    email: string;
+    password?: string;
+    full_name: string;
+    role: string;
+    is_admin: boolean;
+  }
+): Promise<TenantUser> {
+  const res = await fetch(`${getBaseUrl()}/api/olympe/ops/tenants/${tenantId}/users`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Erreur création utilisateur" }));
+    throw new Error(err.detail || `Échec création utilisateur (${res.status})`);
+  }
+  const data = await res.json();
+  return data.user;
+}
+
+export async function deleteTenantUser(tenantId: string, userId: string): Promise<{ success: boolean }> {
+  const res = await fetch(`${getBaseUrl()}/api/olympe/ops/tenants/${tenantId}/users/${userId}`, {
+    method: "DELETE",
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(`Échec suppression utilisateur (${res.status})`);
+  }
+  return res.json();
+}
+

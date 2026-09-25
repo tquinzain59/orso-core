@@ -110,6 +110,7 @@ async def verify_client_access(request: Request) -> Dict[str, Any]:
                 "tenant_id": os.environ.get("ORSO_CLIENT_ID", "dev-tenant"),
                 "tenant_slug": os.environ.get("ORSO_CLIENT_SLUG", "dev-tenant"),
                 "role": "admin",
+                "is_admin": True,
                 "agents": ["jerome", "lucas", "clara", "victor"],
             },
         }
