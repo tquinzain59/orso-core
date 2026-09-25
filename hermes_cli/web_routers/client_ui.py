@@ -472,30 +472,33 @@ _SEED_CHANNELS: Dict[str, List[Dict[str, Any]]] = {
             "name": "WhatsApp Business",
             "tagline": "Liaison directe avec vos clients & tiers",
             "description": "Permet à Jérôme et Lucas de dialoguer directement par WhatsApp pour obtenir des confirmations de virement ou qualifier des prospects.",
-            "status": "connected",
-            "connectedAccount": "+33 6 42 00 12 34 (Numéro Entreprise)",
-            "allowedUsers": ["+33642001234", "+33612345678"],
-            "stats": {"messagesToday": 12, "activeSessions": 3},
+            "status": "disconnected",
+            "connectedAccount": "Non configuré",
+            "allowedUsers": [],
+            "stats": {"messagesToday": 0, "activeSessions": 0},
+            "configKey": "WHATSAPP_TOKEN",
         },
         {
             "id": "telegram",
             "name": "Telegram (Console Dirigeant)",
             "tagline": "Notifications et alertes prioritaires sur mobile",
             "description": "Votre canal direct pour recevoir les alertes BODACC urgentes, vérifier un client via /check et consulter vos chiffres sans ouvrir votre ordinateur.",
-            "status": "connected",
-            "connectedAccount": "@OrsoDirigeantBot (Lié à votre compte)",
-            "allowedUsers": ["741298453 (Dirigeant)"],
-            "stats": {"messagesToday": 4, "activeSessions": 1},
+            "status": "disconnected",
+            "connectedAccount": "Non configuré",
+            "allowedUsers": [],
+            "stats": {"messagesToday": 0, "activeSessions": 0},
+            "configKey": "TELEGRAM_BOT_TOKEN",
         },
         {
             "id": "email",
             "name": "Email Gateway",
             "tagline": "Envoi automatique et suivi des réponses",
             "description": "Canal de relance par défaut pour l’envoi des courriers de relance niveau 1, 2 et mise en demeure.",
-            "status": "connected",
-            "connectedAccount": "recouvrement@finarecee20.fr",
-            "allowedUsers": ["sophie.martin@finarecee20.fr", "direction@finarecee20.fr"],
-            "stats": {"messagesToday": 26, "activeSessions": 8},
+            "status": "disconnected",
+            "connectedAccount": "Non configuré",
+            "allowedUsers": ["sophie.martin@financia-solutions.fr"],
+            "stats": {"messagesToday": 0, "activeSessions": 0},
+            "configKey": "SMTP_HOST",
         },
     ],
     "commercialink": [
@@ -504,99 +507,26 @@ _SEED_CHANNELS: Dict[str, List[Dict[str, Any]]] = {
             "name": "WhatsApp Business",
             "tagline": "Liaison directe avec vos prospects",
             "description": "Permet à Lucas de dialoguer sur WhatsApp pour la prise de rendez-vous commercial.",
-            "status": "connected",
-            "connectedAccount": "+33 1 56 78 90 12",
-            "allowedUsers": ["+33156789012"],
-            "stats": {"messagesToday": 18, "activeSessions": 5},
+            "status": "disconnected",
+            "connectedAccount": "Non configuré",
+            "allowedUsers": [],
+            "stats": {"messagesToday": 0, "activeSessions": 0},
+            "configKey": "WHATSAPP_TOKEN",
         },
         {
             "id": "email",
             "name": "Email Gateway",
             "tagline": "Séquences de prospection commerciale",
             "description": "Envoi des devis et séquences de relance commerciale.",
-            "status": "connected",
-            "connectedAccount": "commercial@servicallc322.com",
-            "allowedUsers": ["claire.dubois@servicallc322.com"],
-            "stats": {"messagesToday": 42, "activeSessions": 12},
-        },
-    ],
-    "helpdesk360": [
-        {
-            "id": "whatsapp",
-            "name": "WhatsApp SAV Client",
-            "tagline": "Assistance réactive en direct",
-            "description": "Prise en charge instantanée des questions récurrentes des clients.",
-            "status": "connected",
-            "connectedAccount": "+33 9 12 34 56 78",
-            "allowedUsers": ["+33912345678"],
-            "stats": {"messagesToday": 29, "activeSessions": 7},
-        },
-        {
-            "id": "email",
-            "name": "Support Mail Gateway",
-            "tagline": "Gestion des dossiers réclamations",
-            "description": "Accusés de réception et résolution des litiges factures.",
-            "status": "connected",
-            "connectedAccount": "support@recoviaa60a.fr",
-            "allowedUsers": ["h.bernard@recoviaa60a.fr"],
-            "stats": {"messagesToday": 63, "activeSessions": 15},
-        },
-    ],
-    "batipro-services": [
-        {
-            "id": "telegram",
-            "name": "Telegram Alertes Marchés",
-            "tagline": "Notification instantanée des nouveaux appels d’offres",
-            "description": "Alerte dès qu’un marché public BTP correspond aux critères de qualification.",
-            "status": "connected",
-            "connectedAccount": "@BatiProMarchesBot",
-            "allowedUsers": ["julien.lefevre@batiprof38f.fr"],
-            "stats": {"messagesToday": 5, "activeSessions": 1},
-        },
-        {
-            "id": "email",
-            "name": "Email AO Gateway",
-            "tagline": "Dépôt des dossiers de candidature",
-            "description": "Correspondance avec les acheteurs publics et plateformes DCE.",
-            "status": "connected",
-            "connectedAccount": "marches@batiprof38f.fr",
-            "allowedUsers": ["julien.lefevre@batiprof38f.fr"],
-            "stats": {"messagesToday": 8, "activeSessions": 2},
-        },
-    ],
-    "eurotech-conseil": [
-        {
-            "id": "whatsapp",
-            "name": "WhatsApp Business Pro",
-            "tagline": "Canal client & prospects unifié",
-            "description": "Liaison directe pour Jérôme, Lucas et Clara.",
-            "status": "connected",
-            "connectedAccount": "+33 6 98 76 54 32",
-            "allowedUsers": ["+33698765432"],
-            "stats": {"messagesToday": 35, "activeSessions": 9},
-        },
-        {
-            "id": "telegram",
-            "name": "Telegram Direction Console",
-            "tagline": "Console mobile d’arbitrage pour dirigeants",
-            "description": "Arbitrage 1-clic pour les relances, devis et litiges.",
-            "status": "connected",
-            "connectedAccount": "@EuroTechDirigeantBot",
-            "allowedUsers": ["amelie.petit@ventelinkc009.com"],
-            "stats": {"messagesToday": 14, "activeSessions": 3},
-        },
-        {
-            "id": "email",
-            "name": "Email Suite Gateway",
-            "tagline": "Relances, devis et service client",
-            "description": "Passerelle mail unifiée pour la flotte d’agents.",
-            "status": "connected",
-            "connectedAccount": "contact@ventelinkc009.com",
-            "allowedUsers": ["amelie.petit@ventelinkc009.com"],
-            "stats": {"messagesToday": 78, "activeSessions": 22},
+            "status": "disconnected",
+            "connectedAccount": "Non configuré",
+            "allowedUsers": ["claire.dubois@commercialink.fr"],
+            "stats": {"messagesToday": 0, "activeSessions": 0},
+            "configKey": "SMTP_HOST",
         },
     ],
 }
+
 
 
 def _get_tenant_enabled_agents(
@@ -926,11 +856,24 @@ def _sync_tenant_integration(
     return updated
 
 
-def _get_tenant_channels(
+_CHANNEL_ALLOWED_USERS: Dict[Tuple[str, str], List[str]] = {}
+
+
+def _probe_hermes_backoffice_channels(
     tenant_id: Optional[str] = None,
     tenant_slug: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Charge les canaux de communication pour ce tenant depuis Supabase ou le référentiel de base."""
+    """Sonde dynamiquement l'état réel des passerelles de communication du moteur Hermès."""
+    slug = (tenant_slug or "").lower()
+    if not slug and tenant_id:
+        for t_slug, t_info in _SEED_TENANTS.items():
+            if t_info.get("id") == tenant_id:
+                slug = t_slug
+                break
+    if not slug:
+        slug = "financia-solutions"
+
+    # 1. Vérification si Supabase contient des canaux configurés pour ce tenant
     supabase_url = os.environ.get("SUPABASE_URL", "").strip()
     service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
     if supabase_url and service_key and tenant_id:
@@ -949,30 +892,140 @@ def _get_tenant_channels(
                 if data and len(data) > 0:
                     result = []
                     for row in data:
+                        ch_id = row.get("channel_id") or row.get("id")
+                        mem_allowed = _CHANNEL_ALLOWED_USERS.get((slug, ch_id))
+                        allowed = mem_allowed if mem_allowed is not None else row.get("allowed_users", [])
                         result.append({
-                            "id": row.get("channel_id") or row.get("id"),
+                            "id": ch_id,
                             "name": row.get("name"),
                             "tagline": row.get("tagline"),
                             "description": row.get("description"),
                             "status": row.get("status", "connected"),
                             "connectedAccount": row.get("connected_account"),
-                            "allowedUsers": row.get("allowed_users", []),
+                            "allowedUsers": allowed,
                             "stats": row.get("stats", {"messagesToday": 0, "activeSessions": 0}),
+                            "configKey": row.get("config_key"),
+                            "metrics": row.get("metrics", "Configuré dans Supabase"),
+                            "syncStatus": "success",
                         })
                     return result
         except Exception as e:
             _log.debug("Erreur lecture tenant_channels Supabase: %s", e)
 
-    slug = (tenant_slug or "").lower()
-    if not slug and tenant_id:
-        for t_slug, t_info in _SEED_TENANTS.items():
-            if t_info.get("id") == tenant_id:
-                slug = t_slug
-                break
-    if slug not in _SEED_CHANNELS:
-        slug = "financia-solutions"
+    # 2. Sondage dynamique depuis les configurations réelles d'Hermès
+    probed_channels: List[Dict[str, Any]] = []
 
-    return list(_SEED_CHANNELS.get(slug, []))
+    # A. WhatsApp Business
+    has_whatsapp = bool(os.environ.get("WHATSAPP_TOKEN") or os.environ.get("WHATSAPP_PHONE_NUMBER_ID") or os.environ.get("WHATSAPP_API_KEY"))
+    wa_key = (slug, "whatsapp")
+    wa_allowed = _CHANNEL_ALLOWED_USERS.get(wa_key)
+    if wa_allowed is None:
+        wa_allowed = []
+
+    probed_channels.append({
+        "id": "whatsapp",
+        "name": "WhatsApp Business",
+        "tagline": "Liaison directe avec vos clients & tiers",
+        "description": "Permet aux agents d’échanger directement par WhatsApp pour obtenir des confirmations de virement ou qualifier des prospects.",
+        "status": "connected" if has_whatsapp else "disconnected",
+        "connectedAccount": "WhatsApp Cloud API (Connecté)" if has_whatsapp else "Non configuré",
+        "allowedUsers": wa_allowed,
+        "stats": {"messagesToday": 0, "activeSessions": 0},
+        "configKey": "WHATSAPP_TOKEN",
+        "metrics": "Passerelle WhatsApp Cloud active" if has_whatsapp else "Requiert WHATSAPP_TOKEN",
+        "syncStatus": "success" if has_whatsapp else "offline",
+    })
+
+    # B. Telegram (Console Dirigeant)
+    has_telegram = bool(os.environ.get("TELEGRAM_BOT_TOKEN", "").strip())
+    tg_key = (slug, "telegram")
+    tg_allowed = _CHANNEL_ALLOWED_USERS.get(tg_key)
+    if tg_allowed is None:
+        tg_allowed = []
+
+    probed_channels.append({
+        "id": "telegram",
+        "name": "Telegram (Console Dirigeant)",
+        "tagline": "Notifications et alertes prioritaires sur mobile",
+        "description": "Votre canal direct pour recevoir les alertes BODACC urgentes, interroger vos agents via /check et consulter vos chiffres sans ouvrir votre ordinateur.",
+        "status": "connected" if has_telegram else "disconnected",
+        "connectedAccount": "@Bot Telegram (Connecté)" if has_telegram else "Non configuré",
+        "allowedUsers": tg_allowed,
+        "stats": {"messagesToday": 0, "activeSessions": 0},
+        "configKey": "TELEGRAM_BOT_TOKEN",
+        "metrics": "Passerelle Telegram active et prête" if has_telegram else "Requiert TELEGRAM_BOT_TOKEN",
+        "syncStatus": "success" if has_telegram else "offline",
+    })
+
+    # C. Passerelle Email (SMTP / IMAP / Resend)
+    smtp_host = os.environ.get("SMTP_HOST", "").strip()
+    resend_key = os.environ.get("RESEND_API_KEY", "").strip()
+    mailgun_key = os.environ.get("MAILGUN_API_KEY", "").strip()
+    has_email = bool(smtp_host or resend_key or mailgun_key or os.environ.get("SMTP_USER"))
+    email_account = os.environ.get("SMTP_USER") or os.environ.get("EMAIL_FROM") or ("Serveur SMTP configuré" if has_email else "Non configuré")
+    email_key = (slug, "email")
+    email_allowed = _CHANNEL_ALLOWED_USERS.get(email_key)
+    if email_allowed is None:
+        t_contact = _SEED_TENANTS.get(slug, {}).get("contact_email")
+        email_allowed = [t_contact] if t_contact else []
+
+    probed_channels.append({
+        "id": "email",
+        "name": "Email Gateway",
+        "tagline": "Envoi automatique et suivi des réponses",
+        "description": "Canal de relance et de correspondance officielle pour l’envoi des courriers de relance, devis et justificatifs.",
+        "status": "connected" if has_email else "disconnected",
+        "connectedAccount": email_account,
+        "allowedUsers": email_allowed,
+        "stats": {"messagesToday": 0, "activeSessions": 0},
+        "configKey": "SMTP_HOST",
+        "metrics": "Passerelle SMTP active" if has_email else "Requiert SMTP_HOST ou RESEND_API_KEY",
+        "syncStatus": "success" if has_email else "offline",
+    })
+
+    # D. Slack si configuré
+    if os.environ.get("SLACK_BOT_TOKEN"):
+        slack_allowed = _CHANNEL_ALLOWED_USERS.get((slug, "slack"), [])
+        probed_channels.append({
+            "id": "slack",
+            "name": "Slack Gateway",
+            "tagline": "Canaux d'équipe et alertes internes",
+            "description": "Diffusion des alertes et discussions directes dans vos canaux Slack d'entreprise.",
+            "status": "connected",
+            "connectedAccount": "Bot Slack actif",
+            "allowedUsers": slack_allowed,
+            "stats": {"messagesToday": 0, "activeSessions": 0},
+            "configKey": "SLACK_BOT_TOKEN",
+            "metrics": "Passerelle Slack connectée",
+            "syncStatus": "success",
+        })
+
+    # E. Discord si configuré
+    if os.environ.get("DISCORD_BOT_TOKEN"):
+        discord_allowed = _CHANNEL_ALLOWED_USERS.get((slug, "discord"), [])
+        probed_channels.append({
+            "id": "discord",
+            "name": "Discord Gateway",
+            "tagline": "Salons de supervision et notifications",
+            "description": "Envoi des notifications et échanges sur votre serveur Discord.",
+            "status": "connected",
+            "connectedAccount": "Bot Discord actif",
+            "allowedUsers": discord_allowed,
+            "stats": {"messagesToday": 0, "activeSessions": 0},
+            "configKey": "DISCORD_BOT_TOKEN",
+            "metrics": "Passerelle Discord connectée",
+            "syncStatus": "success",
+        })
+
+    return probed_channels
+
+
+def _get_tenant_channels(
+    tenant_id: Optional[str] = None,
+    tenant_slug: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Charge les canaux de communication réels pour ce tenant depuis Hermès ou Supabase."""
+    return _probe_hermes_backoffice_channels(tenant_id=tenant_id, tenant_slug=tenant_slug)
 
 
 def _add_channel_user(
@@ -988,17 +1041,24 @@ def _add_channel_user(
             if t_info.get("id") == tenant_id:
                 slug = t_slug
                 break
-    if slug not in _SEED_CHANNELS:
+    if not slug:
         slug = "financia-solutions"
 
     clean_user = user.strip()
-    users: List[str] = []
-    for c in _SEED_CHANNELS.get(slug, []):
-        if c["id"] == channel_id:
-            if clean_user and clean_user not in c["allowedUsers"]:
-                c["allowedUsers"].append(clean_user)
-            users = c["allowedUsers"]
-            break
+    key = (slug, channel_id)
+    if key not in _CHANNEL_ALLOWED_USERS:
+        channels = _probe_hermes_backoffice_channels(tenant_id=tenant_id, tenant_slug=tenant_slug)
+        for c in channels:
+            if c["id"] == channel_id:
+                _CHANNEL_ALLOWED_USERS[key] = list(c.get("allowedUsers", []))
+                break
+        if key not in _CHANNEL_ALLOWED_USERS:
+            _CHANNEL_ALLOWED_USERS[key] = []
+
+    if clean_user and clean_user not in _CHANNEL_ALLOWED_USERS[key]:
+        _CHANNEL_ALLOWED_USERS[key].append(clean_user)
+
+    users = _CHANNEL_ALLOWED_USERS[key]
 
     supabase_url = os.environ.get("SUPABASE_URL", "").strip()
     service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
@@ -1036,15 +1096,21 @@ def _remove_channel_user(
             if t_info.get("id") == tenant_id:
                 slug = t_slug
                 break
-    if slug not in _SEED_CHANNELS:
+    if not slug:
         slug = "financia-solutions"
 
-    users: List[str] = []
-    for c in _SEED_CHANNELS.get(slug, []):
-        if c["id"] == channel_id:
-            c["allowedUsers"] = [u for u in c["allowedUsers"] if u != user]
-            users = c["allowedUsers"]
-            break
+    key = (slug, channel_id)
+    if key not in _CHANNEL_ALLOWED_USERS:
+        channels = _probe_hermes_backoffice_channels(tenant_id=tenant_id, tenant_slug=tenant_slug)
+        for c in channels:
+            if c["id"] == channel_id:
+                _CHANNEL_ALLOWED_USERS[key] = list(c.get("allowedUsers", []))
+                break
+        if key not in _CHANNEL_ALLOWED_USERS:
+            _CHANNEL_ALLOWED_USERS[key] = []
+
+    _CHANNEL_ALLOWED_USERS[key] = [u for u in _CHANNEL_ALLOWED_USERS[key] if u != user]
+    users = _CHANNEL_ALLOWED_USERS[key]
 
     supabase_url = os.environ.get("SUPABASE_URL", "").strip()
     service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
@@ -1067,6 +1133,7 @@ def _remove_channel_user(
             _log.debug("Erreur update tenant_channels Supabase: %s", e)
 
     return users
+
 
 def _find_profile_dir(agent_id: str) -> Optional[Path]:
     """Localise le dossier du profil de l'agent dans les emplacements possibles."""

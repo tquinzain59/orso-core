@@ -65,7 +65,7 @@ export interface Integration {
   configKey?: string;
 }
 
-export type ChannelId = 'whatsapp' | 'telegram' | 'email';
+export type ChannelId = 'whatsapp' | 'telegram' | 'email' | 'slack' | 'discord' | string;
 
 export interface MessagingChannel {
   id: ChannelId;
@@ -79,4 +79,8 @@ export interface MessagingChannel {
     messagesToday: number;
     activeSessions: number;
   };
+  configKey?: string;
+  metrics?: string;
+  syncStatus?: 'success' | 'idle' | 'offline' | 'error';
 }
+

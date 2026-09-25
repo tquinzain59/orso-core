@@ -529,3 +529,50 @@ def test_client_integrations_backoffice_real_detection(monkeypatch):
     assert "hermes-web-search" in by_id
     assert by_id["hermes-web-search"]["status"] == "connected"
     assert by_id["hermes-web-search"]["category"] == "tools"
+
+
+def test_client_channels_backoffice_real_detection(monkeypatch):
+    """Vérifie la détection dynamique des canaux configurés dans le backoffice Hermès."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from hermes_cli.web_routers.client_ui import router
+
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", "test-jwt-secret")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456789:ABCdefGHI_test")
+    monkeypatch.setenv("SMTP_HOST", "smtp.office365.com")
+    monkeypatch.setenv("SMTP_USER", "relances@entreprise.fr")
+    monkeypatch.delenv("WHATSAPP_TOKEN", raising=False)
+    monkeypatch.delenv("WHATSAPP_PHONE_NUMBER_ID", raising=False)
+    monkeypatch.delenv("WHATSAPP_API_KEY", raising=False)
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    token = _make_test_jwt(tenant_id="f3e25379-6531-479e-b276-3b3185e7421b", tenant_slug="financia-solutions")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    res = client.get("/api/client/channels", headers=headers)
+    assert res.status_code == 200
+    channels = res.json()["channels"]
+    by_id = {c["id"]: c for c in channels}
+
+    # 1. Telegram configuré avec token
+    assert "telegram" in by_id
+    assert by_id["telegram"]["status"] == "connected"
+    assert "Telegram" in by_id["telegram"]["name"]
+    assert by_id["telegram"]["configKey"] == "TELEGRAM_BOT_TOKEN"
+    assert by_id["telegram"]["stats"]["messagesToday"] == 0
+
+    # 2. Email configuré avec SMTP
+    assert "email" in by_id
+    assert by_id["email"]["status"] == "connected"
+    assert by_id["email"]["connectedAccount"] == "relances@entreprise.fr"
+    assert by_id["email"]["configKey"] == "SMTP_HOST"
+
+    # 3. WhatsApp non configuré
+    assert "whatsapp" in by_id
+    assert by_id["whatsapp"]["status"] == "disconnected"
+    assert by_id["whatsapp"]["connectedAccount"] == "Non configuré"
+    assert "Requiert WHATSAPP_TOKEN" in by_id["whatsapp"]["metrics"]
+
