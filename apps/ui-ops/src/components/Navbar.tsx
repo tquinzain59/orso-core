@@ -1,10 +1,10 @@
 import React from "react";
-import { LayoutDashboard, Users, CreditCard, Server, RefreshCw, ShieldCheck, LogOut, User } from "lucide-react";
+import { LayoutDashboard, Users, CreditCard, Server, RefreshCw, ShieldCheck, LogOut, User, Activity } from "lucide-react";
 import { AdminUser } from "../types";
 
 interface NavbarProps {
-  activeTab: "dashboard" | "tenants" | "billing" | "fleet";
-  setActiveTab: (tab: "dashboard" | "tenants" | "billing" | "fleet") => void;
+  activeTab: "dashboard" | "tenants" | "environments" | "billing" | "fleet";
+  setActiveTab: (tab: "dashboard" | "tenants" | "environments" | "billing" | "fleet") => void;
   onRefresh: () => void;
   loading: boolean;
   totalClients: number;
@@ -70,6 +70,18 @@ export const Navbar: React.FC<NavbarProps> = ({
                   {totalClients}
                 </span>
               )}
+            </button>
+
+            <button
+              onClick={() => setActiveTab("environments")}
+              className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm font-medium transition-all cursor-pointer ${
+                activeTab === "environments"
+                  ? "bg-slate-800 text-sky-400 shadow-sm border border-slate-700"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
+              }`}
+            >
+              <Activity className="w-4 h-4" />
+              <span>Environnements & Télémétrie</span>
             </button>
 
             <button

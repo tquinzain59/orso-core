@@ -4,6 +4,7 @@ import { DashboardView } from "./components/DashboardView";
 import { TenantsView } from "./components/TenantsView";
 import { BillingView } from "./components/BillingView";
 import { FleetView } from "./components/FleetView";
+import { EnvironmentsView } from "./components/EnvironmentsView";
 import { TenantDetailModal } from "./components/TenantDetailModal";
 import { LoginView } from "./components/LoginView";
 import { Tenant, OpsStats, Invoice, AgentId, AdminUser } from "./types";
@@ -25,7 +26,7 @@ import { Loader2 } from "lucide-react";
 export const App: React.FC = () => {
   const [adminUser, setAdminUser] = useState<AdminUser | null>(getStoredUser());
   const [checkingAuth, setCheckingAuth] = useState<boolean>(true);
-  const [activeTab, setActiveTab] = useState<"dashboard" | "tenants" | "billing" | "fleet">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "tenants" | "environments" | "billing" | "fleet">("dashboard");
   const [stats, setStats] = useState<OpsStats | null>(null);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -192,6 +193,13 @@ export const App: React.FC = () => {
             onSelectTenant={(t) => setSelectedTenant(t)}
             onWakeContainer={handleWakeContainer}
             onSuspendContainer={handleSuspendContainer}
+          />
+        )}
+
+        {activeTab === "environments" && (
+          <EnvironmentsView
+            tenants={tenants}
+            onSelectTenant={(t) => setSelectedTenant(t)}
           />
         )}
 

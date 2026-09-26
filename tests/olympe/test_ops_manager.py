@@ -96,3 +96,36 @@ def test_3_agents_tier_and_quota():
     with pytest.raises(ValueError, match="Quota dépassé"):
         ops.update_tenant_agents(tenant_id, ["jerome", "lucas", "clara", "victor"])
 
+
+def test_telemetry_endpoints(api_client):
+    # 1. Summary
+    resp_summary = api_client.get("/api/olympe/ops/telemetry/summary")
+    assert resp_summary.status_code == 200
+    summary = resp_summary.json()
+    assert "total_tokens" in summary
+    assert "total_cost_usd" in summary
+
+    # 2. Environments
+    resp_envs = api_client.get("/api/olympe/ops/telemetry/environments")
+    assert resp_envs.status_code == 200
+    envs_data = resp_envs.json()
+    assert "environments" in envs_data
+    assert len(envs_data["environments"]) >= 1
+    first_env = envs_data["environments"][0]
+    assert "display_name" in first_env
+    assert "vitals" in first_env
+    assert "tenant" in first_env
+
+    # 3. History
+    resp_hist = api_client.get("/api/olympe/ops/telemetry/history/1?limit=5")
+    assert resp_hist.status_code == 200
+    hist_data = resp_hist.json()
+    assert "snapshots" in hist_data
+
+    # 4. Alerts
+    resp_alerts = api_client.get("/api/olympe/ops/telemetry/alerts")
+    assert resp_alerts.status_code == 200
+    alerts_data = resp_alerts.json()
+    assert "alerts" in alerts_data
+
+

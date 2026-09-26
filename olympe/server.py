@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from olympe.auth import authenticate_superadmin, clear_token_cache, require_superadmin
 from olympe.lifecycle_manager import DockerLifecycleManager
 from olympe.ops_manager import OpsManager
+from olympe.telemetry_client import telemetry_client
 
 logging.basicConfig(level=logging.INFO)
 _log = logging.getLogger("orso.olympe.server")
@@ -278,6 +279,35 @@ async def stripe_webhook(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Payload JSON invalide")
     return ops_manager.handle_stripe_webhook(payload)
+
+
+# ── Télémétrie & Environnements Docker ─────────────────────────────────────
+
+@app.get("/api/olympe/ops/telemetry/summary")
+async def get_telemetry_summary(admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Retourne les métriques de télémétrie consolidées de la plateforme."""
+    return telemetry_client.get_summary()
+
+
+@app.get("/api/olympe/ops/telemetry/environments")
+async def get_telemetry_environments(admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Retourne la liste des environnements Docker enrichis avec leurs signes vitaux et clients associés."""
+    tenants = ops_manager.get_tenants_overview()
+    environments = telemetry_client.get_environments(tenants)
+    return {"environments": environments, "count": len(environments)}
+
+
+@app.get("/api/olympe/ops/telemetry/history/{agent_id}")
+async def get_telemetry_history(agent_id: int, limit: int = 25, admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Retourne l'historique des snapshots d'un agent."""
+    return telemetry_client.get_history(agent_id, limit=limit)
+
+
+@app.get("/api/olympe/ops/telemetry/alerts")
+async def get_telemetry_alerts(agent_id: Optional[int] = None, admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Retourne les alertes actives."""
+    alerts = telemetry_client.get_alerts(resolved=False, agent_id=agent_id)
+    return {"alerts": alerts, "count": len(alerts)}
 
 
 # ── Service Frontend SPA Orso Ops (apps/ui-ops/dist) ─────────────────────────

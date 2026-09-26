@@ -1,4 +1,17 @@
-import { Tenant, TenantUser, OpsStats, Invoice, AgentId, TrialConfig, AdminUser, LoginResponse } from "./types";
+import {
+  Tenant,
+  TenantUser,
+  OpsStats,
+  Invoice,
+  AgentId,
+  TrialConfig,
+  AdminUser,
+  LoginResponse,
+  TelemetrySummary,
+  TelemetryEnvironment,
+  TelemetrySnapshot,
+  TelemetryAlert,
+} from "./types";
 
 const TOKEN_KEY = "orso_ops_auth_token";
 const USER_KEY = "orso_ops_auth_user";
@@ -244,4 +257,55 @@ export async function deleteTenantUser(tenantId: string, userId: string): Promis
   }
   return res.json();
 }
+
+// ── Télémétrie & Environnements Docker ─────────────────────────────────────
+
+export async function fetchTelemetrySummary(): Promise<TelemetrySummary> {
+  const res = await fetch(`${getBaseUrl()}/api/olympe/ops/telemetry/summary`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(`Erreur récupération résumé télémétrie (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function fetchTelemetryEnvironments(): Promise<TelemetryEnvironment[]> {
+  const res = await fetch(`${getBaseUrl()}/api/olympe/ops/telemetry/environments`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(`Erreur récupération environnements (${res.status})`);
+  }
+  const data = await res.json();
+  return data.environments || [];
+}
+
+export async function fetchAgentHistory(
+  agentId: number,
+  limit: number = 25
+): Promise<{ agent_id: number; agent_name: string; snapshots: TelemetrySnapshot[] }> {
+  const res = await fetch(`${getBaseUrl()}/api/olympe/ops/telemetry/history/${agentId}?limit=${limit}`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(`Erreur récupération historique agent #${agentId} (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function fetchTelemetryAlerts(agentId?: number): Promise<TelemetryAlert[]> {
+  const url = agentId
+    ? `${getBaseUrl()}/api/olympe/ops/telemetry/alerts?agent_id=${agentId}`
+    : `${getBaseUrl()}/api/olympe/ops/telemetry/alerts`;
+  const res = await fetch(url, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(`Erreur récupération alertes (${res.status})`);
+  }
+  const data = await res.json();
+  return data.alerts || [];
+}
+
 

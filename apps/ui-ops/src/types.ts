@@ -116,3 +116,75 @@ export interface LoginResponse {
   expires_in?: number;
   user: AdminUser;
 }
+
+export interface TelemetrySummary {
+  agents_count: number;
+  snapshots_count: number;
+  total_tokens: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_api_calls: number;
+  total_cost_usd: number;
+  last_snapshot_at: string;
+  agents_registered?: number;
+  alerts_active: number;
+  simulated?: boolean;
+}
+
+export interface TelemetryEnvironment {
+  agent_id: number;
+  display_name: string;
+  module: string;
+  container_id: string;
+  server_ip: string;
+  dashboard_url: string;
+  status: "active" | "idle" | "error" | string;
+  total_tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+  api_calls: number;
+  cost_usd: number;
+  error_count: number;
+  last_seen_at: string;
+  vitals: {
+    cpu_percent: number;
+    memory_usage_mb: number;
+    memory_limit_mb: number;
+    memory_percent: number;
+    docker_status: string;
+  };
+  tenant?: {
+    id?: string;
+    name: string;
+    slug?: string;
+    sector?: string;
+    is_system?: boolean;
+    status?: string;
+    tier_label?: string;
+  } | null;
+}
+
+export interface TelemetrySnapshot {
+  id: number;
+  snapshot_at: string;
+  total_tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+  api_calls: number;
+  cost_usd: number;
+  status: string;
+  error_count: number;
+}
+
+export interface TelemetryAlert {
+  id: number;
+  agent_id: number;
+  level: "INFO" | "WARNING" | "CRITICAL" | string;
+  category: string;
+  message: string;
+  detected_at: string;
+  resolved_at?: string | null;
+  agent_name?: string;
+  tenant_id?: string;
+}
+
