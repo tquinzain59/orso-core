@@ -110,7 +110,13 @@ def test_telemetry_endpoints(api_client):
     assert resp_envs.status_code == 200
     envs_data = resp_envs.json()
     assert "environments" in envs_data
-    assert len(envs_data["environments"]) >= 1
+    assert len(envs_data["environments"]) == 2
+    env_names = [e["display_name"] for e in envs_data["environments"]]
+    assert "Recouvrement" not in env_names
+    assert "PROD-FR-002" in env_names
+    assert "Olympe" in env_names
+    container_ids = [e["container_id"] for e in envs_data["environments"]]
+    assert "recouvrement_default" not in container_ids
     first_env = envs_data["environments"][0]
     assert "display_name" in first_env
     assert "vitals" in first_env

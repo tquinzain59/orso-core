@@ -136,16 +136,16 @@ class TelemetryClient:
 
         # Fallback simulation
         return {
-            "agents_count": 3,
+            "agents_count": 2,
             "snapshots_count": 2253,
-            "total_tokens": 809823594,
-            "total_input_tokens": 743138061,
-            "total_output_tokens": 66685533,
-            "total_api_calls": 141050,
-            "total_cost_usd": 115.06,
+            "total_tokens": 823052,
+            "total_input_tokens": 756390,
+            "total_output_tokens": 66662,
+            "total_api_calls": 139,
+            "total_cost_usd": 0.1143,
             "last_snapshot_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-            "agents_registered": 3,
-            "alerts_active": 12,
+            "agents_registered": 2,
+            "alerts_active": 0,
             "simulated": True,
         }
 
@@ -153,6 +153,16 @@ class TelemetryClient:
         """Retourne la liste des environnements enrichis avec Docker vitals et tenants associés."""
         raw_latest = self._fetch_api("/api/telemetry/latest")
         raw_agents = raw_latest.get("agents", []) if raw_latest else []
+
+        # Filtrer tout résidu de l'ancien conteneur de test 'Recouvrement' (agent 3 / recouvrement_default)
+        if raw_agents:
+            raw_agents = [
+                ag for ag in raw_agents
+                if ag.get("agent_id") != 3
+                and ag.get("id") != 3
+                and ag.get("container_id") != "recouvrement_default"
+                and ag.get("display_name", "").strip().lower() != "recouvrement"
+            ]
 
         docker_vitals = self._get_docker_live_vitals()
 
@@ -169,7 +179,7 @@ class TelemetryClient:
                     "agent_id": 2,
                     "display_name": "Olympe",
                     "module": "supervision",
-                    "dashboard_url": "http://92.222.68.80:9119/login",
+                    "dashboard_url": "https://ops.orso-agents.fr/login",
                     "last_seen_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
                     "total_tokens": 2593,
                     "input_tokens": 2490,
@@ -195,22 +205,6 @@ class TelemetryClient:
                     "status": "active",
                     "error_count": 0,
                     "container_id": "orso_client_backend",
-                    "server_ip": "92.222.68.80",
-                },
-                {
-                    "agent_id": 3,
-                    "display_name": "Recouvrement",
-                    "module": "recouvrement",
-                    "dashboard_url": "http://92.222.68.80:9229/login",
-                    "last_seen_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-                    "total_tokens": 820459,
-                    "input_tokens": 753900,
-                    "output_tokens": 66559,
-                    "api_calls": 138,
-                    "cost_usd": 0.1142,
-                    "status": "idle",
-                    "error_count": 0,
-                    "container_id": "recouvrement_default",
                     "server_ip": "92.222.68.80",
                 },
             ]
@@ -334,9 +328,10 @@ class TelemetryClient:
                 "status": "active" if i == 0 else "idle",
                 "error_count": 0,
             })
+        agent_name = "PROD-FR-002" if agent_id == 1 else ("Olympe" if agent_id == 2 else f"Agent #{agent_id}")
         return {
             "agent_id": agent_id,
-            "agent_name": f"Agent #{agent_id}",
+            "agent_name": agent_name,
             "snapshots": sim_snapshots,
             "count": len(sim_snapshots),
         }
@@ -353,29 +348,8 @@ class TelemetryClient:
         if isinstance(res, list):
             return res
 
-        # Fallback simulation
-        return [
-            {
-                "id": 2062,
-                "agent_id": 3,
-                "level": "WARNING",
-                "category": "api_usage",
-                "message": "138 appels API dépasse la limite 100",
-                "detected_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-                "resolved_at": None,
-                "agent_name": "Recouvrement",
-            },
-            {
-                "id": 2063,
-                "agent_id": 3,
-                "level": "CRITICAL",
-                "category": "inactivity",
-                "message": "Inactif depuis >72h",
-                "detected_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-                "resolved_at": None,
-                "agent_name": "Recouvrement",
-            },
-        ]
+        # Fallback simulation propre : aucune alerte anormale par défaut
+        return []
 
 
 # Instance singleton pour import facile
