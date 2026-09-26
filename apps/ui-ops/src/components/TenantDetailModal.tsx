@@ -30,10 +30,18 @@ interface TenantDetailModalProps {
     activeAgents: AgentId[],
     trialsConfig: Record<string, any>
   ) => Promise<void>;
-  onSaveSubscription: (tenantId: string, tierId: string) => Promise<void>;
+  onSaveSubscription: (tenantId: string, tierId: string, status?: string) => Promise<void>;
   onWakeContainer: (slug: string) => void;
   onSuspendContainer: (slug: string) => void;
 }
+
+export const TIER_LIMITS: Record<string, { max: number; label: string; price: string }> = {
+  none: { max: 0, label: "Aucun abonnement", price: "0 € HT" },
+  "1_agent": { max: 1, label: "Starter (1 agent)", price: "99 € HT" },
+  "2_agents": { max: 2, label: "Duo (2 agents)", price: "169 € HT" },
+  "3_agents": { max: 3, label: "Trio (3 agents)", price: "229 € HT" },
+  "4_agents": { max: 4, label: "Flotte (4 agents)", price: "279 € HT" },
+};
 
 export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
   tenant,
@@ -53,9 +61,12 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
     { ...tenant.agents_enabled.trials }
   );
 
-  // État local du forfait
+  // État local du forfait et du statut commercial
   const [selectedTier, setSelectedTier] = useState<string>(
-    tenant.subscription.tier_id
+    tenant.subscription.tier_id || "none"
+  );
+  const [selectedStatus, setSelectedStatus] = useState<string>(
+    tenant.subscription.status || (tenant.subscription.tier_id === "none" ? "none" : "active")
   );
 
   // État local des utilisateurs
@@ -143,7 +154,39 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
     }
   };
 
-  // Toggle agent
+  const maxQuota = TIER_LIMITS[selectedTier]?.max ?? 0;
+  const isSubscriptionInactive =
+    selectedTier === "none" || selectedStatus === "none" || selectedStatus === "canceled";
+
+  // Sélection du forfait avec réajustement automatique des agents si quota dépassé
+  const handleSelectTier = (tierId: string) => {
+    setSelectedTier(tierId);
+    if (tierId === "none") {
+      setActiveAgents([]);
+      setTrials({});
+      if (selectedStatus === "active") {
+        setSelectedStatus("none");
+      }
+      return;
+    }
+    if (selectedStatus === "none" || selectedStatus === "canceled") {
+      setSelectedStatus("active");
+    }
+    const maxAllowed = TIER_LIMITS[tierId]?.max ?? 0;
+    if (activeAgents.length > maxAllowed) {
+      const trimmed = activeAgents.slice(0, maxAllowed);
+      setActiveAgents(trimmed);
+      const updatedTrials = { ...trials };
+      for (const a of activeAgents) {
+        if (!trimmed.includes(a)) {
+          delete updatedTrials[a];
+        }
+      }
+      setTrials(updatedTrials);
+    }
+  };
+
+  // Toggle agent avec verrou strict sur le quota du forfait sélectionné
   const handleToggleAgent = (agentId: AgentId) => {
     if (activeAgents.includes(agentId)) {
       setActiveAgents(activeAgents.filter((a) => a !== agentId));
@@ -151,6 +194,20 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
       delete updatedTrials[agentId];
       setTrials(updatedTrials);
     } else {
+      if (isSubscriptionInactive || maxQuota === 0) {
+        alert(
+          "Impossible d'activer un agent sans forfait actif.\nVeuillez sélectionner un forfait (1, 2, 3 ou 4 agents) ci-dessous."
+        );
+        return;
+      }
+      if (activeAgents.length >= maxQuota) {
+        alert(
+          `Quota atteint : le forfait ${TIER_LIMITS[selectedTier]?.label || selectedTier} est limité à ${maxQuota} agent(s).\nPour activer un agent supplémentaire, sélectionnez d'abord un forfait supérieur (ex: ${
+            maxQuota < 4 ? maxQuota + 1 : 4
+          } agents) ci-dessous.`
+        );
+        return;
+      }
       setActiveAgents([...activeAgents, agentId]);
     }
   };
@@ -178,8 +235,11 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
     setSaving(true);
     try {
       await onSaveAgents(tenant.id, activeAgents, trials);
-      if (selectedTier !== tenant.subscription.tier_id) {
-        await onSaveSubscription(tenant.id, selectedTier);
+      if (
+        selectedTier !== tenant.subscription.tier_id ||
+        selectedStatus !== tenant.subscription.status
+      ) {
+        await onSaveSubscription(tenant.id, selectedTier, selectedStatus);
       }
       setToastMessage("Modifications enregistrées avec succès !");
       setTimeout(() => setToastMessage(null), 3000);
@@ -189,19 +249,6 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
       setSaving(false);
     }
   };
-
-  // Calcul du forfait suggéré
-  const nbActivePaid = activeAgents.filter((a) => !trials[a]).length;
-  let suggestedTierLabel = "Aucun abonnement (0 € HT)";
-  if (nbActivePaid === 1) {
-    suggestedTierLabel = "Starter (1 agent - 99 € HT)";
-  } else if (nbActivePaid === 2) {
-    suggestedTierLabel = "Duo (2 agents - 169 € HT)";
-  } else if (nbActivePaid >= 3) {
-    suggestedTierLabel = "Flotte Complète (4 agents - 279 € HT)";
-  }
-  
-  const hasNoSubscription = tenant.subscription.status === "none" || tenant.subscription.status === "inactive" || tenant.subscription.tier_id === "none";
 
 
   const isReady = tenant.instance?.status === "ready";
@@ -550,19 +597,45 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
                 <div>
                   <h3 className="text-base font-bold text-white">Gestion des Agents Déployés</h3>
                   <p className="text-xs text-slate-400">
-                    Activez ou désactivez les agents en 1-clic. Définissez une période d'essai pour les nouveaux modules.
+                    Activez ou désactivez les agents selon la capacité du forfait sélectionné ({maxQuota} max).
                   </p>
                 </div>
-                <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-800 text-sky-400 border border-slate-700">
-                  {activeAgents.length} agent(s) activé(s)
+                <span
+                  className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${
+                    activeAgents.length >= maxQuota && maxQuota > 0
+                      ? "bg-amber-500/10 text-amber-400 border-amber-500/30"
+                      : "bg-slate-800 text-sky-400 border-slate-700"
+                  }`}
+                >
+                  {activeAgents.length} / {maxQuota} agent(s) activé(s)
                 </span>
               </div>
-              {hasNoSubscription && (
+
+              {isSubscriptionInactive ? (
                 <div className="p-3 bg-amber-500/10 border border-amber-500/30 text-amber-400 rounded-xl text-xs font-medium flex items-center space-x-2">
                   <AlertCircle className="w-4 h-4 shrink-0" />
-                  <span>Aucun abonnement actif. Sélectionnez un forfait ou activez une période d'essai pour pouvoir déployer des agents.</span>
+                  <span>
+                    Ce client est en statut{" "}
+                    <strong>
+                      {selectedStatus === "none"
+                        ? "Prospect (aucun abonnement)"
+                        : selectedStatus === "canceled"
+                        ? "Résilié"
+                        : "Inactif"}
+                    </strong>
+                    . Sélectionnez un forfait (1, 2, 3 ou 4 agents) ci-dessous pour débloquer l'activation des agents.
+                  </span>
                 </div>
-              )}
+              ) : activeAgents.length >= maxQuota ? (
+                <div className="p-2.5 bg-slate-900 border border-slate-800 text-slate-300 rounded-xl text-xs font-medium flex items-center justify-between">
+                  <span>Quota maximal atteint pour ce forfait ({maxQuota} agent{maxQuota > 1 ? "s" : ""}).</span>
+                  {maxQuota < 4 && (
+                    <span className="text-sky-400 font-semibold text-[11px]">
+                      Sélectionnez un forfait supérieur ci-dessous pour activer plus d'agents.
+                    </span>
+                  )}
+                </div>
+              ) : null}
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -595,20 +668,36 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
                         </div>
                       </div>
 
-                      {/* Switch Button */}
-                      <button
-                        onClick={() => handleToggleAgent(agentId)}
-                        disabled={hasNoSubscription && !isEnabled}
-                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
-                          isEnabled ? "bg-sky-500" : "bg-slate-700"
-                        } ${hasNoSubscription && !isEnabled ? "opacity-50 cursor-not-allowed" : ""}`}
-                      >
-                        <span
-                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                            isEnabled ? "translate-x-6" : "translate-x-1"
-                          }`}
-                        />
-                      </button>
+                      {/* Switch Button avec Quota Lock */}
+                      {(() => {
+                        const isAtQuota = !isEnabled && activeAgents.length >= maxQuota;
+                        const isDisabled = (isSubscriptionInactive && !isEnabled) || isAtQuota;
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => handleToggleAgent(agentId)}
+                            disabled={isDisabled}
+                            title={
+                              isDisabled
+                                ? isSubscriptionInactive
+                                  ? "Sélectionnez un forfait payant pour activer un agent"
+                                  : `Quota atteint (${maxQuota} max). Choisissez un forfait supérieur ci-dessous.`
+                                : isEnabled
+                                ? "Désactiver cet agent"
+                                : "Activer cet agent"
+                            }
+                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
+                              isEnabled ? "bg-sky-500" : "bg-slate-700"
+                            } ${isDisabled ? "opacity-40 cursor-not-allowed" : "cursor-pointer"}`}
+                          >
+                            <span
+                              className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                                isEnabled ? "translate-x-6" : "translate-x-1"
+                              }`}
+                            />
+                          </button>
+                        );
+                      })()}
                     </div>
 
                     <p className="text-xs text-slate-400 mt-3 line-clamp-2">{meta.description}</p>
@@ -673,38 +762,80 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
             </div>
           </div>
 
-          {/* Section 3 : Forfait Stripe & Tarification */}
-          <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-3">
-            <div className="flex items-center justify-between">
+          {/* Section 3 : Forfait Stripe & Statut Commercial */}
+          <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                  Abonnement Stripe Associé
+                  Abonnement Stripe & Statut Commercial
                 </span>
                 <div className="text-sm font-bold text-white mt-0.5">
-                  Tarif suggéré selon sélection :{" "}
-                  <span className="text-sky-400">{suggestedTierLabel}</span>
+                  Forfait sélectionné :{" "}
+                  <span className="text-sky-400 font-mono">
+                    {TIER_LIMITS[selectedTier]?.label || selectedTier} ({TIER_LIMITS[selectedTier]?.price})
+                  </span>
                 </div>
+              </div>
+
+              {/* Sélecteur de Statut Commercial */}
+              <div className="flex items-center space-x-1 bg-slate-900 p-1 rounded-xl border border-slate-800 text-xs">
+                {[
+                  { id: "active", label: "Abonné", color: "text-emerald-400" },
+                  { id: "none", label: "Prospect", color: "text-sky-400" },
+                  { id: "canceling", label: "En résiliation", color: "text-amber-400" },
+                  { id: "canceled", label: "Résilié", color: "text-rose-400" },
+                ].map((st) => (
+                  <button
+                    key={st.id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedStatus(st.id);
+                      if (st.id === "none" || st.id === "canceled") {
+                        setSelectedTier("none");
+                        setActiveAgents([]);
+                        setTrials({});
+                      } else if (selectedTier === "none" && st.id === "active") {
+                        setSelectedTier("1_agent");
+                      }
+                    }}
+                    className={`px-2.5 py-1 rounded-lg font-medium transition-all ${
+                      selectedStatus === st.id
+                        ? "bg-slate-800 text-white shadow-sm font-bold border border-slate-700"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    <span className={st.color}>•</span> {st.label}
+                  </button>
+                ))}
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+            {/* Grille des 5 Forfaits */}
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
               {[
-                { id: "none", label: "Aucun abonnement", price: "0 € HT" },
-                { id: "1_agent", label: "Starter (1 agent)", price: "99 € HT" },
-                { id: "2_agents", label: "Duo (2 agents)", price: "169 € HT" },
-                { id: "4_agents", label: "Flotte (4 agents)", price: "279 € HT" },
+                { id: "none", label: "Aucun", quota: "0 agent", price: "0 € HT" },
+                { id: "1_agent", label: "Starter", quota: "1 agent", price: "99 € HT" },
+                { id: "2_agents", label: "Duo", quota: "2 agents", price: "169 € HT" },
+                { id: "3_agents", label: "Trio", quota: "3 agents", price: "229 € HT" },
+                { id: "4_agents", label: "Flotte", quota: "4 agents", price: "279 € HT" },
               ].map((tier) => (
                 <button
                   key={tier.id}
-                  onClick={() => setSelectedTier(tier.id)}
+                  type="button"
+                  onClick={() => handleSelectTier(tier.id)}
                   className={`p-3 rounded-xl border text-left transition-all ${
                     selectedTier === tier.id
-                      ? "bg-sky-500/10 border-sky-500 text-white font-bold"
-                      : "bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700"
+                      ? "bg-sky-500/10 border-sky-500 text-white font-bold ring-1 ring-sky-500/50 shadow-md"
+                      : "bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-300"
                   }`}
                 >
-                  <div className="text-xs">{tier.label}</div>
-                  <div className="text-base font-extrabold text-white mt-1">{tier.price}</div>
+                  <div className="flex items-center justify-between text-xs font-semibold">
+                    <span>{tier.label}</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700/60 font-mono">
+                      {tier.quota}
+                    </span>
+                  </div>
+                  <div className="text-sm font-extrabold text-white mt-1.5">{tier.price}</div>
                 </button>
               ))}
             </div>

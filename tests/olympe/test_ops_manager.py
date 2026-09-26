@@ -78,3 +78,21 @@ def test_api_ops_endpoints(api_client):
     updated_data = resp_update.json()
     assert "victor" in updated_data["agents_enabled"]["active"]
     assert updated_data["agents_enabled"]["trials"]["victor"]["is_trial"] is True
+
+
+def test_3_agents_tier_and_quota():
+    ops = OpsManager()
+    tenant_id = "f3e25379-6531-479e-b276-3b3185e7421b"
+    ops.update_tenant_subscription(tenant_id, "3_agents", "active")
+    t = ops.get_tenant_detail(tenant_id)
+    assert t["subscription"]["price_ht"] == 229.00
+    assert t["subscription"]["tier_id"] == "3_agents"
+
+    # Can add 3 agents
+    ops.update_tenant_agents(tenant_id, ["jerome", "lucas", "clara"])
+    assert len(ops.get_tenant_detail(tenant_id)["agents_enabled"]["active"]) == 3
+
+    # Adding 4th agent fails due to quota
+    with pytest.raises(ValueError, match="Quota dépassé"):
+        ops.update_tenant_agents(tenant_id, ["jerome", "lucas", "clara", "victor"])
+

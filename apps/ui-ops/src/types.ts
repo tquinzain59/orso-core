@@ -43,10 +43,10 @@ export interface TenantInstance {
 
 export interface SubscriptionInfo {
   id: string;
-  tier_id: "none" | "1_agent" | "2_agents" | "4_agents" | "custom" | string;
+  tier_id: "none" | "1_agent" | "2_agents" | "3_agents" | "4_agents" | "custom" | string;
   tier_label: string;
   price_ht: number;
-  status: "none" | "active" | "trialing" | "past_due" | "canceled" | string;
+  status: "none" | "active" | "trialing" | "past_due" | "canceling" | "canceled" | string;
   current_period_start?: string;
   current_period_end?: string;
   stripe_customer_id?: string;

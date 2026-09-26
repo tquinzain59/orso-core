@@ -109,8 +109,8 @@ export const App: React.FC = () => {
   };
 
   // Sauvegarde de l'abonnement
-  const handleSaveSubscription = async (tenantId: string, tierId: string) => {
-    await updateTenantSubscription(tenantId, tierId);
+  const handleSaveSubscription = async (tenantId: string, tierId: string, status?: string) => {
+    await updateTenantSubscription(tenantId, tierId, status);
     await loadData();
     const updated = await fetchTenants();
     const current = updated.find((t) => t.id === tenantId) || null;

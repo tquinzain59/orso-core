@@ -18,8 +18,9 @@ _log = logging.getLogger("orso.olympe.ops")
 # Grille tarifaire officielle Orso Agents (prix mensuels HT)
 TIER_PRICING = {
     "none": {"price_ht": 0.00, "max_agents": 0, "label": "Aucun abonnement"},
-    "1_agent": {"price_ht": 0.00, "max_agents": 1, "label": "Starter (1 agent)"},
+    "1_agent": {"price_ht": 99.00, "max_agents": 1, "label": "Starter (1 agent)"},
     "2_agents": {"price_ht": 169.00, "max_agents": 2, "label": "Duo (2 agents)"},
+    "3_agents": {"price_ht": 229.00, "max_agents": 3, "label": "Trio (3 agents)"},
     "4_agents": {"price_ht": 279.00, "max_agents": 4, "label": "Flotte Complète (4 agents)"},
     "custom": {"price_ht": 0.00, "max_agents": 4, "label": "Sur mesure"},
 }
@@ -719,10 +720,14 @@ class OpsManager:
         if tenant_id in self._mock_tenants:
             self._mock_tenants[tenant_id]["agents_enabled"] = payload_agents
             nb_agents = len(clean_active)
-            if nb_agents <= 1:
+            if nb_agents == 0:
+                tier_key = "none"
+            elif nb_agents == 1:
                 tier_key = "1_agent"
             elif nb_agents == 2:
                 tier_key = "2_agents"
+            elif nb_agents == 3:
+                tier_key = "3_agents"
             else:
                 tier_key = "4_agents"
 

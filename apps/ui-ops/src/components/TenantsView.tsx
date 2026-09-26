@@ -1,5 +1,16 @@
 import React, { useState } from "react";
-import { Search, Filter, SlidersHorizontal, CheckCircle2, Clock, AlertTriangle, Play, Square } from "lucide-react";
+import {
+  Search,
+  Filter,
+  SlidersHorizontal,
+  CheckCircle2,
+  Clock,
+  AlertTriangle,
+  Play,
+  Square,
+  Users,
+  XCircle,
+} from "lucide-react";
 import { Tenant } from "../types";
 import { AGENTS_CATALOG } from "../data";
 
@@ -35,9 +46,30 @@ export const TenantsView: React.FC<TenantsViewProps> = ({
 
     if (!matchesSearch) return false;
     if (statusFilter === "all") return true;
-    if (statusFilter === "active") return t.status === "active";
-    if (statusFilter === "trial") return t.status === "trial" || Object.keys(t.agents_enabled.trials).length > 0;
-    if (statusFilter === "suspended") return t.status === "suspended";
+    if (statusFilter === "active") {
+      return (
+        (t.subscription?.status === "active" || t.status === "active") &&
+        t.subscription?.tier_id !== "none" &&
+        t.subscription?.status !== "canceling" &&
+        t.subscription?.status !== "canceled" &&
+        t.status !== "churn"
+      );
+    }
+    if (statusFilter === "prospect") {
+      return (
+        (t.subscription?.status === "none" ||
+          t.subscription?.tier_id === "none" ||
+          !t.subscription?.tier_id) &&
+        t.status !== "churn" &&
+        t.subscription?.status !== "canceled"
+      );
+    }
+    if (statusFilter === "canceling") {
+      return t.subscription?.status === "canceling";
+    }
+    if (statusFilter === "canceled") {
+      return t.subscription?.status === "canceled" || t.status === "churn";
+    }
     return true;
   });
 
@@ -48,7 +80,7 @@ export const TenantsView: React.FC<TenantsViewProps> = ({
         <div>
           <h1 className="text-2xl font-bold text-white tracking-tight">Annuaire des Entreprises & Clients</h1>
           <p className="text-sm text-slate-400 mt-1">
-            Activez/désactivez des agents, gérez les durées d'essai et surveillez les conteneurs clients.
+            Activez/désactivez des agents selon les abonnements souscrits et surveillez les conteneurs clients.
           </p>
         </div>
       </div>
@@ -68,7 +100,7 @@ export const TenantsView: React.FC<TenantsViewProps> = ({
 
         <div className="flex items-center space-x-2">
           <Filter className="w-4 h-4 text-slate-400" />
-          <div className="flex rounded-xl bg-slate-950 p-1 border border-slate-800 text-xs font-medium">
+          <div className="flex flex-wrap rounded-xl bg-slate-950 p-1 border border-slate-800 text-xs font-medium gap-0.5">
             <button
               onClick={() => setStatusFilter("all")}
               className={`px-3 py-1.5 rounded-lg transition-all ${
@@ -86,12 +118,28 @@ export const TenantsView: React.FC<TenantsViewProps> = ({
               Abonnés
             </button>
             <button
-              onClick={() => setStatusFilter("trial")}
+              onClick={() => setStatusFilter("prospect")}
               className={`px-3 py-1.5 rounded-lg transition-all ${
-                statusFilter === "trial" ? "bg-amber-500 text-slate-950 font-bold" : "text-slate-400 hover:text-white"
+                statusFilter === "prospect" ? "bg-sky-500 text-slate-950 font-bold" : "text-slate-400 hover:text-white"
               }`}
             >
-              Essais
+              Prospects
+            </button>
+            <button
+              onClick={() => setStatusFilter("canceling")}
+              className={`px-3 py-1.5 rounded-lg transition-all ${
+                statusFilter === "canceling" ? "bg-amber-500 text-slate-950 font-bold" : "text-slate-400 hover:text-white"
+              }`}
+            >
+              En résiliation
+            </button>
+            <button
+              onClick={() => setStatusFilter("canceled")}
+              className={`px-3 py-1.5 rounded-lg transition-all ${
+                statusFilter === "canceled" ? "bg-rose-500 text-slate-950 font-bold" : "text-slate-400 hover:text-white"
+              }`}
+            >
+              Résiliés
             </button>
           </div>
         </div>
@@ -159,36 +207,73 @@ export const TenantsView: React.FC<TenantsViewProps> = ({
 
                       {/* Statut Commercial */}
                       <td className="py-4 px-4">
-                        {t.status === "active" && !hasTrials && !hasNoSubscription && (
-                          <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>Client Actif</span>
-                          </span>
-                        )}
-                        {hasNoSubscription && (
-                          <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-500/10 text-slate-400 border border-slate-500/20">
-                            <AlertTriangle className="w-3.5 h-3.5" />
-                            <span>Sans abonnement</span>
-                          </span>
-                        )}
-                        {hasTrials && (
-                          <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                            <Clock className="w-3.5 h-3.5" />
-                            <span>Essai en cours</span>
-                          </span>
-                        )}
-                        {t.status === "suspended" && (
-                          <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">
-                            <AlertTriangle className="w-3.5 h-3.5" />
-                            <span>Suspendu</span>
-                          </span>
-                        )}
+                        {(() => {
+                          const subStatus = t.subscription?.status;
+                          const tierId = t.subscription?.tier_id;
+                          const isChurn = t.status === "churn" || subStatus === "canceled";
+                          const isCanceling = subStatus === "canceling";
+
+                          if (isChurn) {
+                            return (
+                              <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                                <XCircle className="w-3.5 h-3.5" />
+                                <span>Client résilié</span>
+                              </span>
+                            );
+                          }
+                          if (isCanceling) {
+                            return (
+                              <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                                <AlertTriangle className="w-3.5 h-3.5" />
+                                <span>En cours de résiliation</span>
+                              </span>
+                            );
+                          }
+                          if (t.status === "suspended") {
+                            return (
+                              <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">
+                                <AlertTriangle className="w-3.5 h-3.5" />
+                                <span>Suspendu</span>
+                              </span>
+                            );
+                          }
+                          if (hasTrials) {
+                            return (
+                              <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                                <Clock className="w-3.5 h-3.5" />
+                                <span>Essai en cours</span>
+                              </span>
+                            );
+                          }
+                          if (
+                            (subStatus === "active" || t.status === "active") &&
+                            tierId !== "none" &&
+                            tierId
+                          ) {
+                            return (
+                              <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                <span>Client avec abonnement</span>
+                              </span>
+                            );
+                          }
+                          return (
+                            <span className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20">
+                              <Users className="w-3.5 h-3.5" />
+                              <span>Prospect</span>
+                            </span>
+                          );
+                        })()}
                       </td>
 
                       {/* Forfait */}
                       <td className="py-4 px-4">
                         <div className="font-bold text-white text-sm">
-                          {hasNoSubscription ? "0 € HT/m" : (t.subscription.price_ht > 0 ? `${t.subscription.price_ht} € HT/m` : "Gratuit (Essai)")}
+                          {hasNoSubscription || t.subscription.status === "none"
+                            ? "0 € HT/m"
+                            : t.subscription.price_ht > 0
+                            ? `${t.subscription.price_ht} € HT/m`
+                            : "0 € HT/m"}
                         </div>
                         <div className="text-xs text-slate-400">{t.subscription.tier_label}</div>
                       </td>
