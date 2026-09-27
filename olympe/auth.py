@@ -18,8 +18,27 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 _log = logging.getLogger("orso.olympe.auth")
 security_bearer = HTTPBearer(auto_error=False)
 
-# Token factice pour les tests locaux ou mode déconnecté
+# Token et mot de passe factices pour les tests locaux automatisés
 MOCK_SUPERADMIN_TOKEN = "mock-superadmin-session-token-9230"
+MOCK_SUPERADMIN_PASSWORD = os.environ.get("ORSO_MOCK_SUPERADMIN_PASSWORD", "OrsoTestSuperadmin2026!")
+
+
+def is_mock_auth_enabled() -> bool:
+    """Indique si le mode d'authentification mockée est autorisé.
+
+    Sécurité stricte :
+    - Strictement INTERDIT en environnement de production (APP_ENV=production ou ENVIRONMENT=production).
+    - En dehors de la production, actif uniquement si ORSO_ALLOW_LOCAL_MOCK_AUTH=1/true ou lors des tests pytest (PYTEST_CURRENT_TEST).
+    - Désactivé par défaut.
+    """
+    env = (os.environ.get("APP_ENV") or os.environ.get("ENVIRONMENT") or "").strip().lower()
+    if env in ("production", "prod"):
+        return False
+    if os.environ.get("ORSO_ALLOW_LOCAL_MOCK_AUTH", "").strip().lower() in ("1", "true", "yes"):
+        return True
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return True
+    return False
 
 # Cache mémoire TTL pour éviter les requêtes HTTP redondantes vers Supabase /auth/v1/user
 _TOKEN_CACHE: Dict[str, tuple[float, Dict[str, Any]]] = {}
@@ -56,19 +75,21 @@ def authenticate_superadmin(
     """
     url, key = _get_supabase_config(supabase_url, service_key)
 
-    # 0. Habilitation Superadmin directe pour console Ops locale / secours
-    if email in ["admin@orso-agents.fr", "tquinzain@gmail.com"] and password in ["admin123", "OrsoOps2026!SecureAdmin", "admin"]:
-        return {
-            "token": MOCK_SUPERADMIN_TOKEN,
-            "refresh_token": "mock-refresh",
-            "expires_in": 3600,
-            "user": {
-                "id": "mock-admin-id-001",
-                "email": email,
-                "full_name": "Thibaut Quinzain",
-                "role": "superadmin",
-            },
-        }
+    # 0. Habilitation Superadmin directe uniquement si le mode mock est explicitement activé (interdit en prod)
+    if is_mock_auth_enabled():
+        mock_allowed_emails = {"admin@orso-agents.fr", "tquinzain@gmail.com"}
+        if email in mock_allowed_emails and password == MOCK_SUPERADMIN_PASSWORD:
+            return {
+                "token": MOCK_SUPERADMIN_TOKEN,
+                "refresh_token": "mock-refresh",
+                "expires_in": 3600,
+                "user": {
+                    "id": "mock-admin-id-001",
+                    "email": email,
+                    "full_name": "Thibaut Quinzain",
+                    "role": "superadmin",
+                },
+            }
 
     # Mode hors-ligne / tests unitaires sans clés distantes
     if not url or not key:
@@ -132,6 +153,10 @@ def verify_superadmin_token(
     service_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Valide un jeton de session auprès de Supabase Auth et garantit le rôle 'superadmin'."""
+    # En mode réel / production, le jeton mock statique est formellement interdit
+    if token == MOCK_SUPERADMIN_TOKEN and not is_mock_auth_enabled():
+        raise HTTPException(status_code=401, detail="Jeton de session non autorisé.")
+
     now = time.time()
 
     # 1. Vérification dans le cache mémoire TTL (ultra-rapide, évite les allers-retours HTTP)
@@ -143,8 +168,8 @@ def verify_superadmin_token(
 
     url, key = _get_supabase_config(supabase_url, service_key)
 
-    # Mode secours / token master superadmin
-    if token == MOCK_SUPERADMIN_TOKEN:
+    # Mode secours / token factice uniquement si le mode mock est autorisé (interdit en prod)
+    if is_mock_auth_enabled() and token == MOCK_SUPERADMIN_TOKEN:
         user_mock = {
             "id": "mock-admin-id-001",
             "email": "admin@orso-agents.fr",

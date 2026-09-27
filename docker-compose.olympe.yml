@@ -45,6 +45,7 @@ services:
     ports:
       - "9230:9230"
     environment:
+      - APP_ENV=${APP_ENV:-production}
       - OLYMPE_PORT=9230
       - OLYMPE_HOST=0.0.0.0
       - SUPABASE_URL=${SUPABASE_URL:-}

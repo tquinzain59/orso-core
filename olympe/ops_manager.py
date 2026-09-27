@@ -9,6 +9,7 @@ import logging
 import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -17,6 +18,14 @@ from olympe.onboarding_worker import onboarding_worker
 from olympe.ovh_client import ovh_client
 
 _log = logging.getLogger("orso.olympe.ops")
+
+# Mapping officiel des identifiants de prix Stripe par palier (compte acct_1UKIuK06XM8Z6gbS)
+TIER_STRIPE_PRICES = {
+    "1_agent": "price_1UKJ6W06XM8Z6gbS5id4Hf0s",
+    "2_agents": "price_1UKJ6W06XM8Z6gbScqwL1WI7",
+    "3_agents": "price_1UKJ6X06XM8Z6gbSI4buNHa3",
+    "4_agents": "price_1UKJ6X06XM8Z6gbSQekgaRHP",
+}
 
 # Grille tarifaire officielle Orso Agents (prix mensuels HT)
 TIER_PRICING = {
@@ -77,6 +86,17 @@ class OpsManager:
         self.supabase_url = (supabase_url or os.environ.get("SUPABASE_URL", "")).rstrip("/")
         self.supabase_key = supabase_key or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
         self.stripe_secret_key = stripe_secret_key or os.environ.get("STRIPE_SECRET_KEY", "")
+        if not self.stripe_secret_key:
+            try:
+                env_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+                if os.path.exists(env_file):
+                    with open(env_file, "r", encoding="utf-8") as f:
+                        for line in f:
+                            if line.startswith("STRIPE_SECRET_KEY="):
+                                self.stripe_secret_key = line.split("=", 1)[1].strip().strip('"').strip("'")
+                                break
+            except Exception:
+                pass
 
         # État en mémoire / cache pour le mode sans base distante ou le développement local
         self._mock_tenants: Dict[str, Dict[str, Any]] = self._init_seed_data()
@@ -1149,4 +1169,146 @@ class OpsManager:
             pending_tenants_count=len(pending),
             pending_agents_count=total_pending_agents,
         )
+
+    # ── Stripe Billing & Onboarding Public ────────────────────────────────────
+
+    def _stripe_request(
+        self,
+        endpoint: str,
+        method: str = "GET",
+        data: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Exécute un appel authentifié vers l'API Stripe Billing."""
+        key = self.stripe_secret_key or os.environ.get("STRIPE_SECRET_KEY", "")
+        if not key:
+            raise ValueError("Clé secrète STRIPE_SECRET_KEY non configurée.")
+
+        url = f"https://api.stripe.com/v1/{endpoint}"
+        headers = {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+        encoded_data = urllib.parse.urlencode(data).encode("utf-8") if data else None
+
+        req = urllib.request.Request(url, data=encoded_data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=10.0) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            err_msg = e.read().decode("utf-8")
+            _log.error("Erreur HTTP Stripe (%s) sur %s : %s", e.code, endpoint, err_msg)
+            try:
+                err_json = json.loads(err_msg)
+                raise ValueError(err_json.get("error", {}).get("message", f"Erreur Stripe HTTP {e.code}"))
+            except Exception:
+                raise ValueError(f"Erreur Stripe ({e.code}) : {err_msg}")
+        except Exception as e:
+            _log.error("Erreur réseau Stripe sur %s : %s", endpoint, e)
+            raise
+
+    def create_onboarding_setup_intent(
+        self,
+        email: str,
+        name: str,
+        company_name: str,
+        slug: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Crée ou retrouve un client Stripe et génère un SetupIntent pour recueillir l'empreinte bancaire."""
+        clean_email = email.strip().lower()
+        clean_name = name.strip()
+        clean_company = company_name.strip()
+
+        # 1. Vérification si le client Stripe existe déjà
+        cust_search = self._stripe_request(f"customers?email={urllib.parse.quote(clean_email)}&limit=1")
+        if cust_search.get("data"):
+            customer_id = cust_search["data"][0]["id"]
+            _log.info("Client Stripe existant retrouvé pour %s : %s", clean_email, customer_id)
+        else:
+            cust_payload = {
+                "email": clean_email,
+                "name": clean_name,
+                "description": f"Client Orso Agents - {clean_company}",
+                "metadata[company_name]": clean_company,
+                "metadata[slug]": slug or "",
+            }
+            new_cust = self._stripe_request("customers", method="POST", data=cust_payload)
+            customer_id = new_cust["id"]
+            _log.info("Nouveau client Stripe créé pour %s : %s", clean_email, customer_id)
+
+        # 2. Création du SetupIntent (supporte Carte Bancaire et Mandat SEPA)
+        si_payload = {
+            "customer": customer_id,
+            "automatic_payment_methods[enabled]": "true",
+            "usage": "off_session",
+            "metadata[company_name]": clean_company,
+            "metadata[slug]": slug or "",
+        }
+        setup_intent = self._stripe_request("setup_intents", method="POST", data=si_payload)
+        _log.info("SetupIntent Stripe créé : %s pour client %s", setup_intent["id"], customer_id)
+
+        return {
+            "success": True,
+            "customer_id": customer_id,
+            "setup_intent_id": setup_intent["id"],
+            "client_secret": setup_intent["client_secret"],
+        }
+
+    def create_trial_subscription(
+        self,
+        customer_id: str,
+        payment_method_id: str,
+        tier_id: str,
+        agents_count: int = 1,
+    ) -> Dict[str, Any]:
+        """Crée l'abonnement récurrent officiel avec 30 jours d'essai gratuit à 0 € dans Stripe Billing."""
+        price_id = TIER_STRIPE_PRICES.get(tier_id)
+        if not price_id:
+            count = max(1, min(4, agents_count))
+            tier_key = f"{count}_agents" if count > 1 else "1_agent"
+            price_id = TIER_STRIPE_PRICES.get(tier_key, "price_1UKJ6W06XM8Z6gbS5id4Hf0s")
+
+        # 1. Attacher le moyen de paiement au client si nécessaire
+        try:
+            self._stripe_request(f"payment_methods/{payment_method_id}/attach", method="POST", data={"customer": customer_id})
+        except Exception as e:
+            _log.warning("Notice attachement payment_method (%s) : %s", payment_method_id, e)
+
+        # 2. Définir le moyen de paiement par défaut pour les factures du client
+        try:
+            self._stripe_request(
+                f"customers/{customer_id}",
+                method="POST",
+                data={"invoice_settings[default_payment_method]": payment_method_id},
+            )
+        except Exception as e:
+            _log.warning("Notice mise à jour default_payment_method client : %s", e)
+
+        # 3. Création de la souscription avec 30 jours d'essai gratuit (0 € débité aujourd'hui)
+        sub_payload = {
+            "customer": customer_id,
+            "items[0][price]": price_id,
+            "trial_period_days": "30",
+            "default_payment_method": payment_method_id,
+            "metadata[tier_id]": tier_id,
+            "metadata[agents_count]": str(agents_count),
+        }
+        sub = self._stripe_request("subscriptions", method="POST", data=sub_payload)
+        _log.info(
+            "Abonnement Stripe créé : %s (client: %s, statut: %s, trial_end: %s)",
+            sub["id"],
+            customer_id,
+            sub.get("status"),
+            sub.get("trial_end"),
+        )
+
+        return {
+            "success": True,
+            "subscription_id": sub["id"],
+            "customer_id": customer_id,
+            "status": sub.get("status", "trialing"),
+            "trial_end": sub.get("trial_end"),
+            "current_period_end": sub.get("current_period_end"),
+            "price_id": price_id,
+        }
+
 

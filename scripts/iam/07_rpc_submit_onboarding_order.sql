@@ -43,6 +43,10 @@ DECLARE
     v_agents_count int;
     v_monthly_price numeric;
 
+    v_stripe_customer_id text;
+    v_stripe_sub_id text;
+    v_stripe_pm_id text;
+
     v_tenant_id uuid;
     v_slug text;
     v_base_slug text;
@@ -110,12 +114,18 @@ BEGIN
         ELSE 279.00
     END;
 
+    v_stripe_customer_id := trim(payload->'subscription'->>'stripe_customer_id');
+    v_stripe_sub_id := trim(payload->'subscription'->>'stripe_subscription_id');
+    v_stripe_pm_id := trim(payload->'subscription'->>'stripe_payment_method_id');
+
     INSERT INTO public.subscriptions (
         tenant_id, payment_method, status, tier_id, agents_count,
-        monthly_price_ht, trial_start, trial_end
+        monthly_price_ht, trial_start, trial_end,
+        stripe_customer_id, stripe_subscription_id, stripe_payment_method_id
     ) VALUES (
         v_tenant_id, v_payment_method, 'TRIALING', v_tier_id, v_agents_count,
-        v_monthly_price, NOW(), NOW() + INTERVAL '30 days'
+        v_monthly_price, NOW(), NOW() + INTERVAL '30 days',
+        v_stripe_customer_id, v_stripe_sub_id, v_stripe_pm_id
     )
     RETURNING id INTO v_sub_id;
 

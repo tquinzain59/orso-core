@@ -82,6 +82,20 @@ class UpdateAgentStatusRequest(BaseModel):
     status: str = Field(..., description="Statut de l'instance d'agent : PENDING_SETUP, PROVISIONING, ACTIVE, ERROR")
 
 
+class OnboardingInitSetupRequest(BaseModel):
+    email: str = Field(..., description="Adresse email du contact dirigeant")
+    name: str = Field(..., description="Nom complet du contact")
+    company_name: str = Field(..., description="Raison sociale de l'entreprise")
+    slug: Optional[str] = Field(None, description="Slug du client")
+
+
+class OnboardingCreateSubscriptionRequest(BaseModel):
+    customer_id: str = Field(..., description="Identifiant client Stripe (cus_...)")
+    payment_method_id: str = Field(..., description="Identifiant moyen de paiement Stripe (pm_...)")
+    tier_id: str = Field(..., description="Forfait sélectionné : 1_agent, 2_agents, 3_agents, 4_agents")
+    agents_count: int = Field(1, description="Nombre d'agents sélectionnés (1 à 4)")
+
+
 # ── Endpoints Supervision & Cycle de Vie Conteneurs ──────────────────────────
 
 @app.get("/health")
@@ -284,6 +298,40 @@ async def stripe_webhook(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Payload JSON invalide")
     return ops_manager.handle_stripe_webhook(payload)
+
+
+# ── Endpoints Publics Onboarding Stripe ────────────────────────────────────
+
+@app.post("/api/olympe/onboarding/init-setup")
+async def onboarding_init_setup(req: OnboardingInitSetupRequest):
+    """Crée ou retrouve un client Stripe et génère un SetupIntent pour l'onboarding public."""
+    try:
+        res = ops_manager.create_onboarding_setup_intent(
+            email=req.email,
+            name=req.name,
+            company_name=req.company_name,
+            slug=req.slug,
+        )
+        return res
+    except Exception as e:
+        _log.error("Erreur lors de l'init setup onboarding : %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/olympe/onboarding/create-subscription")
+async def onboarding_create_subscription(req: OnboardingCreateSubscriptionRequest):
+    """Crée l'abonnement récurrent officiel avec 30 jours d'essai gratuit dans Stripe Billing."""
+    try:
+        res = ops_manager.create_trial_subscription(
+            customer_id=req.customer_id,
+            payment_method_id=req.payment_method_id,
+            tier_id=req.tier_id,
+            agents_count=req.agents_count,
+        )
+        return res
+    except Exception as e:
+        _log.error("Erreur lors de la création d'abonnement onboarding : %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # ── Endpoints Onboarding & Déploiement OVH ──────────────────────────────────

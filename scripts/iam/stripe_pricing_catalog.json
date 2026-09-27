@@ -1,0 +1,26 @@
+{
+  "1_agent": {
+    "product_id": "prod_VKz4YX2hdNYt38",
+    "price_id": "price_1UKJ6W06XM8Z6gbS5id4Hf0s",
+    "name": "Orso Agents - Starter (1 agent)",
+    "price_ht": "99.00"
+  },
+  "2_agents": {
+    "product_id": "prod_VKz4IoYbt7BAJr",
+    "price_id": "price_1UKJ6W06XM8Z6gbScqwL1WI7",
+    "name": "Orso Agents - Duo (2 agents)",
+    "price_ht": "169.00"
+  },
+  "3_agents": {
+    "product_id": "prod_VKz4yqK72vCe9H",
+    "price_id": "price_1UKJ6X06XM8Z6gbSI4buNHa3",
+    "name": "Orso Agents - Trio (3 agents)",
+    "price_ht": "229.00"
+  },
+  "4_agents": {
+    "product_id": "prod_VKz4mlHq3G4aAB",
+    "price_id": "price_1UKJ6X06XM8Z6gbSQekgaRHP",
+    "name": "Orso Agents - Flotte Complète (4 agents)",
+    "price_ht": "279.00"
+  }
+}

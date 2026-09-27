@@ -1,0 +1,90 @@
+"""Tests unitaires pour les endpoints d'onboarding Stripe et le superviseur Olympe."""
+
+import pytest
+from unittest.mock import MagicMock, patch
+from fastapi.testclient import TestClient
+
+from olympe.server import app
+from olympe.ops_manager import OpsManager
+
+client = TestClient(app)
+
+
+def test_init_setup_success():
+    """Vérifie la génération du client_secret et customer_id lors de l'initialisation."""
+    mock_ops = MagicMock(spec=OpsManager)
+    mock_ops.create_onboarding_setup_intent.return_value = {
+        "success": True,
+        "customer_id": "cus_test_123",
+        "setup_intent_id": "seti_test_456",
+        "client_secret": "seti_test_456_secret_789",
+    }
+
+    with patch("olympe.server.ops_manager", mock_ops):
+        payload = {
+            "email": "contact@lumina-solutions.fr",
+            "name": "Thomas Laurent",
+            "company_name": "Lumina Solutions SAS",
+            "slug": "lumina-solutions",
+        }
+        resp = client.post("/api/olympe/onboarding/init-setup", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+        assert data["customer_id"] == "cus_test_123"
+        assert data["client_secret"] == "seti_test_456_secret_789"
+        mock_ops.create_onboarding_setup_intent.assert_called_once_with(
+            email="contact@lumina-solutions.fr",
+            name="Thomas Laurent",
+            company_name="Lumina Solutions SAS",
+            slug="lumina-solutions",
+        )
+
+
+def test_init_setup_error_handling():
+    """Vérifie le renvoi d'un code 400 en cas d'erreur de l'API Stripe."""
+    mock_ops = MagicMock(spec=OpsManager)
+    mock_ops.create_onboarding_setup_intent.side_effect = ValueError("Erreur Stripe simulée")
+
+    with patch("olympe.server.ops_manager", mock_ops):
+        payload = {
+            "email": "contact@error.fr",
+            "name": "Admin",
+            "company_name": "Entreprise",
+        }
+        resp = client.post("/api/olympe/onboarding/init-setup", json=payload)
+        assert resp.status_code == 400
+        assert "Erreur Stripe simulée" in resp.json()["detail"]
+
+
+def test_create_subscription_success():
+    """Vérifie la création d'un abonnement avec période d'essai de 30 jours à 0 €."""
+    mock_ops = MagicMock(spec=OpsManager)
+    mock_ops.create_trial_subscription.return_value = {
+        "success": True,
+        "subscription_id": "sub_test_trial_123",
+        "customer_id": "cus_test_123",
+        "status": "trialing",
+        "trial_end": 1792000000,
+        "price_id": "price_1UKJ6W06XM8Z6gbS5id4Hf0s",
+    }
+
+    with patch("olympe.server.ops_manager", mock_ops):
+        payload = {
+            "customer_id": "cus_test_123",
+            "payment_method_id": "pm_card_test_999",
+            "tier_id": "1_agent",
+            "agents_count": 1,
+        }
+        resp = client.post("/api/olympe/onboarding/create-subscription", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+        assert data["subscription_id"] == "sub_test_trial_123"
+        assert data["status"] == "trialing"
+        mock_ops.create_trial_subscription.assert_called_once_with(
+            customer_id="cus_test_123",
+            payment_method_id="pm_card_test_999",
+            tier_id="1_agent",
+            agents_count=1,
+        )
