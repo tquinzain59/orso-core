@@ -33,6 +33,7 @@ services:
   # Accessible en direct sur :9230 ou via ops.orso-agents.fr
   # ----------------------------------------------------------------------------
   olympe-core:
+    image: orso-core-orso-backend
     build:
       context: .
       dockerfile: Dockerfile.orso

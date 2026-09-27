@@ -695,6 +695,12 @@ class OpsManager:
                     "invoices": cached.get("invoices", []),
                 }
                 result.append(item)
+            # Inclure les organisations d'amorçage/onboarding de test qui ne sont pas en base distante
+            existing_ids = {item["id"] for item in result}
+            existing_slugs = {item.get("slug") for item in result}
+            for mock_id, mock_t in self._mock_tenants.items():
+                if mock_id not in existing_ids and mock_t.get("slug") not in existing_slugs:
+                    result.append(mock_t)
             return result
 
         # 2. Fallback sur le référentiel d'amorçage
