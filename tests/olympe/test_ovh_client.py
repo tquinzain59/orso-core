@@ -37,3 +37,32 @@ def test_estimate_sizing():
     assert sizing_heavy["pending_agents"] == 15
     assert sizing_heavy["can_fit_on_current_pool"] is False
     assert sizing_heavy["recommended_flavor"] in ("b2-15", "b2-30")
+
+
+def test_ovh_credential_status_unconfigured():
+    client = OVHClient(application_key="", application_secret="", consumer_key="")
+    status = client.get_credential_status()
+    assert status["configured"] is False
+    assert status["status"] == "unconfigured"
+
+
+def test_ovh_credential_status_diagnostic(monkeypatch):
+    client = OVHClient(application_key="ak", application_secret="as", consumer_key="ck")
+    
+    # Mocking request to simulate a credential created with path=""
+    def mock_request(method, path, **kwargs):
+        if path == "/auth/currentCredential":
+            return {
+                "status": "validated",
+                "rules": [{"method": "GET", "path": ""}],
+                "allowedIPs": ["128.79.121.183/32"],
+            }
+        return {}
+    monkeypatch.setattr(client, "request", mock_request)
+
+    status = client.get_credential_status()
+    assert status["configured"] is True
+    assert status["status"] == "validated"
+    assert status["has_wildcard_rights"] is False
+    assert "racine uniquement" in status["diagnostic"]
+

@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from olympe.auth import authenticate_superadmin, clear_token_cache, require_superadmin
 from olympe.lifecycle_manager import DockerLifecycleManager
 from olympe.ops_manager import OpsManager
+from olympe.ovh_client import ovh_client
 from olympe.telemetry_client import telemetry_client
 
 logging.basicConfig(level=logging.INFO)
@@ -329,6 +330,35 @@ async def provision_onboarding_order(tenant_id: str, admin: Dict[str, Any] = Dep
 async def update_agent_status(instance_id: str, req: UpdateAgentStatusRequest, admin: Dict[str, Any] = Depends(require_superadmin)):
     """Met à jour le statut d'une instance agent (PENDING_SETUP, PROVISIONING, ACTIVE, ERROR)."""
     return ops_manager.update_agent_instance_status(instance_id, req.status)
+
+
+@app.get("/api/olympe/ops/ovh/status")
+async def get_ovh_status(admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Retourne l'état de la connexion API OVH, la validation du token et le diagnostic des permissions."""
+    status = ovh_client.get_credential_status()
+    if status.get("has_wildcard_rights"):
+        try:
+            status["cloud_projects"] = ovh_client.list_cloud_projects()
+        except Exception:
+            status["cloud_projects"] = []
+        try:
+            status["vps_list"] = ovh_client.list_vps()
+        except Exception:
+            status["vps_list"] = []
+    else:
+        status["cloud_projects"] = []
+        status["vps_list"] = []
+    return status
+
+
+@app.post("/api/olympe/ops/ovh/credential-request")
+async def request_ovh_credential(admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Génère une nouvelle demande de Consumer Key OVH avec les droits '/*' nécessaires."""
+    try:
+        return ovh_client.create_credential_request()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 
 

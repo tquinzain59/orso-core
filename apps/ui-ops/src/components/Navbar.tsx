@@ -1,10 +1,10 @@
 import React from "react";
-import { LayoutDashboard, Users, CreditCard, Server, RefreshCw, ShieldCheck, LogOut, User, Activity, Sparkles } from "lucide-react";
+import { LayoutDashboard, Users, CreditCard, RefreshCw, ShieldCheck, LogOut, User, Activity, Sparkles } from "lucide-react";
 import { AdminUser } from "../types";
 
 interface NavbarProps {
-  activeTab: "dashboard" | "onboarding" | "tenants" | "environments" | "billing" | "fleet";
-  setActiveTab: (tab: "dashboard" | "onboarding" | "tenants" | "environments" | "billing" | "fleet") => void;
+  activeTab: "dashboard" | "onboarding" | "tenants" | "environments" | "billing";
+  setActiveTab: (tab: "dashboard" | "onboarding" | "tenants" | "environments" | "billing") => void;
   onRefresh: () => void;
   loading: boolean;
   totalClients: number;
@@ -113,18 +113,6 @@ export const Navbar: React.FC<NavbarProps> = ({
             >
               <CreditCard className="w-4 h-4" />
               <span>Facturation & Forfaits</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab("fleet")}
-              className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm font-medium transition-all cursor-pointer ${
-                activeTab === "fleet"
-                  ? "bg-slate-800 text-sky-400 shadow-sm border border-slate-700"
-                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
-              }`}
-            >
-              <Server className="w-4 h-4" />
-              <span>Flotte Olympe</span>
             </button>
           </nav>
 

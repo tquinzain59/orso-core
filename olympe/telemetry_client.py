@@ -112,6 +112,13 @@ class TelemetryClient:
                     except Exception:
                         pass
 
+                labels = c.get("Labels", {}) or {}
+                is_managed = (
+                    labels.get("com.orso.managed") == "true"
+                    or name.startswith("orso_")
+                    or "olympe" in name
+                )
+
                 vitals_by_name[name] = {
                     "container_id": cid[:12],
                     "state": state,
@@ -120,6 +127,11 @@ class TelemetryClient:
                     "memory_usage_mb": round(usage_mb, 1),
                     "memory_limit_mb": round(limit_mb, 1),
                     "memory_percent": round(mem_percent, 1),
+                    "labels": labels,
+                    "is_managed": is_managed,
+                    "tenant_id": labels.get("com.orso.tenant_id"),
+                    "tenant_slug": labels.get("com.orso.tenant_slug"),
+                    "role": labels.get("com.orso.role"),
                 }
         except Exception as e:
             _log.debug("Erreur lors de la lecture du socket Docker: %s", e)
@@ -264,18 +276,39 @@ class TelemetryClient:
                         }
                         break
 
-            # Signes vitaux Docker réels si disponibles
+            # Signes vitaux Docker réels si disponibles (priorité aux labels Docker standardisés)
             matched_vitals = None
             for dname, dv in docker_vitals.items():
-                if container_id and (container_id in dname or dname in container_id):
+                # 1. Correspondance prioritaire par label tenant_slug ou tenant_id
+                v_slug = dv.get("tenant_slug")
+                if v_slug and (v_slug in container_id or (associated_tenant and associated_tenant.get("slug") == v_slug)):
                     matched_vitals = dv
                     break
-                if module == "supervision" and "olympe" in dname:
+                # 2. Correspondance par rôle supervision / olympe
+                if module == "supervision" and (dv.get("role") == "supervisor" or "olympe" in dname):
+                    matched_vitals = dv
+                    break
+                # 3. Correspondance par nom de conteneur
+                if container_id and (container_id == dname or container_id in dname or dname in container_id):
                     matched_vitals = dv
                     break
                 if "backend" in dname and "recouv" in module:
                     matched_vitals = dv
                     break
+
+            # Si le conteneur a un label tenant_slug explicite et qu'aucun tenant n'a été rattaché
+            if not associated_tenant and matched_vitals and matched_vitals.get("tenant_slug"):
+                v_slug = matched_vitals["tenant_slug"]
+                if v_slug in tenants_by_slug:
+                    t = tenants_by_slug[v_slug]
+                    associated_tenant = {
+                        "id": t.get("id"),
+                        "name": t.get("name"),
+                        "slug": t.get("slug"),
+                        "sector": t.get("sector"),
+                        "is_system": False,
+                        "status": t.get("status"),
+                    }
 
             vitals = {
                 "cpu_percent": matched_vitals.get("cpu_percent", 0.25) if matched_vitals else 0.25,

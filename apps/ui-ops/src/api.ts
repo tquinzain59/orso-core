@@ -12,6 +12,7 @@ import {
   TelemetrySnapshot,
   TelemetryAlert,
   OVHSizingRecommendation,
+  OVHStatusResponse,
 } from "./types";
 
 const TOKEN_KEY = "orso_ops_auth_token";
@@ -379,6 +380,34 @@ export async function updateAgentInstanceStatus(
   }
   return res.json();
 }
+
+export async function fetchOVHStatus(): Promise<OVHStatusResponse> {
+  const res = await fetch(`${getBaseUrl()}/api/olympe/ops/ovh/status`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(`Erreur récupération statut OVH (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function requestOVHCredential(): Promise<{
+  success: boolean;
+  consumer_key: string;
+  validation_url: string;
+  state: string;
+}> {
+  const res = await fetch(`${getBaseUrl()}/api/olympe/ops/ovh/credential-request`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Erreur serveur" }));
+    throw new Error(err.detail || `Échec de la demande de Consumer Key (${res.status})`);
+  }
+  return res.json();
+}
+
 
 
 

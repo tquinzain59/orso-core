@@ -22,6 +22,9 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    labels:
+      com.orso.managed: "true"
+      com.orso.role: "ingress"
     networks:
       - orso_network
     depends_on:
@@ -48,6 +51,11 @@ services:
       - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY:-}
       - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
       - ORSO_DATA_ROOT=/app/data/tenants
+      - OVH_APPLICATION_KEY=${OVH_APPLICATION_KEY:-}
+      - OVH_APPLICATION_SECRET=${OVH_APPLICATION_SECRET:-}
+      - OVH_CONSUMER_KEY=${OVH_CONSUMER_KEY:-}
+      - OVH_CLOUD_PROJECT_ID=${OVH_CLOUD_PROJECT_ID:-}
+      - OVH_ENDPOINT=${OVH_ENDPOINT:-ovh-eu}
     volumes:
       # Accès à la socket Docker pour lancer / réveiller les conteneurs clients
       - /var/run/docker.sock:/var/run/docker.sock
@@ -56,6 +64,9 @@ services:
       - ./olympe:/app/olympe:ro
       - ./config:/app/config:ro
       - ./skills:/app/skills:ro
+    labels:
+      com.orso.managed: "true"
+      com.orso.role: "supervisor"
     networks:
       - orso_network
     restart: unless-stopped
@@ -84,6 +95,11 @@ services:
       - ./skills:/app/skills:ro
       - ./profiles:/app/profiles:ro
       - ./data/tenants/financia_solutions:/app/data
+    labels:
+      com.orso.managed: "true"
+      com.orso.role: "client_backend"
+      com.orso.tenant_id: "f3e25379-6531-479e-b276-3b3185e7421b"
+      com.orso.tenant_slug: "financia-solutions"
     networks:
       - orso_network
     restart: unless-stopped

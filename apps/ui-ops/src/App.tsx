@@ -5,16 +5,16 @@ import { OnboardingView } from "./components/OnboardingView";
 import { OnboardingDetailModal } from "./components/OnboardingDetailModal";
 import { TenantsView } from "./components/TenantsView";
 import { BillingView } from "./components/BillingView";
-import { FleetView } from "./components/FleetView";
 import { EnvironmentsView } from "./components/EnvironmentsView";
 import { TenantDetailModal } from "./components/TenantDetailModal";
 import { LoginView } from "./components/LoginView";
-import { Tenant, OpsStats, Invoice, AgentId, AdminUser, OVHSizingRecommendation } from "./types";
+import { Tenant, OpsStats, Invoice, AgentId, AdminUser, OVHSizingRecommendation, OVHStatusResponse } from "./types";
 import {
   fetchOpsStats,
   fetchTenants,
   fetchInvoices,
   fetchOVHSizing,
+  fetchOVHStatus,
   provisionOnboardingOrder,
   updateTenantAgents,
   updateTenantSubscription,
@@ -30,11 +30,12 @@ import { Loader2 } from "lucide-react";
 export const App: React.FC = () => {
   const [adminUser, setAdminUser] = useState<AdminUser | null>(getStoredUser());
   const [checkingAuth, setCheckingAuth] = useState<boolean>(true);
-  const [activeTab, setActiveTab] = useState<"dashboard" | "onboarding" | "tenants" | "environments" | "billing" | "fleet">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "onboarding" | "tenants" | "environments" | "billing">("dashboard");
   const [stats, setStats] = useState<OpsStats | null>(null);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [ovhSizing, setOvhSizing] = useState<OVHSizingRecommendation | null>(null);
+  const [ovhStatus, setOvhStatus] = useState<OVHStatusResponse | null>(null);
   const [selectedTenant, setSelectedTenant] = useState<Tenant | null>(null);
   const [selectedOnboardingTenant, setSelectedOnboardingTenant] = useState<Tenant | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
@@ -44,16 +45,18 @@ export const App: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const [statsData, tenantsData, invoicesData, sizingData] = await Promise.all([
+      const [statsData, tenantsData, invoicesData, sizingData, ovhStatusData] = await Promise.all([
         fetchOpsStats(),
         fetchTenants(),
         fetchInvoices(),
         fetchOVHSizing().catch(() => null),
+        fetchOVHStatus().catch(() => null),
       ]);
       setStats(statsData);
       setTenants(tenantsData);
       setInvoices(invoicesData);
       if (sizingData) setOvhSizing(sizingData);
+      if (ovhStatusData) setOvhStatus(ovhStatusData);
     } catch (err: any) {
       console.error("Erreur de chargement des données Orso Ops:", err);
       if (err.message && err.message.includes("Session expirée")) {
@@ -216,6 +219,7 @@ export const App: React.FC = () => {
           <OnboardingView
             tenants={tenants}
             ovhSizing={ovhSizing}
+            ovhStatus={ovhStatus}
             onSelectTenant={(t) => setSelectedOnboardingTenant(t)}
             onProvisionTenant={handleProvisionTenant}
             onRefresh={loadData}
@@ -243,14 +247,6 @@ export const App: React.FC = () => {
             tenants={tenants}
             invoices={invoices}
             onSelectTenant={(t) => setSelectedTenant(t)}
-          />
-        )}
-
-        {activeTab === "fleet" && (
-          <FleetView
-            tenants={tenants}
-            onWakeContainer={handleWakeContainer}
-            onSuspendContainer={handleSuspendContainer}
           />
         )}
       </main>

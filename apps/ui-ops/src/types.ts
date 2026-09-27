@@ -239,3 +239,19 @@ export interface TelemetryAlert {
   tenant_id?: string;
 }
 
+export interface OVHStatusResponse {
+  configured: boolean;
+  status: string;
+  credential_id?: number;
+  application_id?: number;
+  allowed_ips?: string[];
+  rules?: Array<{ method: string; path: string }>;
+  has_wildcard_rights: boolean;
+  diagnostic?: string | null;
+  cloud_projects?: string[];
+  vps_list?: string[];
+  message?: string;
+  expiration?: string | null;
+}
+
+

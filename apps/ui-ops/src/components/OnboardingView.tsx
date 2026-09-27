@@ -15,13 +15,18 @@ import {
   Mail,
   Phone,
   RefreshCw,
+  Key,
+  ShieldCheck,
+  AlertTriangle,
 } from "lucide-react";
-import { Tenant, OVHSizingRecommendation } from "../types";
+import { Tenant, OVHSizingRecommendation, OVHStatusResponse } from "../types";
 import { AGENTS_CATALOG } from "../data";
+import { requestOVHCredential } from "../api";
 
 interface OnboardingViewProps {
   tenants: Tenant[];
   ovhSizing: OVHSizingRecommendation | null;
+  ovhStatus?: OVHStatusResponse | null;
   onSelectTenant: (t: Tenant) => void;
   onProvisionTenant: (tenantId: string) => Promise<void>;
   onRefresh: () => void;
@@ -30,6 +35,7 @@ interface OnboardingViewProps {
 export const OnboardingView: React.FC<OnboardingViewProps> = ({
   tenants,
   ovhSizing,
+  ovhStatus,
   onSelectTenant,
   onProvisionTenant,
   onRefresh,
@@ -37,6 +43,23 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<"pending" | "active" | "all">("pending");
   const [copiedSnippet, setCopiedSnippet] = useState<string | null>(null);
+  const [requestingKey, setRequestingKey] = useState(false);
+  const [credentialResult, setCredentialResult] = useState<{
+    consumer_key: string;
+    validation_url: string;
+  } | null>(null);
+
+  const handleRequestKey = async () => {
+    setRequestingKey(true);
+    try {
+      const res = await requestOVHCredential();
+      setCredentialResult(res);
+    } catch (err: any) {
+      alert(err.message || "Erreur lors de la demande de clé");
+    } finally {
+      setRequestingKey(false);
+    }
+  };
 
   // Filtrage des clients onboarding (clients ayant des agent_instances ou en trial)
   const onboardingTenants = tenants.filter((t) => {
@@ -133,6 +156,86 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
             </a>
           </div>
         </div>
+
+        {/* Statut de Connexion API OVH */}
+        {ovhStatus?.configured ? (
+          ovhStatus.has_wildcard_rights ? (
+            <div className="mt-4 p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
+                <div>
+                  <div className="text-xs font-bold text-emerald-300">
+                    Connexion API OVH Active & Autorisée (Droits complets /*)
+                  </div>
+                  <div className="text-[11px] text-emerald-400/80">
+                    Application ORSO-AGENTS validée — Prêt pour le pilotage autonome d'instances et de VPS.
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center space-x-2 text-xs font-mono text-emerald-300">
+                {ovhStatus.cloud_projects && ovhStatus.cloud_projects.length > 0 && (
+                  <span className="px-2 py-0.5 rounded bg-emerald-950/60 border border-emerald-500/30">
+                    {ovhStatus.cloud_projects.length} projet(s) cloud
+                  </span>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-4 p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex items-start space-x-3">
+                  <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="text-xs font-bold text-amber-300">
+                      Clés API OVH Détectées (ORSO-AGENTS) — Droits restreints au chemin racine
+                    </div>
+                    <p className="text-[11px] text-slate-300 mt-0.5">
+                      La Consumer Key actuelle a été créée avec <code className="text-amber-300 font-mono">path=""</code>.
+                      Pour permettre le provisionnement autonome (gestion Cloud & VPS),
+                      l'API requiert une permission sur <code className="text-amber-300 font-mono">/*</code>.
+                    </p>
+                  </div>
+                </div>
+
+                {!credentialResult && (
+                  <button
+                    onClick={handleRequestKey}
+                    disabled={requestingKey}
+                    className="px-3.5 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950 flex items-center space-x-1.5 transition-all cursor-pointer shrink-0 shadow-md self-start sm:self-auto"
+                  >
+                    <Key className="w-3.5 h-3.5" />
+                    <span>{requestingKey ? "Génération..." : "Activer Droits /* (1 clic)"}</span>
+                  </button>
+                )}
+              </div>
+
+              {credentialResult && (
+                <div className="p-3.5 rounded-xl bg-slate-950/80 border border-amber-500/40 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-white">Lien d'activation OVH généré :</span>
+                    <a
+                      href={credentialResult.validation_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-3 py-1 rounded-lg text-xs font-bold bg-sky-500 hover:bg-sky-400 text-white flex items-center space-x-1 transition-all"
+                    >
+                      <span>Valider sur OVH</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </div>
+                  <div className="text-[11px] text-slate-400 font-mono break-all">
+                    Nouvelle Consumer Key à renseigner dans <span className="text-sky-300">.env</span> : <strong className="text-amber-300">{credentialResult.consumer_key}</strong>
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        ) : (
+          <div className="mt-4 p-3 rounded-2xl bg-slate-950/50 border border-slate-800 flex items-center space-x-3 text-xs text-slate-400">
+            <Key className="w-4 h-4 text-slate-500" />
+            <span>Clés API OVH en attente de configuration (.env). Recommandations calculées sur l'algorithme standard Orso.</span>
+          </div>
+        )}
 
         {/* Cartes Métriques Dimensionnement */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">

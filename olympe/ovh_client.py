@@ -156,14 +156,21 @@ class OVHClient:
         )
 
         docker_deploy_snippet = (
-            "# 1. Déploiement Conteneur Client sur le réseau orso_network\n"
+            "# 1. Déploiement Conteneur Client sécurisé sur le réseau orso_network\n"
             f"docker run -d \\\n"
-            f"  --name orso_client_backend \\\n"
+            f"  --name orso_client_{{tenant_slug}} \\\n"
             f"  --network orso_network \\\n"
             f"  --restart unless-stopped \\\n"
-            f"  -e PORT=9229 \\\n"
-            f"  -v /var/data/hermes:/root/.hermes \\\n"
-            f"  orso-backend:latest\n"
+            f"  --label com.orso.managed=true \\\n"
+            f"  --label com.orso.tenant_id={{tenant_id}} \\\n"
+            f"  --label com.orso.tenant_slug={{tenant_slug}} \\\n"
+            f"  --label com.orso.role=client_backend \\\n"
+            f"  --memory=2g \\\n"
+            f"  -e ORSO_CLIENT_ID={{tenant_id}} \\\n"
+            f"  -e ORSO_CLIENT_SLUG={{tenant_slug}} \\\n"
+            f"  -e HERMES_HOME=/app/data/hermes_home \\\n"
+            f"  -v /var/lib/orso/tenants/{{tenant_slug}}:/app/data \\\n"
+            f"  orso-core-orso-backend:latest\n"
         )
 
         return {
@@ -210,6 +217,161 @@ runcmd:
   # Prêt pour réception du conteneur Orso
   - echo "Orso Node {server_name} provisioned successfully" > /var/log/orso-bootstrap.log
 """
+
+
+    # ── Authentification & Gestion des Droits API ────────────────────────────
+
+    def get_credential_status(self) -> Dict[str, Any]:
+        """Vérifie la validité des identifiants et diagnostique les habilitations."""
+        if not self.is_configured():
+            return {
+                "configured": False,
+                "status": "unconfigured",
+                "message": "Clés API OVH non configurées dans l'environnement.",
+                "has_wildcard_rights": False,
+            }
+
+        try:
+            cred = self.request("GET", "/auth/currentCredential")
+            if not cred or not isinstance(cred, dict):
+                return {
+                    "configured": True,
+                    "status": "unknown",
+                    "message": "Réponse inattendue de l'API OVH.",
+                    "has_wildcard_rights": False,
+                }
+
+            rules = cred.get("rules", [])
+            # Vérifier si les règles couvrent les sous-chemins ("/*") ou seulement la racine ("")
+            has_wildcard = any(
+                r.get("path") in ("/*", "*", "/") or r.get("path", "").startswith("/cloud") or r.get("path", "").startswith("/vps")
+                for r in rules
+            )
+            has_root_only = all(r.get("path") == "" for r in rules) if rules else False
+
+            allowed_ips = cred.get("allowedIPs", [])
+            status_val = cred.get("status", "unknown")
+
+            diagnostic = None
+            if has_root_only:
+                diagnostic = (
+                    "Attention : La Consumer Key actuelle a été créée avec path='' (racine uniquement). "
+                    "Les appels aux sous-ressources (/cloud, /vps, /me) sont rejetés (403 NOT_GRANTED_CALL). "
+                    "Pour un provisionnement autonome, veuillez activer un token avec les droits sur '/*'."
+                )
+
+            return {
+                "configured": True,
+                "status": status_val,
+                "credential_id": cred.get("credentialId"),
+                "application_id": cred.get("applicationId"),
+                "allowed_ips": allowed_ips,
+                "rules": rules,
+                "has_wildcard_rights": has_wildcard,
+                "diagnostic": diagnostic,
+                "expiration": cred.get("expiration"),
+            }
+        except Exception as e:
+            return {
+                "configured": True,
+                "status": "error",
+                "message": str(e),
+                "has_wildcard_rights": False,
+            }
+
+    def create_credential_request(
+        self,
+        access_rules: Optional[List[Dict[str, str]]] = None,
+        redirection: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Génère une demande de Consumer Key avec les droits complets sur l'API OVH."""
+        if not self.application_key:
+            raise ValueError("Application Key manquante pour demander un nouveau Consumer Key.")
+
+        rules = access_rules or [
+            {"method": "GET", "path": "/*"},
+            {"method": "POST", "path": "/*"},
+            {"method": "PUT", "path": "/*"},
+            {"method": "DELETE", "path": "/*"},
+        ]
+
+        payload: Dict[str, Any] = {"accessRules": rules}
+        if redirection:
+            payload["redirection"] = redirection
+
+        url = f"{self.endpoint_url}/auth/credential"
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "X-Ovh-Application": self.application_key,
+                "Content-Type": "application/json",
+                "User-Agent": "OrsoOlympeOps/1.0",
+            },
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=8.0) as resp:
+                res = json.loads(resp.read().decode("utf-8"))
+                return {
+                    "success": True,
+                    "consumer_key": res.get("consumerKey"),
+                    "validation_url": res.get("validationUrl"),
+                    "state": res.get("state"),
+                }
+        except urllib.error.HTTPError as e:
+            err_msg = e.read().decode("utf-8", errors="replace")
+            raise ValueError(f"Erreur demande token OVH ({e.code}): {err_msg}")
+
+    # ── Gestion Autonome des Ressources Cloud & VPS ──────────────────────────
+
+    def list_cloud_projects(self) -> List[str]:
+        """Retourne la liste des identifiants de projets Public Cloud."""
+        res = self.request("GET", "/cloud/project")
+        return res if isinstance(res, list) else []
+
+    def get_project_detail(self, project_id: str) -> Optional[Dict[str, Any]]:
+        """Consulte les détails d'un projet Public Cloud."""
+        return self.request("GET", f"/cloud/project/{project_id}")
+
+    def list_cloud_instances(self, project_id: str) -> List[Dict[str, Any]]:
+        """Liste les instances de calcul déployées dans un projet Public Cloud."""
+        res = self.request("GET", f"/cloud/project/{project_id}/instance")
+        return res if isinstance(res, list) else []
+
+    def list_vps(self) -> List[str]:
+        """Retourne la liste des serveurs VPS associés au compte."""
+        res = self.request("GET", "/vps")
+        return res if isinstance(res, list) else []
+
+    def get_vps_detail(self, vps_name: str) -> Optional[Dict[str, Any]]:
+        """Retourne les informations matérielles et réseau d'un VPS."""
+        return self.request("GET", f"/vps/{vps_name}")
+
+    def create_cloud_instance(
+        self,
+        project_id: str,
+        name: str,
+        flavor_id: str,
+        image_id: str,
+        region: str = "GRA11",
+        ssh_key_id: Optional[str] = None,
+        user_data: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Déploie de manière autonome une nouvelle instance Public Cloud."""
+        payload: Dict[str, Any] = {
+            "name": name,
+            "flavorId": flavor_id,
+            "imageId": image_id,
+            "region": region,
+        }
+        if ssh_key_id:
+            payload["sshKeyId"] = ssh_key_id
+        if user_data:
+            payload["userData"] = user_data
+
+        return self.request("POST", f"/cloud/project/{project_id}/instance", data=payload)
 
 
 # Instance singleton

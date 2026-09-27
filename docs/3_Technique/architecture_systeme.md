@@ -1,48 +1,102 @@
-# Architecture Système Multi-Niveaux
+# Architecture Système Multi-Niveaux & Flotte Multi-Tenants
 
-Ce document détaille l'infrastructure technique globale de l'écosystème Hermès, la topologie des conteneurs Docker, l'architecture de l'application cliente PWA et les schémas de données.
-
----
-
-## 1. Topologie Globale des Conteneurs et des Flux
-
-L'architecture repose sur trois briques logicielles découplées et interconnectées via un réseau Docker bridge (`hermes_network`) :
-
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                              HÔTE DOCKER                                │
-│                                                                        │
-│   ┌───────────────────────────┐      ┌───────────────────────────────┐ │
-│   │   App_Hermes Core (PWA)   │      │    hermes-core (Backend)      │ │
-│   │   - Container:            │      │    - Container:               │ │
-│   │     app_hermes_core       │      │      hermes_recouvrement_agent│ │
-│   │   - Port: 9300:80         │      │    - Port: 9229:9119          │ │
-│   │   - PWA / Service Worker  │      │    - Python 3.11 / LLM Engine │ │
-│   └─────────────┬─────────────┘      └───────────────▲───────────────┘ │
-│                 │                                    │                 │
-│                 │ (WebSocket / REST : Port 9229)     │                 │
-│                 └────────────────────────────────────┘                 │
-│                                                      ▲                 │
-│   ┌───────────────────────────┐                      │                 │
-│   │     Site_Hermes-core      │                      │                 │
-│   │   - Vitrine / Vidéos      │                      │                 │
-│   │   - Monitoring (Chart.js) ├──────────────────────┘                 │
-│   │   - Admin (Port 80/Vercel)│ (Télémétrie HTTP / JSON Export)        │
-│   └───────────────────────────┘                                        │
-└────────────────────────────────────────────────────────────────────────┘
-```
+Ce document détaille l'infrastructure technique globale de l'écosystème Orso Agents / Olympe, la topologie multi-tenants des conteneurs Docker colocalisés sur un serveur OVH, la passerelle Ingress, la gestion des ports et l'isolation des données.
 
 ---
 
-## 2. Spécifications Techniques des Composants
+## 1. Topologie Globale de la Flotte et Hébergement Multi-Tenants (OVH)
 
-### A. Moteur Backend (`hermes-core`)
-* **Image Docker** : Python 3.11 sur base Linux allégée.
-* **Ports** : `9229:9119` (port interne 9119 redirigé sur 9229 de l'hôte).
+L'architecture repose sur une passerelle Ingress unique, un superviseur de flotte (**Olympe**) et un ensemble de **conteneurs clients isolés**, tous connectés via un réseau Docker bridge privé (`orso_network`) :
+
+```
+                                  PUBLIC INTERNET
+                                         │
+                 ┌───────────────────────┴───────────────────────┐
+                 │                                               │
+                 ▼ (Port 443 / HTTPS)                            ▼ (Port 443 / HTTPS)
+      app.orso-agents.fr                               ops.orso-agents.fr
+ (Guichet Unique Tous Clients)                    (Cockpit Ops & Facturation Olympe)
+                 │                                               │
+                 └───────────────────────┬───────────────────────┘
+                                         ▼
+                 ┌───────────────────────────────────────────────┐
+                 │       PASSERELLE INGRESS UNIFIÉE (Nginx)      │
+                 │   - Ports Hôte OVH : 80 & 443                 │
+                 │   - Résolveur Docker DNS : 127.0.0.11         │
+                 │   - Routage Path-based dynamique (0-Reload)   │
+                 └───────┬───────────────────────────────┬───────┘
+                         │                               │
+       /t/{tenant_slug}/*│                               │ /api/olympe/*
+                         ▼                               ▼
+      ┌───────────────────────────────────┐ ┌───────────────────────────────────┐
+      │  RÉSEAU DOCKER BRIDGE PRIVÉ       │ │        SUPERVISEUR OLYMPE         │
+      │         (orso_network)            │ │          (olympe_core)            │
+      │                                   │ │   - Port interne : 9230           │
+      │ ┌───────────────────────────────┐ │ │   - Accès /var/run/docker.sock    │
+      │ │ Conteneur Client A            │ │ │   - Provisioning, Wake & Stop     │
+      │ │ - Name: orso_client_financia  │ │ │   - Télémétrie & Signes Vitaux    │
+      │ │ - Port interne : 9119         │ │ └───────────────────────────────────┘
+      │ │ - Vol: /data/tenants/financia │ │
+      │ └───────────────────────────────┘ │
+      │ ┌───────────────────────────────┐ │
+      │ │ Conteneur Client B            │ │
+      │ │ - Name: orso_client_batipro   │ │
+      │ │ - Port interne : 9119         │ │
+      │ │ - Vol: /data/tenants/batipro  │ │
+      │ └───────────────────────────────┘ │
+      │ ┌───────────────────────────────┐ │
+      │ │ Conteneur Client N...         │ │
+      │ │ - Port interne : 9119         │ │
+      │ └───────────────────────────────┘ │
+      └───────────────────────────────────┘
+```
+
+---
+
+## 2. Principes Fondamentaux d'Isolation et de Routage
+
+### 2.1 Routage Ingress & Élimination des Entrées DNS par Client
+* **Pas de DNS à l'onboarding** : Il n'y a **aucun enregistrement DNS à créer pour chaque nouveau client**.
+* **Domaine Unique** : Toute la clientèle se connecte sur `https://app.orso-agents.fr`.
+* **Aiguillage par chemin (Path-Based Routing)** :
+  * Les requêtes API sont préfixées par `/t/{tenant_slug}/api/...` et les WebSockets par `/t/{tenant_slug}/ws`.
+  * Nginx intercepte l'URL avec l'expression `location ~ ^/t/(?<tenant>[a-zA-Z0-9_-]+)/api/(.*)$`.
+  * Grâce au résolveur DNS interne Docker (`resolver 127.0.0.11 valid=10s ipv6=off;`), Nginx achemine le trafic vers `http://orso_client_$tenant:9119`.
+  * Dès qu'un nouveau conteneur `orso_client_{slug}` est instancié sur `orso_network`, il est immédiatement accessible **sans recharger Nginx** (*Zero-Reload*) et sans certificat SSL additionnel.
+
+### 2.2 Gestion des Ports & Réseau Virtuel Docker
+* **Aucun conflit de port sur l'hôte** : Sur le serveur OVH, **aucun conteneur client ne publie de port** (pas de directive `-p 9229:9119` ou `-p 9301:9119`). Seule la passerelle Nginx expose les ports `80` et `443` sur l'IP publique.
+* **Port standard interne universel (9119)** : Chaque conteneur client écoute sur le port standard `9119` en interne.
+* **Étanchéité réseau** : Chaque conteneur sur le réseau bridge `orso_network` possède sa propre pile réseau TCP/IP et sa propre adresse IP privée virtuelle (`172.20.0.X`). Dix conteneurs peuvent donc écouter sur le port `9119` simultanément sur le même serveur sans jamais se chevaucher.
+
+### 2.3 Étanchéité Quadruple entre Conteneurs Colocalisés
+Pour garantir qu'aucun client ne puisse interférer avec un autre sur un serveur partagé :
+1. **Isolation des Données (Volumes étanches)** : Chaque conteneur monte son propre répertoire hôte `/var/lib/orso/tenants/{tenant_slug}/` dans `/app/data`. Sa base SQLite locale (`state.db`), ses mémoires vectorielles et ses configurations d'agents sont physiquement isolées.
+2. **Isolation des Processus & Ressources (Namespaces & Cgroups Linux)** : Chaque conteneur dispose de ses propres tables de processus (PID), IPC et Mount. Des quotas mémoire/CPU stricts (`--memory=2g --cpus=1.0`) empêchent un agent d'assécher le serveur.
+3. **Variables d'Environnement Dédiées** : `ORSO_CLIENT_ID` (UUID Supabase), `ORSO_CLIENT_SLUG`, ainsi que les tokens de connecteurs métiers (Pennylane, Sellsy...) sont injectés isolément à chaque conteneur.
+4. **Verrou Cryptographique JWT (Guard KAN-27)** : Même en cas de requête réseau mal dirigée, le Guard applicatif décode le JWT Supabase du porteur et valide que le claim `tenant_id` correspond au `ORSO_CLIENT_ID` du conteneur. En cas de non-concordance, la requête est rejetée en HTTP 403 Forbidden.
+
+### 2.4 Standard d'Identification Déterministe par Labels Docker
+Pour éradiquer tout bricolage basé sur des devinettes de noms de conteneurs, tous les conteneurs instanciés par la plateforme doivent porter des **Docker Labels immuables** :
+* `com.orso.managed=true` : Permet d'isoler immédiatement les conteneurs de la plateforme de tout autre conteneur tiers présent sur le serveur hôte.
+* `com.orso.tenant_id=<UUID>` : Clé primaire d'association avec la table `public.tenants`.
+* `com.orso.tenant_slug=<slug>` : Slug de routage réseau interne.
+* `com.orso.role=client_backend` | `supervisor` | `ingress` : Rôle architectural du composant.
+* `com.orso.created_at=<ISO8601>` : Date d'instanciation.
+
+Le superviseur Olympe et le module de télémétrie interrogent l'API Docker en filtrant nativement sur `label=com.orso.managed=true`, garantissant une vérité terrain infaillible.
+
+---
+
+## 3. Spécifications Techniques des Composants
+
+### A. Moteur Backend Client (`orso-core` / `hermes-core`)
+* **Image Docker** : Python 3.11 sur base Linux allégée (`Dockerfile.orso`).
+* **Port d'écoute interne** : `9119` (non publié sur l'hôte, accessible uniquement depuis `orso_network`).
 * **Volumes Persistants** :
   * `./config` : `hermes.yaml` (modèles, identité, passerelles).
   * `./skills` (Lecture seule `:ro`) : Scripts de compétences Python (`balance_agee.py`, `veille_bodacc.py`, etc.).
-  * `./data` : Base SQLite locale et exports de télémétrie (`telemetry_export.json`).
+  * `/var/lib/orso/tenants/{tenant_slug}` monté sur `/app/data` : Base SQLite locale (`state.db`) et mémoires locales de l'agent.
 * **Moteur LLM** : Passerelle OpenRouter (modèle `deepseek/deepseek-v4-flash` à basse température `0.2`).
 
 ### B. Application Cliente Multi-Agents (`apps/ui-client` PWA)

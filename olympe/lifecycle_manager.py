@@ -12,6 +12,7 @@ import subprocess
 import time
 import urllib.request
 import urllib.error
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -281,12 +282,18 @@ class DockerLifecycleManager:
                 "message": "Provisioning simulé avec succès.",
             }
 
+        now_iso = datetime.now(timezone.utc).isoformat()
         run_args = [
             "run",
             "-d",
             "--name", container_name,
             "--network", self.network_name,
             "--restart", "unless-stopped",
+            "--label", "com.orso.managed=true",
+            "--label", f"com.orso.tenant_id={tenant_id}",
+            "--label", f"com.orso.tenant_slug={tenant_slug}",
+            "--label", "com.orso.role=client_backend",
+            "--label", f"com.orso.created_at={now_iso}",
             "-v", f"{tenant_data_dir}:/app/data",
         ]
 
