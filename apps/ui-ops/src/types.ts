@@ -38,6 +38,8 @@ export interface TenantUser {
 
 export interface TenantInstance {
   container_name: string;
+  internal_route_key?: string;
+  environment_status?: string;
   status: "ready" | "sleeping" | "not_provisioned" | "stopped" | "error" | "paused" | "not_found" | string;
 }
 
@@ -67,12 +69,60 @@ export interface Invoice {
   tenant_slug?: string;
 }
 
+export interface AgentInstance {
+  id: string;
+  tenant_id: string;
+  agent_type: "RECOUVREMENT" | "COMMERCIAL" | "SUPPORT_CLIENT" | "APPEL_OFFRES" | string;
+  agent_slug: "jerome" | "lucas" | "clara" | "victor" | string;
+  alias_name: string;
+  tone: "CORPORATE" | "DIPLOMATIC" | "DIRECT" | string;
+  autonomy_mode: "COPILOT" | "SEMI_AUTONOMOUS" | "AUTONOMOUS" | string;
+  escalation_threshold_eur: number;
+  escalation_email: string;
+  integration_tool?: string;
+  specific_config?: Record<string, any>;
+  soul_md_content?: string;
+  config_json?: Record<string, any>;
+  provisioning_status: "PENDING_SETUP" | "PROVISIONING" | "ACTIVE" | "ERROR" | string;
+  is_active: boolean;
+  mission_letter?: string;
+}
+
+export interface OVHSizingRecommendation {
+  is_ovh_api_configured: boolean;
+  pending_tenants: number;
+  pending_agents: number;
+  ram_mb_estimated: number;
+  vcpus_estimated: number;
+  recommended_flavor: string;
+  flavor_details: {
+    name: string;
+    vcpus: number;
+    ram_mb: number;
+    disk_gb: number;
+    price_monthly_eur: number;
+    capacity_agents: number;
+  };
+  can_fit_on_current_pool: boolean;
+  current_pool_ip: string;
+  cloud_init_snippet: string;
+  docker_deploy_snippet: string;
+  ovh_console_url: string;
+}
+
 export interface Tenant {
   id: string;
   name: string;
   siret?: string;
+  siren?: string;
+  vat_number?: string;
+  legal_form?: string;
   slug: string;
   sector?: string;
+  employee_count_range?: string;
+  address_line1?: string;
+  postal_code?: string;
+  city?: string;
   status: "active" | "trial" | "suspended" | "churn" | string;
   created_at: string;
   contact: TenantContact;
@@ -82,6 +132,7 @@ export interface Tenant {
     active: AgentId[];
     trials: Record<string, TrialConfig>;
   };
+  agent_instances?: AgentInstance[];
   subscription: SubscriptionInfo;
   invoices?: Invoice[];
 }

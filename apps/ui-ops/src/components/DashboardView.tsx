@@ -8,6 +8,7 @@ interface DashboardViewProps {
   tenants: Tenant[];
   onSelectTenant: (t: Tenant) => void;
   onGoToTenants: () => void;
+  onGoToOnboarding?: () => void;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
@@ -15,6 +16,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   tenants,
   onSelectTenant,
   onGoToTenants,
+  onGoToOnboarding,
 }) => {
   if (!stats) {
     return (
@@ -25,6 +27,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   }
 
   const kpis = stats.kpis;
+  const pendingCount = tenants.filter(
+    (t) =>
+      t.agent_instances?.some((a) => a.provisioning_status === "PENDING_SETUP") ||
+      t.instance?.status === "provisioning"
+  ).length;
 
   return (
     <div className="space-y-8">
@@ -37,14 +44,49 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </p>
         </div>
         <div className="flex items-center space-x-3">
+          {onGoToOnboarding && pendingCount > 0 && (
+            <button
+              onClick={onGoToOnboarding}
+              className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-xl text-sm transition-all shadow-lg shadow-amber-500/20 cursor-pointer animate-pulse"
+            >
+              {pendingCount} En Attente OVH
+            </button>
+          )}
           <button
             onClick={onGoToTenants}
-            className="px-4 py-2 bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold rounded-xl text-sm transition-all shadow-lg shadow-sky-500/20"
+            className="px-4 py-2 bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold rounded-xl text-sm transition-all shadow-lg shadow-sky-500/20 cursor-pointer"
           >
             Gérer les Clients & Agents
           </button>
         </div>
       </div>
+
+      {/* Alerte Nouveaux Clients Onboarding */}
+      {pendingCount > 0 && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-200">
+          <div className="flex items-center space-x-3">
+            <span className="p-2 rounded-xl bg-amber-500/20 text-amber-400">
+              <Sparkles className="w-5 h-5 animate-pulse" />
+            </span>
+            <div>
+              <div className="font-bold text-sm text-white">
+                {pendingCount} nouveau(x) client(s) en attente de déploiement d'instance OVH
+              </div>
+              <p className="text-xs text-amber-300/80">
+                Les calibrations IA et lettres de mission ont été déposées depuis le tunnel web et nécessitent un dimensionnement.
+              </p>
+            </div>
+          </div>
+          {onGoToOnboarding && (
+            <button
+              onClick={onGoToOnboarding}
+              className="mt-3 sm:mt-0 px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer"
+            >
+              Traiter les Arrivées
+            </button>
+          )}
+        </div>
+      )}
 
       {/* KPI Cards Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">

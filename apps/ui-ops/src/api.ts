@@ -11,6 +11,7 @@ import {
   TelemetryEnvironment,
   TelemetrySnapshot,
   TelemetryAlert,
+  OVHSizingRecommendation,
 } from "./types";
 
 const TOKEN_KEY = "orso_ops_auth_token";
@@ -307,5 +308,77 @@ export async function fetchTelemetryAlerts(agentId?: number): Promise<TelemetryA
   const data = await res.json();
   return data.alerts || [];
 }
+
+// ── Onboarding & Déploiement OVH ──────────────────────────────────────────
+
+export async function fetchPendingOnboarding(): Promise<Tenant[]> {
+  const res = await fetch(`${getBaseUrl()}/api/olympe/ops/onboarding/pending`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(`Erreur récupération onboarding en attente (${res.status})`);
+  }
+  const data = await res.json();
+  return data.pending || [];
+}
+
+export async function fetchOnboardingOrders(): Promise<Tenant[]> {
+  const res = await fetch(`${getBaseUrl()}/api/olympe/ops/onboarding/orders`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(`Erreur récupération commandes d'onboarding (${res.status})`);
+  }
+  const data = await res.json();
+  return data.orders || [];
+}
+
+export async function fetchOnboardingOrderDetail(tenantId: string): Promise<Tenant> {
+  const res = await fetch(`${getBaseUrl()}/api/olympe/ops/onboarding/orders/${tenantId}`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(`Erreur récupération détail onboarding ${tenantId} (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function fetchOVHSizing(): Promise<OVHSizingRecommendation> {
+  const res = await fetch(`${getBaseUrl()}/api/olympe/ops/onboarding/ovh-sizing`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(`Erreur calcul dimensionnement OVH (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function provisionOnboardingOrder(tenantId: string): Promise<{ success: boolean; message?: string }> {
+  const res = await fetch(`${getBaseUrl()}/api/olympe/ops/onboarding/${tenantId}/provision`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Erreur serveur" }));
+    throw new Error(err.detail || `Échec du provisionnement (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function updateAgentInstanceStatus(
+  instanceId: string,
+  status: string
+): Promise<{ success: boolean; instance_id: string; status: string }> {
+  const res = await fetch(`${getBaseUrl()}/api/olympe/ops/agent-instances/${instanceId}/status`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ status }),
+  });
+  if (!res.ok) {
+    throw new Error(`Échec mise à jour statut agent (${res.status})`);
+  }
+  return res.json();
+}
+
 
 

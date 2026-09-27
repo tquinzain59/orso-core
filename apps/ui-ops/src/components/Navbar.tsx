@@ -1,13 +1,14 @@
 import React from "react";
-import { LayoutDashboard, Users, CreditCard, Server, RefreshCw, ShieldCheck, LogOut, User, Activity } from "lucide-react";
+import { LayoutDashboard, Users, CreditCard, Server, RefreshCw, ShieldCheck, LogOut, User, Activity, Sparkles } from "lucide-react";
 import { AdminUser } from "../types";
 
 interface NavbarProps {
-  activeTab: "dashboard" | "tenants" | "environments" | "billing" | "fleet";
-  setActiveTab: (tab: "dashboard" | "tenants" | "environments" | "billing" | "fleet") => void;
+  activeTab: "dashboard" | "onboarding" | "tenants" | "environments" | "billing" | "fleet";
+  setActiveTab: (tab: "dashboard" | "onboarding" | "tenants" | "environments" | "billing" | "fleet") => void;
   onRefresh: () => void;
   loading: boolean;
   totalClients: number;
+  pendingOnboardingCount?: number;
   adminUser?: AdminUser | null;
   onLogout?: () => void;
 }
@@ -18,6 +19,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onRefresh,
   loading,
   totalClients,
+  pendingOnboardingCount = 0,
   adminUser,
   onLogout,
 }) => {
@@ -53,6 +55,23 @@ export const Navbar: React.FC<NavbarProps> = ({
             >
               <LayoutDashboard className="w-4 h-4" />
               <span>Vue d'ensemble</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab("onboarding")}
+              className={`flex items-center space-x-2 px-3 py-2 rounded-lg text-sm font-medium transition-all cursor-pointer relative ${
+                activeTab === "onboarding"
+                  ? "bg-slate-800 text-amber-400 shadow-sm border border-slate-700"
+                  : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
+              }`}
+            >
+              <Sparkles className="w-4 h-4 text-amber-400" />
+              <span>Arrivées & OVH</span>
+              {pendingOnboardingCount > 0 && (
+                <span className="ml-1.5 px-2 py-0.5 rounded-full text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse">
+                  {pendingOnboardingCount}
+                </span>
+              )}
             </button>
 
             <button

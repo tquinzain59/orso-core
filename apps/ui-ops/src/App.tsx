@@ -1,17 +1,21 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { Navbar } from "./components/Navbar";
 import { DashboardView } from "./components/DashboardView";
+import { OnboardingView } from "./components/OnboardingView";
+import { OnboardingDetailModal } from "./components/OnboardingDetailModal";
 import { TenantsView } from "./components/TenantsView";
 import { BillingView } from "./components/BillingView";
 import { FleetView } from "./components/FleetView";
 import { EnvironmentsView } from "./components/EnvironmentsView";
 import { TenantDetailModal } from "./components/TenantDetailModal";
 import { LoginView } from "./components/LoginView";
-import { Tenant, OpsStats, Invoice, AgentId, AdminUser } from "./types";
+import { Tenant, OpsStats, Invoice, AgentId, AdminUser, OVHSizingRecommendation } from "./types";
 import {
   fetchOpsStats,
   fetchTenants,
   fetchInvoices,
+  fetchOVHSizing,
+  provisionOnboardingOrder,
   updateTenantAgents,
   updateTenantSubscription,
   wakeContainer,
@@ -26,11 +30,13 @@ import { Loader2 } from "lucide-react";
 export const App: React.FC = () => {
   const [adminUser, setAdminUser] = useState<AdminUser | null>(getStoredUser());
   const [checkingAuth, setCheckingAuth] = useState<boolean>(true);
-  const [activeTab, setActiveTab] = useState<"dashboard" | "tenants" | "environments" | "billing" | "fleet">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "onboarding" | "tenants" | "environments" | "billing" | "fleet">("dashboard");
   const [stats, setStats] = useState<OpsStats | null>(null);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [ovhSizing, setOvhSizing] = useState<OVHSizingRecommendation | null>(null);
   const [selectedTenant, setSelectedTenant] = useState<Tenant | null>(null);
+  const [selectedOnboardingTenant, setSelectedOnboardingTenant] = useState<Tenant | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -38,14 +44,16 @@ export const App: React.FC = () => {
     setLoading(true);
     setError(null);
     try {
-      const [statsData, tenantsData, invoicesData] = await Promise.all([
+      const [statsData, tenantsData, invoicesData, sizingData] = await Promise.all([
         fetchOpsStats(),
         fetchTenants(),
         fetchInvoices(),
+        fetchOVHSizing().catch(() => null),
       ]);
       setStats(statsData);
       setTenants(tenantsData);
       setInvoices(invoicesData);
+      if (sizingData) setOvhSizing(sizingData);
     } catch (err: any) {
       console.error("Erreur de chargement des données Orso Ops:", err);
       if (err.message && err.message.includes("Session expirée")) {
@@ -138,6 +146,21 @@ export const App: React.FC = () => {
     }
   };
 
+  // Provisioning Onboarding
+  const handleProvisionTenant = async (tenantId: string) => {
+    await provisionOnboardingOrder(tenantId);
+    await loadData();
+    const updated = await fetchTenants();
+    const current = updated.find((t) => t.id === tenantId) || null;
+    setSelectedOnboardingTenant(current);
+  };
+
+  const pendingOnboardingCount = tenants.filter(
+    (t) =>
+      t.agent_instances?.some((a) => a.provisioning_status === "PENDING_SETUP") ||
+      t.instance?.status === "provisioning"
+  ).length;
+
   // Écran d'initialisation rapide
   if (checkingAuth) {
     return (
@@ -161,6 +184,7 @@ export const App: React.FC = () => {
         onRefresh={loadData}
         loading={loading}
         totalClients={tenants.length}
+        pendingOnboardingCount={pendingOnboardingCount}
         adminUser={adminUser}
         onLogout={handleLogout}
       />
@@ -184,6 +208,17 @@ export const App: React.FC = () => {
             tenants={tenants}
             onSelectTenant={(t) => setSelectedTenant(t)}
             onGoToTenants={() => setActiveTab("tenants")}
+            onGoToOnboarding={() => setActiveTab("onboarding")}
+          />
+        )}
+
+        {activeTab === "onboarding" && (
+          <OnboardingView
+            tenants={tenants}
+            ovhSizing={ovhSizing}
+            onSelectTenant={(t) => setSelectedOnboardingTenant(t)}
+            onProvisionTenant={handleProvisionTenant}
+            onRefresh={loadData}
           />
         )}
 
@@ -230,9 +265,17 @@ export const App: React.FC = () => {
         onSuspendContainer={handleSuspendContainer}
       />
 
+      {/* Modal Détail Onboarding, Calibration & OVH */}
+      <OnboardingDetailModal
+        tenant={selectedOnboardingTenant}
+        onClose={() => setSelectedOnboardingTenant(null)}
+        onProvision={handleProvisionTenant}
+      />
+
       <footer className="border-t border-slate-900 py-6 text-center text-xs text-slate-500">
         Orso Ops Cockpit • Plateforme d'orchestration Olympe • Port 9230 • Tous droits réservés
       </footer>
     </div>
   );
 };
+

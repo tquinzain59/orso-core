@@ -77,6 +77,10 @@ class CreateUserRequest(BaseModel):
     is_admin: bool = Field(False, description="Définit si l'utilisateur possède les droits d'administration Orso")
 
 
+class UpdateAgentStatusRequest(BaseModel):
+    status: str = Field(..., description="Statut de l'instance d'agent : PENDING_SETUP, PROVISIONING, ACTIVE, ERROR")
+
+
 # ── Endpoints Supervision & Cycle de Vie Conteneurs ──────────────────────────
 
 @app.get("/health")
@@ -279,6 +283,53 @@ async def stripe_webhook(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Payload JSON invalide")
     return ops_manager.handle_stripe_webhook(payload)
+
+
+# ── Endpoints Onboarding & Déploiement OVH ──────────────────────────────────
+
+@app.get("/api/olympe/ops/onboarding/pending")
+async def get_pending_onboarding(admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Retourne la liste des nouveaux clients en attente de déploiement."""
+    pending = ops_manager.get_pending_onboarding()
+    return {"pending": pending, "count": len(pending)}
+
+
+@app.get("/api/olympe/ops/onboarding/orders")
+async def list_onboarding_orders(admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Retourne l'historique complet des commandes d'onboarding avec détail des calibrations."""
+    orders = ops_manager.get_onboarding_orders()
+    return {"orders": orders, "count": len(orders)}
+
+
+@app.get("/api/olympe/ops/onboarding/orders/{tenant_id}")
+async def get_onboarding_order(tenant_id: str, admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Retourne le profil détaillé et la calibration d'une commande d'onboarding."""
+    detail = ops_manager.get_onboarding_order_detail(tenant_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Commande d'onboarding introuvable.")
+    return detail
+
+
+@app.get("/api/olympe/ops/onboarding/ovh-sizing")
+async def get_ovh_sizing(admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Retourne l'évaluation du dimensionnement matériel et la recommandation d'instance OVH."""
+    return ops_manager.get_ovh_sizing()
+
+
+@app.post("/api/olympe/ops/onboarding/{tenant_id}/provision")
+async def provision_onboarding_order(tenant_id: str, admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Valide le déploiement d'un client et active ses agents en production."""
+    try:
+        return ops_manager.provision_onboarding_order(tenant_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/olympe/ops/agent-instances/{instance_id}/status")
+async def update_agent_status(instance_id: str, req: UpdateAgentStatusRequest, admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Met à jour le statut d'une instance agent (PENDING_SETUP, PROVISIONING, ACTIVE, ERROR)."""
+    return ops_manager.update_agent_instance_status(instance_id, req.status)
+
 
 
 # ── Télémétrie & Environnements Docker ─────────────────────────────────────

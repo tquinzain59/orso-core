@@ -13,6 +13,9 @@ import urllib.request
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from olympe.onboarding_worker import onboarding_worker
+from olympe.ovh_client import ovh_client
+
 _log = logging.getLogger("orso.olympe.ops")
 
 # Grille tarifaire officielle Orso Agents (prix mensuels HT)
@@ -376,6 +379,173 @@ class OpsManager:
                     }
                 ],
             },
+            "7a192844-3c82-4112-9214-abcdef123456": {
+                "id": "7a192844-3c82-4112-9214-abcdef123456",
+                "name": "Lumina Solutions",
+                "siret": "91234567800029",
+                "siren": "912345678",
+                "vat_number": "FR32912345678",
+                "legal_form": "SAS",
+                "slug": "lumina-solutions",
+                "sector": "Énergie & Transition Écologique",
+                "employee_count_range": "20-49",
+                "address_line1": "14 rue de la Paix",
+                "postal_code": "75002",
+                "city": "Paris",
+                "status": "trial",
+                "created_at": "2026-09-27T09:30:00Z",
+                "contact": {
+                    "full_name": "Thibault Martin",
+                    "email": "thibault.martin@lumina-solutions.fr",
+                    "phone": "+33 6 12 34 56 78",
+                    "role": "Directeur Général",
+                },
+                "users": [
+                    {
+                        "id": "usr_lumina_001",
+                        "email": "thibault.martin@lumina-solutions.fr",
+                        "full_name": "Thibault Martin",
+                        "role": "Directeur Général",
+                        "is_admin": True,
+                        "is_primary_contact": True,
+                        "created_at": "2026-09-27T09:30:00Z",
+                    }
+                ],
+                "instance": {
+                    "container_name": "orso_backend_lumina-solutions",
+                    "internal_route_key": "orso_backend_lumina-solutions",
+                    "status": "provisioning",
+                    "environment_status": "inactive",
+                },
+                "agents_enabled": {
+                    "active": ["jerome", "lucas"],
+                    "trials": {},
+                },
+                "subscription": {
+                    "id": "sub_trial_lumina_001",
+                    "tier_id": "2_agents",
+                    "tier_label": "Duo (2 agents)",
+                    "price_ht": 169.00,
+                    "status": "trialing",
+                    "current_period_start": "2026-09-27T09:30:00Z",
+                    "current_period_end": "2026-10-27T23:59:59Z",
+                    "stripe_customer_id": "cus_lumina_trial",
+                    "stripe_subscription_id": None,
+                    "payment_method": "Carte bancaire (••• 4242)",
+                },
+                "invoices": [],
+                "agent_instances": [
+                    {
+                        "id": "inst_jerome_lumina_001",
+                        "tenant_id": "7a192844-3c82-4112-9214-abcdef123456",
+                        "agent_type": "RECOUVREMENT",
+                        "agent_slug": "jerome",
+                        "alias_name": "Jérôme",
+                        "tone": "DIPLOMATIC",
+                        "autonomy_mode": "SEMI_AUTONOMOUS",
+                        "escalation_threshold_eur": 5000.00,
+                        "escalation_email": "direction@lumina-solutions.fr",
+                        "integration_tool": "Pennylane",
+                        "specific_config": {
+                            "payment_terms": "net_30",
+                            "reminder_cadence": [7, 15, 30],
+                            "dispute_email": "compta@lumina-solutions.fr"
+                        },
+                        "provisioning_status": "PENDING_SETUP",
+                        "is_active": True,
+                        "mission_letter": (
+                            "1. Contexte & Enjeux Stratégiques :\n"
+                            "Lumina Solutions constate un allongement préoccupant de ses délais moyens de paiement (DSO actuel de 68 jours). "
+                            "L'enjeu prioritaire est de sécuriser la trésorerie sans altérer la qualité des relations commerciales avec les donneurs d'ordres.\n\n"
+                            "2. Objectifs Prioritaires & Chiffrés :\n"
+                            "- Ramener le DSO sous la barre des 40 jours d'ici 60 jours.\n"
+                            "- Recouvrer 85% des factures impayées sous 15 jours après échéance.\n"
+                            "- Automatiser 100% des relances amiables de premier et second niveau.\n\n"
+                            "3. Ligne de Conduite, Tonalité & Posture :\n"
+                            "Posture diplomate, bienveillante mais extrêmement rigoureuse. Toujours privilégier la conciliation amiable et la proposition d'échéanciers validés. "
+                            "Ne jamais employer de vocabulaire contentieux ou menaçant sans accord exprès de la direction.\n\n"
+                            "4. Déclencheurs d'Escalade Humaine Immédiate :\n"
+                            "- Créance supérieure à 5 000.00 € sans réponse après 2 relances.\n"
+                            "- Détection d'un litige technique sur les chantiers ou contestation de facture.\n"
+                            "- Demande de moratoire excédant 60 jours."
+                        ),
+                        "soul_md_content": (
+                            "# Manifeste Système — Jérôme (Recouvrement & Trésorerie)\n\n"
+                            "## 1. Identité & Raison d'Être\n"
+                            "Jérôme est le copilote financier dédié à la préservation de la trésorerie de Lumina Solutions.\n\n"
+                            "## 2. Profils et Rôles des Agents Déployés\n"
+                            "### Agent : Jérôme (Recouvrement)\n"
+                            "- **Lettre de Mission Opérationnelle** :\n"
+                            "  > 1. Contexte & Enjeux Stratégiques : Sécuriser la trésorerie B2B et ramener le DSO sous 40 jours.\n"
+                            "  > 2. Objectifs Prioritaires & Chiffrés : 85% recouvrés sous 15 jours.\n"
+                            "  > 3. Ligne de Conduite, Tonalité & Posture : Diplomatique et constructive.\n"
+                            "  > 4. Déclencheurs d'Escalade Humaine Immédiate : Litige ou montant > 5000 €.\n"
+                        ),
+                        "config_json": {
+                            "agent_type": "RECOUVREMENT",
+                            "name": "Jérôme",
+                            "tone": "DIPLOMATIC",
+                            "autonomy_mode": "SEMI_AUTONOMOUS",
+                            "escalation_threshold_eur": 5000.00,
+                            "escalation_email": "direction@lumina-solutions.fr",
+                            "integration_tool": "Pennylane"
+                        }
+                    },
+                    {
+                        "id": "inst_lucas_lumina_002",
+                        "tenant_id": "7a192844-3c82-4112-9214-abcdef123456",
+                        "agent_type": "COMMERCIAL",
+                        "agent_slug": "lucas",
+                        "alias_name": "Lucas",
+                        "tone": "DIRECT",
+                        "autonomy_mode": "COPILOT",
+                        "escalation_threshold_eur": 10000.00,
+                        "escalation_email": "direction@lumina-solutions.fr",
+                        "integration_tool": "HubSpot",
+                        "specific_config": {
+                            "target_sector": "BTP & Rénovation",
+                            "lead_scoring_min": 70,
+                            "quote_followup_days": 2
+                        },
+                        "provisioning_status": "PENDING_SETUP",
+                        "is_active": True,
+                        "mission_letter": (
+                            "1. Contexte & Enjeux Stratégiques :\n"
+                            "Accélérer le traitement des opportunités entrantes et maximiser le taux de transformation des devis émis pour les projets d'efficacité énergétique.\n\n"
+                            "2. Objectifs Prioritaires & Chiffrés :\n"
+                            "- Relancer 100% des prospects dans les 24h suivant l'envoi d'une proposition commerciale.\n"
+                            "- Recontacter les devis sans réponse à J+3, J+7 et J+14.\n"
+                            "- Atteindre un taux de transformation des opportunités qualifiées de 30%.\n\n"
+                            "3. Ligne de Conduite, Tonalité & Posture :\n"
+                            "Direct, énergique, centré sur la valeur client et le retour sur investissement écologique. Réactivité maximale.\n\n"
+                            "4. Déclencheurs d'Escalade Humaine Immédiate :\n"
+                            "- Devis supérieur à 10 000.00 € HT.\n"
+                            "- Demande de remise supérieure à 10% ou négociation de conditions particulières."
+                        ),
+                        "soul_md_content": (
+                            "# Manifeste Système — Lucas (Commercial & Prospection)\n\n"
+                            "## 1. Identité & Raison d'Être\n"
+                            "Lucas est le copilote de croissance commerciale de Lumina Solutions.\n\n"
+                            "## 2. Profils et Rôles des Agents Déployés\n"
+                            "### Agent : Lucas (Commercial)\n"
+                            "- **Lettre de Mission Opérationnelle** :\n"
+                            "  > 1. Contexte & Enjeux Stratégiques : Maximiser la conversion des devis B2B.\n"
+                            "  > 2. Objectifs Prioritaires & Chiffrés : 100% relancés sous 24h.\n"
+                            "  > 3. Ligne de Conduite, Tonalité & Posture : Direct et réactif.\n"
+                            "  > 4. Déclencheurs d'Escalade Humaine Immédiate : Devis > 10 000 €.\n"
+                        ),
+                        "config_json": {
+                            "agent_type": "COMMERCIAL",
+                            "name": "Lucas",
+                            "tone": "DIRECT",
+                            "autonomy_mode": "COPILOT",
+                            "escalation_threshold_eur": 10000.00,
+                            "escalation_email": "direction@lumina-solutions.fr",
+                            "integration_tool": "HubSpot"
+                        }
+                    }
+                ]
+            },
         }
 
     # ── Requetage Supabase / Source de Vérité ─────────────────────────────────
@@ -444,7 +614,7 @@ class OpsManager:
     def get_tenants_overview(self) -> List[Dict[str, Any]]:
         """Retourne la liste consolidée de tous les clients avec instance, contact, agents et abonnement."""
         # 1. Tentative de lecture Supabase si configuré
-        sb_tenants = self._query_supabase("tenants?select=*,profiles(*),tenant_instances(*)")
+        sb_tenants = self._query_supabase("tenants?select=*,profiles(*),tenant_instances(*),agent_instances(*),subscriptions(*)")
         if sb_tenants and isinstance(sb_tenants, list) and len(sb_tenants) > 0:
             auth_emails = self._fetch_supabase_auth_users()
             result = []
@@ -477,7 +647,9 @@ class OpsManager:
                 if isinstance(agents_data, list):
                     agents_data = {"active": agents_data, "trials": {}}
 
-                sub = cached.get("subscription") or {
+                subs = t.get("subscriptions", [])
+                sb_sub = subs[0] if subs else None
+                sub = sb_sub or cached.get("subscription") or {
                     "id": f"sub_{t.get('slug')}",
                     "tier_id": "none",
                     "tier_label": "Aucun abonnement",
@@ -492,23 +664,33 @@ class OpsManager:
                 item = {
                     "id": tenant_id,
                     "name": t.get("name"),
-                    "siret": t.get("siret"),
+                    "siret": t.get("siret") or cached.get("siret"),
+                    "siren": t.get("siren") or cached.get("siren"),
+                    "vat_number": t.get("vat_number") or cached.get("vat_number"),
+                    "legal_form": t.get("legal_form") or cached.get("legal_form"),
+                    "sector": t.get("sector") or cached.get("sector") or "Services",
+                    "employee_count_range": t.get("employee_count_range") or cached.get("employee_count_range"),
+                    "address_line1": t.get("address_line1") or cached.get("address_line1"),
+                    "postal_code": t.get("postal_code") or cached.get("postal_code"),
+                    "city": t.get("city") or cached.get("city"),
                     "slug": t.get("slug"),
-                    "sector": t.get("sector") or "Services",
                     "status": t.get("status", "active"),
                     "created_at": t.get("created_at"),
                     "contact": {
-                        "full_name": primary_contact.get("full_name", "Contact Principal"),
-                        "email": contact_email,
-                        "phone": primary_contact.get("phone", "") or cached.get("contact", {}).get("phone", ""),
-                        "role": primary_contact.get("role", "Direction"),
+                        "full_name": t.get("contact_name") or primary_contact.get("full_name", "Contact Principal"),
+                        "email": t.get("contact_email") or contact_email,
+                        "phone": t.get("contact_phone") or primary_contact.get("phone", "") or cached.get("contact", {}).get("phone", ""),
+                        "role": t.get("contact_role") or primary_contact.get("role", "Direction"),
                     },
                     "users": user_list,
                     "instance": {
-                        "container_name": instance_info.get("docker_container_name") or f"orso_client_{t.get('slug')}",
+                        "container_name": instance_info.get("docker_container_name") or instance_info.get("internal_route_key") or f"orso_client_{t.get('slug')}",
+                        "internal_route_key": instance_info.get("internal_route_key") or f"orso_backend_{t.get('slug')}",
                         "status": instance_info.get("status", "not_provisioned"),
+                        "environment_status": instance_info.get("environment_status", "inactive"),
                     },
                     "agents_enabled": agents_data,
+                    "agent_instances": t.get("agent_instances") or cached.get("agent_instances", []),
                     "subscription": sub,
                     "invoices": cached.get("invoices", []),
                 }
@@ -868,3 +1050,99 @@ class OpsManager:
             return {"status": "alert_logged", "type": event_type, "invoice_id": inv_id}
 
         return {"status": "ignored", "type": event_type}
+
+    # ── Onboarding & Déploiement Flotte OVH ────────────────────────────────────
+
+    def get_pending_onboarding(self) -> List[Dict[str, Any]]:
+        """Retourne la liste des nouveaux clients en attente de déploiement d'infrastructure (PENDING_SETUP)."""
+        all_tenants = self.get_tenants_overview()
+        pending = []
+        for t in all_tenants:
+            agent_insts = t.get("agent_instances", [])
+            has_pending_agent = any(
+                ai.get("provisioning_status") == "PENDING_SETUP"
+                for ai in agent_insts
+            )
+            is_provisioning_container = t.get("instance", {}).get("status") in ("provisioning", "not_provisioned") and t.get("status") == "trial"
+            if has_pending_agent or is_provisioning_container:
+                pending.append(t)
+        return pending
+
+    def get_onboarding_orders(self) -> List[Dict[str, Any]]:
+        """Retourne l'ensemble des commandes d'onboarding avec détail complet des calibrations."""
+        all_tenants = self.get_tenants_overview()
+        orders = []
+        for t in all_tenants:
+            if t.get("agent_instances") or t.get("status") == "trial":
+                orders.append(t)
+        orders.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+        return orders
+
+    def get_onboarding_order_detail(self, tenant_id: str) -> Optional[Dict[str, Any]]:
+        """Retourne le détail exhaustif d'une commande d'onboarding."""
+        return self.get_tenant_detail(tenant_id)
+
+    def provision_onboarding_order(self, tenant_id: str) -> Dict[str, Any]:
+        """Active le déploiement d'un client et bascule ses agents en production (ACTIVE)."""
+        tenant = self.get_tenant_detail(tenant_id)
+        if not tenant:
+            raise ValueError(f"Client {tenant_id} introuvable.")
+
+        actual_tenant_id = tenant["id"]
+
+        # 1. Traitement via le worker souverain si Supabase est configuré
+        if self.supabase_url and self.supabase_key:
+            worker_res = onboarding_worker.provision_tenant_agents(actual_tenant_id)
+            _log.info("Provisioning Supabase exécuté pour %s : %s", actual_tenant_id, worker_res)
+
+        # 2. Mise à jour de l'état local / mock
+        if actual_tenant_id in self._mock_tenants:
+            t = self._mock_tenants[actual_tenant_id]
+            t["status"] = "active"
+            t["instance"]["status"] = "ready"
+            t["instance"]["environment_status"] = "active"
+            for ai in t.get("agent_instances", []):
+                ai["provisioning_status"] = "ACTIVE"
+
+        return {
+            "success": True,
+            "tenant_id": actual_tenant_id,
+            "status": "ACTIVE",
+            "message": f"Organisation {tenant.get('name')} et agents activés avec succès.",
+            "timestamp": _format_timestamp(),
+        }
+
+    def update_agent_instance_status(self, instance_id: str, status: str) -> Dict[str, Any]:
+        """Met à jour le statut d'une instance agent spécifique (PENDING_SETUP, PROVISIONING, ACTIVE, ERROR)."""
+        if self.supabase_url and self.supabase_key:
+            self._query_supabase(
+                f"agent_instances?id=eq.{instance_id}",
+                method="PATCH",
+                payload={"provisioning_status": status},
+            )
+
+        # Mise à jour mock
+        for t in self._mock_tenants.values():
+            for ai in t.get("agent_instances", []):
+                if ai.get("id") == instance_id:
+                    ai["provisioning_status"] = status
+                    return {"success": True, "instance_id": instance_id, "status": status}
+
+        return {"success": True, "instance_id": instance_id, "status": status}
+
+    def get_ovh_sizing(self) -> Dict[str, Any]:
+        """Calcule le dimensionnement OVH recommandé pour l'ensemble des clients en attente."""
+        pending = self.get_pending_onboarding()
+        total_pending_agents = 0
+        for t in pending:
+            pending_ais = [ai for ai in t.get("agent_instances", []) if ai.get("provisioning_status") == "PENDING_SETUP"]
+            if pending_ais:
+                total_pending_agents += len(pending_ais)
+            else:
+                total_pending_agents += len(t.get("agents_enabled", {}).get("active", [])) or 1
+
+        return ovh_client.estimate_sizing(
+            pending_tenants_count=len(pending),
+            pending_agents_count=total_pending_agents,
+        )
+

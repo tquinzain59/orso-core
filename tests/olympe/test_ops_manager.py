@@ -135,3 +135,66 @@ def test_telemetry_endpoints(api_client):
     assert "alerts" in alerts_data
 
 
+def test_onboarding_pending_and_orders():
+    ops = OpsManager()
+    pending = ops.get_pending_onboarding()
+    assert len(pending) >= 1
+
+    lumina = next((t for t in pending if t["slug"] == "lumina-solutions"), None)
+    assert lumina is not None
+    assert lumina["siret"] == "91234567800029"
+    assert lumina["legal_form"] == "SAS"
+    assert lumina["city"] == "Paris"
+    assert lumina["contact"]["phone"] == "+33 6 12 34 56 78"
+
+    agent_insts = lumina.get("agent_instances", [])
+    assert len(agent_insts) == 2
+    jerome = next((a for a in agent_insts if a["agent_slug"] == "jerome"), None)
+    assert jerome is not None
+    assert jerome["provisioning_status"] == "PENDING_SETUP"
+    assert "1. Contexte & Enjeux Stratégiques" in jerome["mission_letter"]
+    assert "2. Objectifs Prioritaires & Chiffrés" in jerome["mission_letter"]
+    assert "3. Ligne de Conduite, Tonalité & Posture" in jerome["mission_letter"]
+    assert "4. Déclencheurs d'Escalade Humaine Immédiate" in jerome["mission_letter"]
+    assert jerome["integration_tool"] == "Pennylane"
+    assert jerome["escalation_threshold_eur"] == 5000.00
+
+
+def test_onboarding_provision_order():
+    ops = OpsManager()
+    lumina_id = "7a192844-3c82-4112-9214-abcdef123456"
+    res = ops.provision_onboarding_order(lumina_id)
+    assert res["success"] is True
+    assert res["status"] == "ACTIVE"
+
+    # Vérification que le statut est mis à jour
+    detail = ops.get_onboarding_order_detail(lumina_id)
+    assert detail["status"] == "active"
+    assert detail["instance"]["status"] == "ready"
+    assert all(a["provisioning_status"] == "ACTIVE" for a in detail["agent_instances"])
+
+
+def test_onboarding_api_endpoints(api_client):
+    # 1. Pending
+    resp_pending = api_client.get("/api/olympe/ops/onboarding/pending")
+    assert resp_pending.status_code == 200
+    pending_data = resp_pending.json()
+    assert "pending" in pending_data
+    assert pending_data["count"] >= 1
+
+    # 2. Orders
+    resp_orders = api_client.get("/api/olympe/ops/onboarding/orders")
+    assert resp_orders.status_code == 200
+    orders_data = resp_orders.json()
+    assert "orders" in orders_data
+
+    # 3. OVH Sizing
+    resp_sizing = api_client.get("/api/olympe/ops/onboarding/ovh-sizing")
+    assert resp_sizing.status_code == 200
+    sizing_data = resp_sizing.json()
+    assert "recommended_flavor" in sizing_data
+    assert "ram_mb_estimated" in sizing_data
+    assert "docker_deploy_snippet" in sizing_data
+
+
+
