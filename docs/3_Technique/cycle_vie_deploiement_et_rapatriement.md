@@ -60,32 +60,36 @@ Sur le VPS OVH, le conteneur tourne avec des volumes persistants afin que les do
 ### Structure Recommandée sur le VPS
 ```
 /opt/orso/
-├── docker-compose.yml
-├── .env                  # Clés d'API injectées au runtime (OpenRouter, etc.)
+├── docker-compose.olympe.yml
+├── .env                       # Clés d'API injectées au runtime (OpenRouter, Supabase, etc.)
 └── data/
-    └── profiles/
-        └── jerome/       # Persistance du profil (skills, memories, state.db)
+    └── tenants/
+        └── {tenant_slug}/     # Persistance étanche du tenant (state.db, hermes_home, reports)
 ```
 
-### Exemple de `docker-compose.yml` sur le VPS
+### Exemple de Déploiement Conteneur Client sur le VPS
 ```yaml
 services:
-  orso-jerome:
-    image: orso-agent:latest
-    container_name: orso_jerome_live
+  orso-client:
+    image: orso-core-orso-backend:latest
+    container_name: orso_client_financia_solutions
     restart: unless-stopped
-    ports:
-      - "9119:9119"       # API Backend & Dashboard
-      - "9300:9300"       # UI Client PWA
+    networks:
+      - orso_network           # Réseau bridge interne isolé
+    labels:
+      com.orso.managed: "true"
+      com.orso.tenant_id: "f3e25379-6531-479e-b276-3b3185e7421b"
+      com.orso.tenant_slug: "financia-solutions"
+      com.orso.role: "client_backend"
     environment:
+      - ORSO_CLIENT_ID=f3e25379-6531-479e-b276-3b3185e7421b
+      - ORSO_CLIENT_SLUG=financia-solutions
+      - HERMES_HOME=/app/data/hermes_home
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - HERMES_HOME=/app/profiles/jerome
-      - ODOO_URL=${ODOO_URL}
-      - ODOO_DB=${ODOO_DB}
-      - ODOO_USER=${ODOO_USER}
-      - ODOO_PASSWORD=${ODOO_PASSWORD}
     volumes:
-      - ./data/profiles/jerome:/app/profiles/jerome
+      - ./data/tenants/financia_solutions:/app/data
+      - ./config:/app/config:ro
+      - ./skills:/app/skills:ro
 ```
 
 ---

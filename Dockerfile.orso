@@ -69,6 +69,10 @@ RUN chmod +x /app/docker/orso-entrypoint.sh
 # Port exposé par le serveur de dashboard / API
 EXPOSE 9119
 
+# Vérification de santé native Docker
+HEALTHCHECK --interval=20s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -f http://localhost:9119/api/client/status || exit 1
+
 # Entrypoint garantissant permissions, persistance et drop de privilèges vers 'orso' (UID 10001)
 ENTRYPOINT ["/app/docker/orso-entrypoint.sh"]
 

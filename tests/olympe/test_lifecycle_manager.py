@@ -145,8 +145,14 @@ def test_provision_tenant(tmp_path):
                 assert res["container_name"] == "orso_client_nouveau_client"
                 # Le dossier de persistance doit exister
                 assert (tmp_path / "nouveau-client").is_dir()
-                # Vérifie que docker run a bien été appelé
+                # Vérifie que docker run a bien été appelé avec les labels d'identification standardisés
                 assert mock_exec.called
+                run_call_args = mock_exec.call_args[0][0]
+                assert "--label" in run_call_args
+                assert "com.orso.managed=true" in run_call_args
+                assert "com.orso.tenant_id=test-uuid" in run_call_args
+                assert "com.orso.tenant_slug=nouveau-client" in run_call_args
+                assert "com.orso.role=client_backend" in run_call_args
 
 
 def test_api_olympe_health(api_client):
