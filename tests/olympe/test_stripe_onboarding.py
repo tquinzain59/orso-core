@@ -88,3 +88,57 @@ def test_create_subscription_success():
             tier_id="1_agent",
             agents_count=1,
         )
+
+
+def test_create_admin_user_success():
+    """Vérifie la création du compte administrateur suite à l'onboarding."""
+    mock_ops = MagicMock(spec=OpsManager)
+    mock_ops.create_onboarding_admin_user.return_value = {
+        "id": "usr_test_789",
+        "email": "thibaut@nexis-solutions.fr",
+        "full_name": "Thibaut ALBERT",
+        "role": "Dirigeant",
+        "phone": "07 61 80 67 73",
+        "is_admin": True,
+        "is_primary_contact": True,
+    }
+
+    with patch("olympe.server.ops_manager", mock_ops):
+        payload = {
+            "tenant_id": "3a4cb49e-970c-46a4-ada5-70163f2bee06",
+            "email": "thibaut@nexis-solutions.fr",
+            "full_name": "Thibaut ALBERT",
+            "role": "Dirigeant",
+            "phone": "07 61 80 67 73",
+        }
+        resp = client.post("/api/olympe/onboarding/create-admin-user", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+        assert data["user"]["id"] == "usr_test_789"
+        assert data["user"]["full_name"] == "Thibaut ALBERT"
+        assert data["user"]["is_admin"] is True
+        mock_ops.create_onboarding_admin_user.assert_called_once_with(
+            tenant_id="3a4cb49e-970c-46a4-ada5-70163f2bee06",
+            email="thibaut@nexis-solutions.fr",
+            full_name="Thibaut ALBERT",
+            role="Dirigeant",
+            phone="07 61 80 67 73",
+        )
+
+
+def test_create_admin_user_error_handling():
+    """Vérifie le code 400 en cas d'erreur de création d'utilisateur."""
+    mock_ops = MagicMock(spec=OpsManager)
+    mock_ops.create_onboarding_admin_user.side_effect = ValueError("Tenant inexistant")
+
+    with patch("olympe.server.ops_manager", mock_ops):
+        payload = {
+            "tenant_id": "invalid-id",
+            "email": "error@nexis.fr",
+            "full_name": "Admin",
+        }
+        resp = client.post("/api/olympe/onboarding/create-admin-user", json=payload)
+        assert resp.status_code == 400
+        assert "Tenant inexistant" in resp.json()["detail"]
+

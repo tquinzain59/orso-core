@@ -844,6 +844,190 @@ class OpsManager:
 
         return created_user
 
+    def create_onboarding_admin_user(
+        self,
+        tenant_id: str,
+        email: str,
+        full_name: str,
+        role: str = "Dirigeant",
+        phone: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Crée ou rattache le profil administrateur principal d'un client lors de l'onboarding."""
+        tenant_detail = self.get_tenant_detail(tenant_id)
+        if not tenant_detail:
+            raise ValueError(f"Organisation cliente {tenant_id} introuvable.")
+
+        actual_tenant_id = tenant_detail["id"]
+        tenant_slug = tenant_detail.get("slug", "")
+        clean_email = email.strip().lower()
+        clean_name = full_name.strip()
+        clean_role = (role or "Dirigeant").strip()
+        clean_phone = (phone or "").strip()
+
+        # 1. Mode Supabase si configuré
+        if self.supabase_url and self.supabase_key:
+            # Vérifier si l'utilisateur existe déjà dans auth.users
+            existing_user_id = None
+            try:
+                auth_req = urllib.request.Request(
+                    f"{self.supabase_url}/auth/v1/admin/users",
+                    headers={
+                        "apikey": self.supabase_key,
+                        "Authorization": f"Bearer {self.supabase_key}",
+                        "Content-Type": "application/json",
+                        "User-Agent": "OrsoOlympeOps/1.0",
+                    },
+                )
+                with urllib.request.urlopen(auth_req, timeout=5.0) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    for u in data.get("users", []):
+                        if u.get("email", "").strip().lower() == clean_email:
+                            existing_user_id = u.get("id")
+                            break
+            except Exception as e:
+                _log.warning("Impossible de lister auth.users lors de l'onboarding: %s", e)
+
+            if existing_user_id:
+                user_id = existing_user_id
+                _log.info("Utilisateur Supabase Auth existant retrouvé pour %s: %s", clean_email, user_id)
+                try:
+                    update_req = urllib.request.Request(
+                        f"{self.supabase_url}/auth/v1/admin/users/{user_id}",
+                        data=json.dumps({
+                            "app_metadata": {
+                                "tenant_id": actual_tenant_id,
+                                "tenant_slug": tenant_slug,
+                                "role": clean_role,
+                                "is_admin": True,
+                            },
+                            "user_metadata": {
+                                "full_name": clean_name,
+                                "role": clean_role,
+                                "phone": clean_phone,
+                            },
+                        }).encode("utf-8"),
+                        headers={
+                            "apikey": self.supabase_key,
+                            "Authorization": f"Bearer {self.supabase_key}",
+                            "Content-Type": "application/json",
+                            "User-Agent": "OrsoOlympeOps/1.0",
+                        },
+                        method="PUT",
+                    )
+                    with urllib.request.urlopen(update_req, timeout=5.0) as resp:
+                        pass
+                except Exception as e:
+                    _log.warning("Avis mise à jour app_metadata auth.user %s: %s", user_id, e)
+            else:
+                user_password = f"Orso{int(time.time())}!"
+                payload = {
+                    "email": clean_email,
+                    "password": user_password,
+                    "email_confirm": True,
+                    "user_metadata": {
+                        "full_name": clean_name,
+                        "role": clean_role,
+                        "phone": clean_phone,
+                    },
+                    "app_metadata": {
+                        "tenant_id": actual_tenant_id,
+                        "tenant_slug": tenant_slug,
+                        "role": clean_role,
+                        "is_admin": True,
+                    },
+                }
+                admin_url = f"{self.supabase_url}/auth/v1/admin/users"
+                try:
+                    req = urllib.request.Request(
+                        admin_url,
+                        data=json.dumps(payload).encode("utf-8"),
+                        headers={
+                            "apikey": self.supabase_key,
+                            "Authorization": f"Bearer {self.supabase_key}",
+                            "Content-Type": "application/json",
+                            "User-Agent": "OrsoOlympeOps/1.0",
+                        },
+                        method="POST",
+                    )
+                    with urllib.request.urlopen(req, timeout=5.0) as resp:
+                        res_user = json.loads(resp.read().decode("utf-8"))
+                        user_id = res_user.get("id")
+                except Exception as e:
+                    _log.error("Échec création utilisateur Supabase Auth onboarding: %s", e)
+                    raise ValueError(f"Impossible de créer le compte utilisateur Supabase Auth: {e}")
+
+                if not user_id:
+                    raise ValueError("Identifiant utilisateur Supabase non renvoyé.")
+
+            # Insertion ou mise à jour dans public.profiles
+            profile_payload = {
+                "id": user_id,
+                "tenant_id": actual_tenant_id,
+                "full_name": clean_name,
+                "role": clean_role,
+                "phone": clean_phone,
+                "is_admin": True,
+                "is_primary_contact": True,
+            }
+            existing_profile = self._query_supabase(f"profiles?id=eq.{user_id}")
+            if existing_profile and len(existing_profile) > 0:
+                self._query_supabase(
+                    f"profiles?id=eq.{user_id}",
+                    method="PATCH",
+                    payload=profile_payload,
+                )
+            else:
+                self._query_supabase("profiles", method="POST", payload=profile_payload)
+
+            # Mettre à jour les champs de contact direct du tenant
+            self._query_supabase(
+                f"tenants?id=eq.{actual_tenant_id}",
+                method="PATCH",
+                payload={
+                    "contact_name": clean_name,
+                    "contact_email": clean_email,
+                    "contact_phone": clean_phone,
+                    "contact_role": clean_role,
+                },
+            )
+            self._cached_auth_emails = None
+
+            created_user = {
+                "id": user_id,
+                "email": clean_email,
+                "full_name": clean_name,
+                "role": clean_role,
+                "phone": clean_phone,
+                "is_admin": True,
+                "is_primary_contact": True,
+                "created_at": _format_timestamp(),
+            }
+            if actual_tenant_id in self._mock_tenants:
+                self._mock_tenants[actual_tenant_id].setdefault("users", []).append(created_user)
+            return created_user
+
+        # 2. Mode Mock Local
+        user_id = f"usr_admin_{int(time.time())}"
+        created_user = {
+            "id": user_id,
+            "email": clean_email,
+            "full_name": clean_name,
+            "role": clean_role,
+            "phone": clean_phone,
+            "is_admin": True,
+            "is_primary_contact": True,
+            "created_at": _format_timestamp(),
+        }
+        if actual_tenant_id in self._mock_tenants:
+            self._mock_tenants[actual_tenant_id].setdefault("users", []).append(created_user)
+            self._mock_tenants[actual_tenant_id]["contact"] = {
+                "full_name": clean_name,
+                "email": clean_email,
+                "phone": clean_phone,
+                "role": clean_role,
+            }
+        return created_user
+
     def delete_tenant_user(self, tenant_id: str, user_id: str) -> bool:
         """Supprime un utilisateur pour une organisation cliente."""
         tenant_detail = self.get_tenant_detail(tenant_id)
@@ -1118,6 +1302,21 @@ class OpsManager:
         if self.supabase_url and self.supabase_key:
             worker_res = onboarding_worker.provision_tenant_agents(actual_tenant_id)
             _log.info("Provisioning Supabase exécuté pour %s : %s", actual_tenant_id, worker_res)
+
+            # S'assurer que le contact principal dispose de son compte utilisateur Supabase
+            if not tenant.get("users"):
+                contact = tenant.get("contact", {})
+                if contact.get("email"):
+                    try:
+                        self.create_onboarding_admin_user(
+                            tenant_id=actual_tenant_id,
+                            email=contact.get("email"),
+                            full_name=contact.get("full_name", "Administrateur"),
+                            role=contact.get("role", "Dirigeant"),
+                            phone=contact.get("phone"),
+                        )
+                    except Exception as e:
+                        _log.warning("Notice rattrapage admin user lors du provisioning: %s", e)
 
         # 2. Mise à jour de l'état local / mock
         if actual_tenant_id in self._mock_tenants:

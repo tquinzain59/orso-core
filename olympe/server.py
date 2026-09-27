@@ -96,6 +96,14 @@ class OnboardingCreateSubscriptionRequest(BaseModel):
     agents_count: int = Field(1, description="Nombre d'agents sélectionnés (1 à 4)")
 
 
+class OnboardingCreateAdminUserRequest(BaseModel):
+    tenant_id: str = Field(..., description="UUID unique ou slug du tenant")
+    email: str = Field(..., description="Adresse email professionnelle du dirigeant/administrateur")
+    full_name: str = Field(..., description="Prénom et nom de l'administrateur")
+    role: Optional[str] = Field("Dirigeant", description="Fonction ou rôle dans l'entreprise")
+    phone: Optional[str] = Field(None, description="Téléphone professionnel direct")
+
+
 # ── Endpoints Supervision & Cycle de Vie Conteneurs ──────────────────────────
 
 @app.get("/health")
@@ -331,6 +339,23 @@ async def onboarding_create_subscription(req: OnboardingCreateSubscriptionReques
         return res
     except Exception as e:
         _log.error("Erreur lors de la création d'abonnement onboarding : %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/olympe/onboarding/create-admin-user")
+async def onboarding_create_admin_user(req: OnboardingCreateAdminUserRequest):
+    """Crée ou rattache le compte administrateur du client suite à la souscription d'onboarding."""
+    try:
+        user = ops_manager.create_onboarding_admin_user(
+            tenant_id=req.tenant_id,
+            email=req.email,
+            full_name=req.full_name,
+            role=req.role or "Dirigeant",
+            phone=req.phone,
+        )
+        return {"success": True, "user": user}
+    except Exception as e:
+        _log.error("Erreur lors de la création du compte administrateur onboarding : %s", e)
         raise HTTPException(status_code=400, detail=str(e))
 
 
