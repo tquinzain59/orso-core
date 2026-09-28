@@ -242,6 +242,7 @@ class DockerLifecycleManager:
         tenant_slug: str,
         image_name: str = "orso-backend:latest",
         env_vars: Optional[Dict[str, str]] = None,
+        quotas: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Provisionne un nouvel environnement client hermétique."""
         container_name = normalize_container_name(tenant_slug)
@@ -287,6 +288,7 @@ class DockerLifecycleManager:
                 "container_name": container_name,
                 "status": "ready",
                 "simulated": True,
+                "quotas": quotas or {},
                 "message": "Provisioning simulé avec succès.",
             }
 
@@ -306,6 +308,27 @@ class DockerLifecycleManager:
             "--label", f"com.orso.created_at={now_iso}",
             "-v", f"{tenant_data_dir}:/app/data",
         ]
+
+        # Quotas explicites de ressources (L3)
+        effective_quotas = quotas or {}
+        if tenant_slug in ("clientx-orso",) and not quotas:
+            effective_quotas = {"cpus": "0.5", "memory": "512m", "pids_limit": "100"}
+
+        if effective_quotas:
+            cpus = str(effective_quotas.get("cpus", "0.5"))
+            memory = str(effective_quotas.get("memory", "512m"))
+            pids = str(effective_quotas.get("pids_limit", "100"))
+            run_args.extend([
+                "--cpus", cpus,
+                "--memory", memory,
+                "--memory-swap", memory,
+                "--pids-limit", pids,
+                "--label", f"com.orso.quotas.cpus={cpus}",
+                "--label", f"com.orso.quotas.memory={memory}",
+                "--label", f"com.orso.quotas.pids_limit={pids}",
+            ])
+            if tenant_slug in ("clientx-orso",):
+                run_args.extend(["--label", "com.orso.sandbox=true"])
 
         # Montages partagés de configuration et compétences si présents
         project_root = Path(__file__).resolve().parent.parent
@@ -343,9 +366,64 @@ class DockerLifecycleManager:
             "tenant_slug": tenant_slug,
             "container_name": container_name,
             "status": "ready",
+            "quotas": effective_quotas,
             "data_directory": str(tenant_data_dir),
             "message": f"Conteneur {container_name} provisionné et démarré avec succès.",
         }
+
+    def teardown_tenant(self, tenant_slug: str, remove_data: bool = True) -> Dict[str, Any]:
+        """Détruit proprement et de manière idempotente un conteneur client et son stockage (L3/CA2)."""
+        container_name = normalize_container_name(tenant_slug)
+        tenant_data_dir = self.data_root / tenant_slug
+
+        if not self.has_docker:
+            if remove_data and tenant_data_dir.exists():
+                shutil.rmtree(tenant_data_dir, ignore_errors=True)
+            return {
+                "success": True,
+                "tenant_slug": tenant_slug,
+                "container_name": container_name,
+                "status": "destroyed",
+                "simulated": True,
+                "message": f"Conteneur simulé {container_name} détruit sans résidu.",
+            }
+
+        status_info = self.get_tenant_status(tenant_slug)
+        if status_info.get("status") != "not_found":
+            _log.info("Arrêt et suppression forcée du conteneur : %s", container_name)
+            self._exec_docker(["rm", "-f", container_name], timeout=15.0)
+
+        if remove_data and tenant_data_dir.exists():
+            _log.info("Suppression du répertoire de données client pour : %s", tenant_slug)
+            shutil.rmtree(tenant_data_dir, ignore_errors=True)
+
+        self._remove_tenant_instance_record(container_name)
+
+        return {
+            "success": True,
+            "tenant_slug": tenant_slug,
+            "container_name": container_name,
+            "status": "destroyed",
+            "message": f"Conteneur {container_name} et volume supprimés sans résidu.",
+        }
+
+    def _remove_tenant_instance_record(self, container_name: str) -> None:
+        """Supprime la ligne correspondante dans tenant_instances dans Supabase."""
+        if not self.supabase_url or not self.supabase_key:
+            return
+        req = urllib.request.Request(
+            f"{self.supabase_url}/rest/v1/tenant_instances?docker_container_name=eq.{container_name}",
+            headers={
+                "apikey": self.supabase_key,
+                "Authorization": f"Bearer {self.supabase_key}",
+            },
+            method="DELETE",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=4.0):
+                _log.info("Référence tenant_instances supprimée pour %s", container_name)
+        except Exception as e:
+            _log.warning("Impossible de supprimer tenant_instances dans Supabase: %s", e)
 
     def _sync_tenant_instance_record(
         self,

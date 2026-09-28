@@ -7,6 +7,7 @@ de facturation Stripe et de supervision de flotte.
 
 import os
 import logging
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -15,7 +16,15 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from olympe.auth import authenticate_superadmin, clear_token_cache, require_superadmin
+from olympe.auth import (
+    authenticate_superadmin,
+    clear_token_cache,
+    require_superadmin,
+    require_ops_actor,
+    check_sandbox_tenant_access,
+    verify_stripe_signature,
+    revoke_token,
+)
 from olympe.lifecycle_manager import DockerLifecycleManager
 from olympe.ops_manager import OpsManager
 from olympe.ovh_client import ovh_client
@@ -53,6 +62,14 @@ class ProvisionRequest(BaseModel):
     tenant_slug: str = Field(..., description="Slug normalisé du tenant (ex: financia-solutions)")
     image_name: Optional[str] = Field("orso-backend:latest", description="Image Docker à instancier")
     env_vars: Optional[Dict[str, str]] = Field(default_factory=dict, description="Variables d'environnement spécifiques")
+
+
+class CreateTenantOpsRequest(BaseModel):
+    tenant_slug: str = Field("clientx-orso", description="Slug normalisé du tenant")
+    name: Optional[str] = Field("CLIENTX-ORSO (TEST)", description="Nom d'affichage du tenant")
+    contact_email: Optional[str] = Field("test-drone-notifications@test.orso-agents.fr", description="Email de notification")
+    contact_name: Optional[str] = Field("Dirigeant Test ClientX", description="Nom du contact dirigeant")
+    quotas: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Quotas matériels explicites")
 
 
 class UpdateAgentsRequest(BaseModel):
@@ -224,38 +241,64 @@ async def ops_logout():
     return {"success": True, "message": "Déconnexion réussie."}
 
 
-# ── Endpoints Cockpit Orso Ops & Facturation (Protégés Superadmin) ───────────
+# ── Endpoints Cockpit Orso Ops & Facturation (Protégés Superadmin & Drone RBAC) ─
 
 @app.get("/api/olympe/ops/stats")
-async def get_ops_stats(admin: Dict[str, Any] = Depends(require_superadmin)):
+async def get_ops_stats(actor: Dict[str, Any] = Depends(require_ops_actor("tenants:read"))):
     """Retourne les indicateurs consolidés (KPIs, MRR, répartition des forfaits)."""
+    ops_manager.record_audit_event(actor, "stats:read", "fleet")
     return ops_manager.get_stats()
 
 
 @app.get("/api/olympe/ops/tenants")
-async def list_tenants(admin: Dict[str, Any] = Depends(require_superadmin)):
-    """Retourne la liste des clients inscrits avec contact, abonnement et agents activés."""
+async def list_tenants(actor: Dict[str, Any] = Depends(require_ops_actor("tenants:read"))):
+    """Retourne la liste des clients inscrits avec contact, abonnement et agents activés (CA1)."""
+    ops_manager.record_audit_event(actor, "tenants:read", "fleet")
     return {"tenants": ops_manager.get_tenants_overview()}
 
 
+@app.post("/api/olympe/ops/tenants")
+async def create_tenant(req: CreateTenantOpsRequest, actor: Dict[str, Any] = Depends(require_ops_actor("tenants:provision:sandbox"))):
+    """Crée et provisionne un tenant (restreint au périmètre sandbox pour le drone - L3/CA2)."""
+    check_sandbox_tenant_access(actor, req.tenant_slug, ops_mgr=ops_manager)
+    return ops_manager.create_sandbox_tenant(
+        tenant_slug=req.tenant_slug,
+        name=req.name or "CLIENTX-ORSO (TEST)",
+        contact_email=req.contact_email or "test-drone-notifications@test.orso-agents.fr",
+        contact_name=req.contact_name or "Dirigeant Test ClientX",
+        quotas=req.quotas,
+    )
+
+
 @app.get("/api/olympe/ops/tenants/{tenant_id}")
-async def get_tenant(tenant_id: str, admin: Dict[str, Any] = Depends(require_superadmin)):
-    """Retourne le profil détaillé d'un client."""
+async def get_tenant(tenant_id: str, actor: Dict[str, Any] = Depends(require_ops_actor("tenants:read"))):
+    """Retourne le profil détaillé d'un client (vérifie la whitelist de test pour le drone - CA1)."""
+    check_sandbox_tenant_access(actor, tenant_id, ops_mgr=ops_manager)
     detail = ops_manager.get_tenant_detail(tenant_id)
     if not detail:
         raise HTTPException(status_code=404, detail="Client introuvable.")
+    ops_manager.record_audit_event(actor, "tenant:read", tenant_id)
     return detail
 
 
+@app.delete("/api/olympe/ops/tenants/{tenant_id}")
+async def delete_tenant(tenant_id: str, actor: Dict[str, Any] = Depends(require_ops_actor("tenants:teardown:sandbox"))):
+    """Détruit proprement et de manière idempotente un tenant (restreint au périmètre sandbox - L3/CA2)."""
+    check_sandbox_tenant_access(actor, tenant_id, ops_mgr=ops_manager)
+    return ops_manager.delete_tenant(tenant_id)
+
+
 @app.post("/api/olympe/ops/tenants/{tenant_id}/agents")
-async def update_agents(tenant_id: str, req: UpdateAgentsRequest, admin: Dict[str, Any] = Depends(require_superadmin)):
-    """Active/désactive des agents et paramètre les périodes d'essai pour un client."""
+async def update_agents(tenant_id: str, req: UpdateAgentsRequest, actor: Dict[str, Any] = Depends(require_ops_actor("agents:write:sandbox"))):
+    """Active/désactive des agents et paramètre les périodes d'essai (CA1/CA3)."""
+    check_sandbox_tenant_access(actor, tenant_id, ops_mgr=ops_manager)
     try:
         res = ops_manager.update_tenant_agents(
             tenant_id=tenant_id,
             active_agents=req.active,
             trials_config=req.trials,
         )
+        ops_manager.record_audit_event(actor, "agents:write", tenant_id, details={"active": req.active})
         return res
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -263,7 +306,7 @@ async def update_agents(tenant_id: str, req: UpdateAgentsRequest, admin: Dict[st
 
 @app.post("/api/olympe/ops/tenants/{tenant_id}/subscription")
 async def update_subscription(tenant_id: str, req: UpdateSubscriptionRequest, admin: Dict[str, Any] = Depends(require_superadmin)):
-    """Met à jour le plan d'abonnement Stripe (99€, 169€, 279€ HT)."""
+    """Met à jour le plan d'abonnement Stripe (strictement réservé au superadmin humain - CA3)."""
     res = ops_manager.update_tenant_subscription(
         tenant_id=tenant_id,
         tier_id=req.tier_id,
@@ -274,14 +317,14 @@ async def update_subscription(tenant_id: str, req: UpdateSubscriptionRequest, ad
 
 @app.get("/api/olympe/ops/tenants/{tenant_id}/users")
 async def list_tenant_users(tenant_id: str, admin: Dict[str, Any] = Depends(require_superadmin)):
-    """Retourne la liste des utilisateurs d'un client."""
+    """Retourne la liste des utilisateurs d'un client (strictement superadmin - CA3)."""
     users = ops_manager.get_tenant_users(tenant_id)
     return {"users": users}
 
 
 @app.post("/api/olympe/ops/tenants/{tenant_id}/users")
 async def create_user_for_tenant(tenant_id: str, req: CreateUserRequest, admin: Dict[str, Any] = Depends(require_superadmin)):
-    """Crée un nouvel utilisateur pour un client donné."""
+    """Crée un nouvel utilisateur pour un client (IAM - strictement superadmin - CA3)."""
     try:
         user = ops_manager.create_tenant_user(
             tenant_id=tenant_id,
@@ -298,25 +341,49 @@ async def create_user_for_tenant(tenant_id: str, req: CreateUserRequest, admin: 
 
 @app.delete("/api/olympe/ops/tenants/{tenant_id}/users/{user_id}")
 async def delete_user_for_tenant(tenant_id: str, user_id: str, admin: Dict[str, Any] = Depends(require_superadmin)):
-    """Supprime un utilisateur d'une organisation cliente."""
+    """Supprime un utilisateur d'une organisation cliente (IAM - strictement superadmin - CA3)."""
     success = ops_manager.delete_tenant_user(tenant_id=tenant_id, user_id=user_id)
     return {"success": success}
 
 
 @app.get("/api/olympe/ops/invoices")
-async def list_invoices(admin: Dict[str, Any] = Depends(require_superadmin)):
-    """Retourne l'historique complet des factures clients."""
+async def list_invoices(actor: Dict[str, Any] = Depends(require_ops_actor("billing:read"))):
+    """Retourne l'historique complet des factures clients (portée billing:read)."""
+    ops_manager.record_audit_event(actor, "invoices:read", "billing")
     return {"invoices": ops_manager.list_all_invoices()}
 
 
 @app.post("/api/olympe/ops/webhooks/stripe")
 async def stripe_webhook(request: Request):
-    """Réceptionne et traite les webhooks Stripe Billing."""
+    """Réceptionne et traite les webhooks Stripe Billing avec vérification de signature (L5)."""
+    body_bytes = await request.body()
+    sig_header = request.headers.get("stripe-signature")
+    webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "").strip()
+
+    if webhook_secret and sig_header:
+        if not verify_stripe_signature(body_bytes, sig_header, webhook_secret):
+            _log.warning("[SECURITY] Rejet 400 : signature invalide sur le webhook Stripe")
+            raise HTTPException(status_code=400, detail="Signature webhook Stripe invalide.")
+
     try:
-        payload = await request.json()
+        payload = json.loads(body_bytes.decode("utf-8"))
     except Exception:
         raise HTTPException(status_code=400, detail="Payload JSON invalide")
+
     return ops_manager.handle_stripe_webhook(payload)
+
+
+@app.get("/api/olympe/ops/webhooks/deliveries")
+async def list_webhook_deliveries(actor: Dict[str, Any] = Depends(require_ops_actor("webhooks:read"))):
+    """Consulte le journal de livraison des webhooks Stripe (portée webhooks:read - L5/CA6)."""
+    deliveries = ops_manager.list_webhook_deliveries()
+    return {"deliveries": deliveries, "count": len(deliveries)}
+
+
+@app.get("/api/olympe/ops/audit-log")
+async def get_audit_log(actor: Dict[str, Any] = Depends(require_ops_actor("tenants:read"))):
+    """Consulte le journal d'audit des actions humaines et machine (CA7)."""
+    return {"events": ops_manager.get_audit_events()}
 
 
 # ── Endpoints Publics Onboarding Stripe ────────────────────────────────────

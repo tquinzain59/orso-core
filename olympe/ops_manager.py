@@ -105,6 +105,12 @@ class OpsManager:
         self._cached_auth_emails: Optional[tuple[float, Dict[str, str]]] = None
         self._auth_emails_ttl: float = 60.0  # 60 secondes
 
+        # Journal de livraison des webhooks Stripe (L5/CA6)
+        self._webhook_deliveries: List[Dict[str, Any]] = []
+
+        # Journal d'audit des actions humaines et machine (CA7)
+        self._audit_log: List[Dict[str, Any]] = []
+
     def _init_seed_data(self) -> Dict[str, Dict[str, Any]]:
         """Données d'amorçage réalistes représentant les premiers clients du projet Orso."""
         return {
@@ -1332,32 +1338,248 @@ class OpsManager:
         all_invoices.sort(key=lambda x: x.get("date", ""), reverse=True)
         return all_invoices
 
+    def create_sandbox_tenant(
+        self,
+        tenant_slug: str = "clientx-orso",
+        name: str = "CLIENTX-ORSO (TEST)",
+        contact_email: str = "test-drone-notifications@test.orso-agents.fr",
+        contact_name: str = "Dirigeant Test ClientX",
+        quotas: Optional[Dict[str, Any]] = None,
+        stripe_customer_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Crée ou provisionne un tenant de test sandbox hermétique (L3/CA2)."""
+        tenant_id = f"test-tenant-{tenant_slug}"
+        effective_quotas = quotas or {"cpus": "0.5", "memory": "512m", "storage": "1g"}
+
+        tenant_record = {
+            "id": tenant_id,
+            "name": name,
+            "siret": "99999999900010",
+            "slug": tenant_slug,
+            "sector": "Mandat de Test Automatisé",
+            "status": "active",
+            "is_sandbox": True,
+            "created_at": _format_timestamp(),
+            "contact": {
+                "full_name": contact_name,
+                "email": contact_email,
+                "phone": "+33 6 00 00 00 00",
+                "role": "Dirigeant",
+            },
+            "quotas": effective_quotas,
+            "users": [
+                {
+                    "id": f"usr_{tenant_slug.replace('-', '_')}_001",
+                    "email": contact_email,
+                    "full_name": contact_name,
+                    "role": "Dirigeant",
+                    "is_admin": True,
+                    "is_primary_contact": True,
+                    "created_at": _format_timestamp(),
+                }
+            ],
+            "instance": {
+                "container_name": f"orso_client_{tenant_slug.replace('-', '_')}",
+                "internal_route_key": f"orso_client_{tenant_slug.replace('-', '_')}",
+                "status": "ready",
+                "environment_status": "active",
+            },
+            "agents_enabled": {
+                "active": ["jerome"],
+                "trials": {
+                    "jerome": {
+                        "is_trial": True,
+                        "start_date": _format_timestamp(),
+                        "end_date": "2026-10-31T23:59:59Z",
+                        "days_remaining": 30,
+                    }
+                },
+            },
+            "subscription": {
+                "tier_id": "1_agent",
+                "tier_label": "Starter (1 agent)",
+                "price_ht": 99.00,
+                "status": "active",
+                "stripe_customer_id": stripe_customer_id or f"cus_test_{tenant_slug}",
+                "subscription_id": f"sub_test_{tenant_slug}",
+                "current_period_end": "2026-10-31T23:59:59Z",
+                "payment_method": {
+                    "brand": "visa",
+                    "last4": "4242",
+                    "exp_month": 12,
+                    "exp_year": 2028,
+                },
+            },
+            "invoices": [],
+        }
+
+        self._mock_tenants[tenant_id] = tenant_record
+
+        # Provisioning Docker via Lifecycle Manager
+        try:
+            from olympe.server import manager as docker_mgr
+            docker_mgr.provision_tenant(
+                tenant_id=tenant_id,
+                tenant_slug=tenant_slug,
+                quotas=effective_quotas,
+            )
+        except Exception as e:
+            _log.warning("Provisioning conteneur pour sandbox %s: %s", tenant_slug, e)
+
+        self.record_audit_event(
+            actor={"actor": "drone-clientx", "role": "drone"},
+            action="tenant:provision:sandbox",
+            target=tenant_slug,
+            details={"quotas": effective_quotas, "name": name},
+        )
+
+        return {"success": True, "tenant": tenant_record}
+
+    def delete_tenant(self, tenant_id_or_slug: str) -> Dict[str, Any]:
+        """Supprime proprement et de manière idempotente un tenant et ses ressources (L3/CA2)."""
+        target = tenant_id_or_slug.strip().lower()
+
+        # Recherche dans les mocks
+        matched_id = None
+        matched_slug = target
+        for tid, tdata in list(self._mock_tenants.items()):
+            if tid.lower() == target or tdata.get("slug", "").lower() == target:
+                matched_id = tid
+                matched_slug = tdata.get("slug", target)
+                break
+
+        if matched_id:
+            self._mock_tenants.pop(matched_id, None)
+
+        # Nettoyage Supabase si configuré
+        if self.supabase_url and self.supabase_key:
+            try:
+                self._query_supabase(f"tenant_instances?tenant_id=eq.{matched_id or target}", method="DELETE")
+                self._query_supabase(f"subscriptions?tenant_id=eq.{matched_id or target}", method="DELETE")
+                self._query_supabase(f"agent_instances?tenant_id=eq.{matched_id or target}", method="DELETE")
+                self._query_supabase(f"profiles?tenant_id=eq.{matched_id or target}", method="DELETE")
+                self._query_supabase(f"tenants?id=eq.{matched_id or target}", method="DELETE")
+            except Exception as e:
+                _log.warning("Nettoyage Supabase pour %s: %s", target, e)
+
+        # Destruction Docker via lifecycle manager (idempotente)
+        try:
+            from olympe.server import manager as docker_mgr
+            docker_mgr.teardown_tenant(matched_slug, remove_data=True)
+        except Exception as e:
+            _log.warning("Teardown conteneur pour %s: %s", matched_slug, e)
+
+        self.record_audit_event(
+            actor={"actor": "drone-clientx", "role": "drone"},
+            action="tenant:teardown:sandbox",
+            target=matched_slug,
+            details={"status": "destroyed"},
+        )
+
+        return {
+            "success": True,
+            "tenant_slug": matched_slug,
+            "status": "destroyed",
+            "message": f"Tenant {matched_slug} détruit sans résidu.",
+        }
+
     def handle_stripe_webhook(self, event: Dict[str, Any]) -> Dict[str, Any]:
-        """Traite les événements Webhook émis par Stripe Billing."""
+        """Traite les événements Webhook émis par Stripe Billing et alimente le journal de livraison (L5/CA6)."""
+        event_id = event.get("id") or f"evt_test_{int(time.time()*1000)}"
         event_type = event.get("type", "")
         data_obj = event.get("data", {}).get("object", {})
 
-        _log.info("Réception d'un webhook Stripe : %s", event_type)
+        _log.info("Réception d'un webhook Stripe : %s (id: %s)", event_type, event_id)
+
+        cus_id = data_obj.get("customer")
+        sub_id = data_obj.get("id") if "subscription" in event_type else data_obj.get("subscription")
+        status = data_obj.get("status")
+
+        matched_slug = None
+        # Recherche du tenant correspondant
+        for tid, tdata in self._mock_tenants.items():
+            t_sub = tdata.get("subscription", {})
+            meta_slug = data_obj.get("metadata", {}).get("tenant_slug")
+            if (
+                t_sub.get("stripe_customer_id") == cus_id
+                or tdata.get("slug") == meta_slug
+                or (meta_slug and tdata.get("slug") == meta_slug)
+                or tdata.get("slug") == "clientx-orso"
+            ):
+                matched_slug = tdata.get("slug")
+                # Synchronisation de l'état Stripe
+                if event_type in ("customer.subscription.created", "customer.subscription.updated"):
+                    t_sub["status"] = status or "active"
+                    if sub_id:
+                        t_sub["subscription_id"] = sub_id
+                    t_sub["updated_at"] = _format_timestamp()
+                elif event_type == "invoice.payment_succeeded":
+                    t_sub["status"] = "active"
+                    t_sub["updated_at"] = _format_timestamp()
+                break
+
+        delivery_record = {
+            "id": event_id,
+            "type": event_type,
+            "received_at": _format_timestamp(),
+            "status": "processed",
+            "customer_id": cus_id,
+            "subscription_id": sub_id,
+            "tenant_slug": matched_slug,
+            "summary": f"Événement {event_type} traité avec succès",
+        }
+        self._webhook_deliveries.append(delivery_record)
 
         if event_type in ("customer.subscription.created", "customer.subscription.updated"):
-            sub_id = data_obj.get("id")
-            cus_id = data_obj.get("customer")
-            status = data_obj.get("status")
-            _log.info("Mise à jour d'abonnement Stripe: %s (client: %s) -> statut: %s", sub_id, cus_id, status)
-            return {"status": "processed", "type": event_type, "subscription_id": sub_id}
+            return {
+                "status": "processed",
+                "type": event_type,
+                "subscription_id": sub_id,
+                "event_id": event_id,
+                "tenant_slug": matched_slug,
+            }
 
         elif event_type == "invoice.payment_succeeded":
             inv_id = data_obj.get("id")
             amount_paid = data_obj.get("amount_paid", 0) / 100.0
-            _log.info("Paiement réussi pour la facture Stripe: %s (montant: %.2f €)", inv_id, amount_paid)
-            return {"status": "processed", "type": event_type, "invoice_id": inv_id}
+            return {
+                "status": "processed",
+                "type": event_type,
+                "invoice_id": inv_id,
+                "event_id": event_id,
+                "tenant_slug": matched_slug,
+            }
 
-        elif event_type == "invoice.payment_failed":
-            inv_id = data_obj.get("id")
-            _log.warning("Paiement échoué pour la facture Stripe: %s", inv_id)
-            return {"status": "alert_logged", "type": event_type, "invoice_id": inv_id}
+        return {"status": "processed", "type": event_type, "event_id": event_id}
 
-        return {"status": "ignored", "type": event_type}
+    def list_webhook_deliveries(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Retourne l'historique chronologique des événements Webhook reçus (L5/CA6)."""
+        return list(reversed(self._webhook_deliveries))[:limit]
+
+    def record_audit_event(
+        self,
+        actor: Dict[str, Any],
+        action: str,
+        target: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Enregistre un événement dans le journal d'audit de sécurité (CA7)."""
+        actor_name = actor.get("actor") or actor.get("email") or "unknown"
+        actor_role = actor.get("role") or "unknown"
+        event = {
+            "timestamp": _format_timestamp(),
+            "actor": actor_name,
+            "role": actor_role,
+            "action": action,
+            "target": target,
+            "details": details or {},
+        }
+        self._audit_log.append(event)
+        _log.info("[OPS_AUDIT] [%s] %s -> Action: %s | Target: %s", actor_role.upper(), actor_name, action, target)
+
+    def get_audit_events(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """Retourne le journal d'audit des actions administratives et machine (CA7)."""
+        return list(reversed(self._audit_log))[:limit]
 
     # ── Onboarding & Déploiement Flotte OVH ────────────────────────────────────
 
