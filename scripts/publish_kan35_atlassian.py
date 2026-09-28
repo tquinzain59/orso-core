@@ -103,7 +103,7 @@ def markdown_to_confluence_storage(md_text: str) -> str:
 
 def publish_or_update_confluence(title: str, body_html: str, parent_id: str) -> str:
     """Crée ou met à jour la page de spécification sur Confluence."""
-    search_url = f"https://{DOMAIN}.atlassian.net/wiki/rest/api/content?spaceKey=Orsoagents&title={urllib.parse.quote(title)}"
+    search_url = f"https://{DOMAIN}.atlassian.net/wiki/rest/api/content?spaceKey=Orsoagents&title={urllib.parse.quote(title)}&expand=version"
     req = urllib.request.Request(search_url, headers=headers)
     with urllib.request.urlopen(req) as resp:
         results = json.loads(resp.read().decode()).get("results", [])
