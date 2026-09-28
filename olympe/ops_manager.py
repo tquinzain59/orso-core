@@ -1361,24 +1361,30 @@ class OpsManager:
                 if self.supabase_url and self.supabase_key:
                     self._query_supabase(f"tenant_instances?tenant_id=eq.{tenant_id}", method="PATCH", payload={"agents_enabled": new_agents})
 
-        # ── Persistance Supabase : UPSERT sur tenant_id (évite les doublons) ──
-        # PostgREST : POST + ?on_conflict=tenant_id + Prefer: resolution=merge-duplicates
-        # → UPDATE la ligne existante si elle existe, INSERT sinon. Idempotent.
+        # ── Persistance Supabase : PATCH si existant, sinon POST ────────────
         if self.supabase_url and self.supabase_key:
             sub_payload = {
                 "tenant_id": tenant_id,
                 "tier_id": tier_id,
                 "monthly_price_ht": pricing["price_ht"],
-                "status": status,
+                "status": status.upper() if status else "ACTIVE",
+                "agents_count": pricing.get("max_agents", 1),
             }
-            self._query_supabase(
-                "subscriptions?on_conflict=tenant_id",
-                method="POST",
-                payload=sub_payload,
-                extra_headers={"Prefer": "resolution=merge-duplicates,return=representation"},
-            )
+            existing = self._query_supabase(f"subscriptions?tenant_id=eq.{tenant_id}&select=id")
+            if existing and isinstance(existing, list) and len(existing) > 0:
+                self._query_supabase(
+                    f"subscriptions?tenant_id=eq.{tenant_id}",
+                    method="PATCH",
+                    payload=sub_payload,
+                )
+            else:
+                self._query_supabase(
+                    "subscriptions",
+                    method="POST",
+                    payload=sub_payload,
+                )
             _log.info(
-                "UPSERT abonnement Supabase pour tenant %s : tier=%s status=%s",
+                "Persistance abonnement Supabase pour tenant %s : tier=%s status=%s",
                 tenant_id, tier_id, status,
             )
 

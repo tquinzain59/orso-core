@@ -84,6 +84,18 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
   const [saving, setSaving] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  // Synchronisation de l'état local avec les props tenant
+  useEffect(() => {
+    if (tenant) {
+      setActiveAgents([...tenant.agents_enabled.active]);
+      setTrials({ ...tenant.agents_enabled.trials });
+      setSelectedTier(tenant.subscription.tier_id || "none");
+      setSelectedStatus(
+        tenant.subscription.status || (tenant.subscription.tier_id === "none" ? "none" : "active")
+      );
+    }
+  }, [tenant?.id, tenant?.subscription?.tier_id, tenant?.subscription?.status, tenant?.agents_enabled]);
+
   // Synchronisation des utilisateurs si nécessaire
   useEffect(() => {
     if (tenant?.id) {

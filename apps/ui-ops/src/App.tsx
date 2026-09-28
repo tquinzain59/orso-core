@@ -253,6 +253,7 @@ export const App: React.FC = () => {
 
       {/* Modal Détail Client & Activation Agents */}
       <TenantDetailModal
+        key={selectedTenant?.id || "none"}
         tenant={selectedTenant}
         onClose={() => setSelectedTenant(null)}
         onSaveAgents={handleSaveAgents}
