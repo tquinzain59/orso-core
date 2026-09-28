@@ -12,7 +12,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { Tenant } from "../types";
-import { AGENTS_CATALOG } from "../data";
+import { getAgentMeta } from "../data";
 
 interface TenantsViewProps {
   tenants: Tenant[];
@@ -284,13 +284,14 @@ export const TenantsView: React.FC<TenantsViewProps> = ({
                           {t.agents_enabled.active.length === 0 && (
                             <span className="text-xs px-2.5 py-1 rounded-lg border font-medium bg-slate-800 border-slate-700 text-slate-400">Aucun agent activé</span>
                           )}
-                          {t.agents_enabled.active.map((agentId) => {
-                            const meta = AGENTS_CATALOG[agentId];
-                            const trialInfo = t.agents_enabled.trials[agentId];
+                          {t.agents_enabled.active.map((rawAgentId) => {
+                            const meta = getAgentMeta(rawAgentId);
+                            const agentId = meta?.id || rawAgentId;
+                            const trialInfo = t.agents_enabled.trials[agentId] || t.agents_enabled.trials[rawAgentId];
 
                             return (
                               <span
-                                key={agentId}
+                                key={rawAgentId}
                                 className={`text-xs px-2.5 py-1 rounded-lg border font-medium flex items-center space-x-1 ${
                                   trialInfo
                                     ? "bg-amber-500/15 border-amber-500/40 text-amber-300"

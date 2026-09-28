@@ -133,8 +133,40 @@ BEGIN
     v_agents_arr := ARRAY[]::text[];
     FOR v_ag IN SELECT * FROM jsonb_array_elements(payload->'agents')
     LOOP
-        v_agent_slug := lower(v_ag->>'id'); -- 'jerome', 'lucas', 'clara', 'victor'
-        v_agent_type := (v_ag->>'catalog_type')::agent_catalog_type;
+        v_agent_slug := lower(COALESCE(v_ag->>'agent_slug', v_ag->>'slug', v_ag->>'id'));
+        
+        -- Normalisation défensive des rôles vers les slugs officiels ('jerome', 'lucas', 'clara', 'victor')
+        v_agent_slug := CASE v_agent_slug
+            WHEN 'recouvrement' THEN 'jerome'
+            WHEN 'commercial' THEN 'lucas'
+            WHEN 'prospection' THEN 'lucas'
+            WHEN 'support' THEN 'clara'
+            WHEN 'support_client' THEN 'clara'
+            WHEN 'ao' THEN 'victor'
+            WHEN 'appel_offres' THEN 'victor'
+            WHEN 'appels_offres' THEN 'victor'
+            ELSE v_agent_slug
+        END;
+
+        -- Normalisation du type enum agent_catalog_type
+        v_agent_type := CASE upper(COALESCE(v_ag->>'catalog_type', v_ag->>'agent_type', ''))
+            WHEN 'RECOUVREMENT' THEN 'RECOUVREMENT'::agent_catalog_type
+            WHEN 'PROSPECTION' THEN 'COMMERCIAL'::agent_catalog_type
+            WHEN 'COMMERCIAL' THEN 'COMMERCIAL'::agent_catalog_type
+            WHEN 'SUPPORT' THEN 'SUPPORT_CLIENT'::agent_catalog_type
+            WHEN 'SUPPORT_CLIENT' THEN 'SUPPORT_CLIENT'::agent_catalog_type
+            WHEN 'AO' THEN 'APPEL_OFFRES'::agent_catalog_type
+            WHEN 'APPEL_OFFRES' THEN 'APPEL_OFFRES'::agent_catalog_type
+            ELSE
+                CASE v_agent_slug
+                    WHEN 'jerome' THEN 'RECOUVREMENT'::agent_catalog_type
+                    WHEN 'lucas' THEN 'COMMERCIAL'::agent_catalog_type
+                    WHEN 'clara' THEN 'SUPPORT_CLIENT'::agent_catalog_type
+                    WHEN 'victor' THEN 'APPEL_OFFRES'::agent_catalog_type
+                    ELSE 'RECOUVREMENT'::agent_catalog_type
+                END
+        END;
+
         v_agents_arr := array_append(v_agents_arr, v_agent_slug);
 
         INSERT INTO public.agent_instances (
@@ -144,7 +176,16 @@ BEGIN
             is_active, provisioning_status
         ) VALUES (
             v_tenant_id, v_sub_id, v_agent_type, v_agent_slug,
-            COALESCE(v_ag->>'name', 'Agent IA'),
+            COALESCE(
+                NULLIF(v_ag->>'name', ''),
+                CASE v_agent_slug
+                    WHEN 'jerome' THEN 'Jérôme'
+                    WHEN 'lucas' THEN 'Lucas'
+                    WHEN 'clara' THEN 'Clara'
+                    WHEN 'victor' THEN 'Victor'
+                    ELSE 'Agent IA'
+                END
+            ),
             COALESCE((v_ag->>'tone')::agent_tone, 'DIPLOMATIC'::agent_tone),
             COALESCE((v_ag->>'autonomy_mode')::agent_autonomy_mode, 'SEMI_AUTONOMOUS'::agent_autonomy_mode),
             COALESCE((v_ag->>'escalation_threshold_eur')::numeric, 5000.00),
@@ -156,6 +197,7 @@ BEGIN
             TRUE, 'PENDING_SETUP'
         )
         ON CONFLICT (tenant_id, agent_type) DO UPDATE SET
+            agent_slug = EXCLUDED.agent_slug,
             alias_name = EXCLUDED.alias_name,
             soul_md_content = EXCLUDED.soul_md_content,
             config_json = EXCLUDED.config_json,

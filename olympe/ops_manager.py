@@ -68,6 +68,59 @@ CATALOG_AGENTS = [
     },
 ]
 
+AGENT_SLUG_ALIASES = {
+    "recouvrement": "jerome",
+    "commercial": "lucas",
+    "prospection": "lucas",
+    "support": "clara",
+    "support_client": "clara",
+    "ao": "victor",
+    "appel_offres": "victor",
+    "appels_offres": "victor",
+}
+
+CANONICAL_CATALOG_TYPES = {
+    "jerome": "RECOUVREMENT",
+    "lucas": "COMMERCIAL",
+    "clara": "SUPPORT_CLIENT",
+    "victor": "APPEL_OFFRES",
+}
+
+CANONICAL_DEFAULT_NAMES = {
+    "jerome": "Jérôme",
+    "lucas": "Lucas",
+    "clara": "Clara",
+    "victor": "Victor",
+}
+
+
+def normalize_agent_slug(slug: Optional[str]) -> str:
+    """Normalise un slug ou identifiant technique vers les 4 identifiants officiels : jerome, lucas, clara, victor."""
+    if not slug:
+        return ""
+    clean = str(slug).strip().lower()
+    return AGENT_SLUG_ALIASES.get(clean, clean)
+
+
+def normalize_agents_enabled(agents_data: Any) -> Dict[str, Any]:
+    """Normalise la structure agents_enabled vers les slugs canoniques (jerome, lucas, clara, victor)."""
+    if isinstance(agents_data, list):
+        active = [normalize_agent_slug(a) for a in agents_data if a]
+        return {"active": list(dict.fromkeys(active)), "trials": {}}
+    if isinstance(agents_data, dict):
+        raw_active = agents_data.get("active", [])
+        if not isinstance(raw_active, list):
+            raw_active = []
+        active = [normalize_agent_slug(a) for a in raw_active if a]
+        raw_trials = agents_data.get("trials", {})
+        trials = {}
+        if isinstance(raw_trials, dict):
+            for k, v in raw_trials.items():
+                norm_k = normalize_agent_slug(k)
+                trials[norm_k] = v
+        return {"active": list(dict.fromkeys(active)), "trials": trials}
+    return {"active": [], "trials": {}}
+
 
 def _format_timestamp(ts: Optional[float] = None) -> str:
     dt = datetime.fromtimestamp(ts, tz=timezone.utc) if ts else datetime.now(timezone.utc)
@@ -715,9 +768,48 @@ class OpsManager:
                     instances = t.get("tenant_instances", [])
                     instance_info = instances[0] if instances else {}
 
-                    agents_data = instance_info.get("agents_enabled") or cached.get("agents_enabled", {"active": [], "trials": {}})
-                    if isinstance(agents_data, list):
-                        agents_data = {"active": agents_data, "trials": {}}
+                    raw_agents = instance_info.get("agents_enabled") or cached.get("agents_enabled", {"active": [], "trials": {}})
+                    agents_data = normalize_agents_enabled(raw_agents)
+
+                    raw_agent_instances = t.get("agent_instances") or cached.get("agent_instances", [])
+                    norm_agent_instances = []
+                    for ai in raw_agent_instances:
+                        ai_copy = dict(ai)
+                        raw_slug = ai_copy.get("agent_slug") or ""
+                        norm_slug = normalize_agent_slug(raw_slug)
+                        ai_copy["agent_slug"] = norm_slug
+                        if norm_slug in CANONICAL_CATALOG_TYPES:
+                            ai_copy["agent_type"] = CANONICAL_CATALOG_TYPES[norm_slug]
+                        alias = ai_copy.get("alias_name")
+                        if not alias or str(alias).lower() in ("agent ia", "recouvrement", "commercial", "support", "ao"):
+                            ai_copy["alias_name"] = CANONICAL_DEFAULT_NAMES.get(norm_slug, alias or "Agent IA")
+                        norm_agent_instances.append(ai_copy)
+
+                    # Auto-guérison de la base si des alias de rôles sont encore persistés pour ce tenant
+                    if self.supabase_url and self.supabase_key:
+                        raw_str = json.dumps(raw_agents).lower() if isinstance(raw_agents, (dict, list)) else str(raw_agents).lower()
+                        if any(k in raw_str for k in ("recouvrement", "prospection", "support_client", "appel_offres")):
+                            try:
+                                self._query_supabase(
+                                    f"tenant_instances?tenant_id=eq.{t['id']}",
+                                    method="PATCH",
+                                    payload={"agents_enabled": agents_data["active"]},
+                                )
+                                for ai in raw_agent_instances:
+                                    s = str(ai.get("agent_slug", "")).lower()
+                                    if s in AGENT_SLUG_ALIASES:
+                                        target_s = AGENT_SLUG_ALIASES[s]
+                                        self._query_supabase(
+                                            f"agent_instances?id=eq.{ai['id']}",
+                                            method="PATCH",
+                                            payload={
+                                                "agent_slug": target_s,
+                                                "agent_type": CANONICAL_CATALOG_TYPES.get(target_s, "RECOUVREMENT"),
+                                                "alias_name": CANONICAL_DEFAULT_NAMES.get(target_s, "Agent IA"),
+                                            },
+                                        )
+                            except Exception as heal_err:
+                                _log.debug("Auto-healing slugs pass : %s", heal_err)
 
                     subs = t.get("subscriptions", [])
                     sb_sub = subs[0] if subs else None
@@ -794,7 +886,7 @@ class OpsManager:
                             "environment_status": instance_info.get("environment_status", "inactive"),
                         },
                         "agents_enabled": agents_data,
-                        "agent_instances": t.get("agent_instances") or cached.get("agent_instances", []),
+                        "agent_instances": norm_agent_instances,
                         "subscription": sub,
                         "invoices": inv_list,
                     }
@@ -1285,8 +1377,9 @@ class OpsManager:
         if len(active_agents) > max_agents and tier_id != "custom":
             raise ValueError(f"Quota dépassé : le forfait {pricing.get('label')} n'autorise que {max_agents} agent(s).")
             
-        clean_active = [a for a in active_agents if a in ["jerome", "lucas", "clara", "victor"]]
-        clean_trials = trials_config or {}
+        normalized_active = [normalize_agent_slug(a) for a in active_agents]
+        clean_active = [a for a in normalized_active if a in ["jerome", "lucas", "clara", "victor"]]
+        clean_trials = {normalize_agent_slug(k): v for k, v in (trials_config or {}).items()}
 
         payload_agents = {
             "active": clean_active,
@@ -1423,8 +1516,9 @@ class OpsManager:
 
             agents = t.get("agents_enabled", {}).get("active", [])
             for a in agents:
-                if a in agent_utilization:
-                    agent_utilization[a] += 1
+                norm_a = normalize_agent_slug(a)
+                if norm_a in agent_utilization:
+                    agent_utilization[norm_a] += 1
 
         return {
             "kpis": {

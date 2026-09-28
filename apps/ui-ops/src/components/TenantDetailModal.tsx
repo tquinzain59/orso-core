@@ -19,7 +19,7 @@ import {
   EyeOff,
 } from "lucide-react";
 import { Tenant, AgentId, TenantUser } from "../types";
-import { AGENTS_CATALOG } from "../data";
+import { AGENTS_CATALOG, AGENT_SLUG_ALIASES } from "../data";
 import { fetchTenantUsers, createTenantUser, deleteTenantUser } from "../api";
 
 interface TenantDetailModalProps {
@@ -53,12 +53,32 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
 }) => {
   if (!tenant) return null;
 
+  const normalizeAgentList = (list: string[]): AgentId[] => {
+    if (!Array.isArray(list)) return [];
+    const normalized = list.map((a) => {
+      const clean = String(a).toLowerCase().trim();
+      return (AGENT_SLUG_ALIASES[clean] || clean) as AgentId;
+    });
+    return Array.from(new Set(normalized)).filter((a) => a in AGENTS_CATALOG);
+  };
+
+  const normalizeTrials = (rawTrials: Record<string, any>): Record<string, any> => {
+    if (!rawTrials || typeof rawTrials !== "object") return {};
+    const res: Record<string, any> = {};
+    for (const [k, v] of Object.entries(rawTrials)) {
+      const clean = String(k).toLowerCase().trim();
+      const normK = AGENT_SLUG_ALIASES[clean] || clean;
+      res[normK] = v;
+    }
+    return res;
+  };
+
   // État local des agents
   const [activeAgents, setActiveAgents] = useState<AgentId[]>(
-    [...tenant.agents_enabled.active]
+    normalizeAgentList(tenant.agents_enabled.active)
   );
   const [trials, setTrials] = useState<Record<string, any>>(
-    { ...tenant.agents_enabled.trials }
+    normalizeTrials(tenant.agents_enabled.trials)
   );
 
   // État local du forfait et du statut commercial
@@ -87,8 +107,8 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
   // Synchronisation de l'état local avec les props tenant
   useEffect(() => {
     if (tenant) {
-      setActiveAgents([...tenant.agents_enabled.active]);
-      setTrials({ ...tenant.agents_enabled.trials });
+      setActiveAgents(normalizeAgentList(tenant.agents_enabled.active));
+      setTrials(normalizeTrials(tenant.agents_enabled.trials));
       setSelectedTier(tenant.subscription.tier_id || "none");
       setSelectedStatus(
         tenant.subscription.status || (tenant.subscription.tier_id === "none" ? "none" : "active")

@@ -1,7 +1,7 @@
 import React from "react";
 import { Users, CreditCard, Sparkles, TrendingUp, CheckCircle, Clock } from "lucide-react";
 import { OpsStats, Tenant } from "../types";
-import { AGENTS_CATALOG } from "../data";
+import { AGENTS_CATALOG, getAgentMeta } from "../data";
 
 interface DashboardViewProps {
   stats: OpsStats | null;
@@ -308,8 +308,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   <td className="py-3">
                     <div className="flex space-x-1.5">
                       {t.agents_enabled.active.map((a) => {
-                        const meta = AGENTS_CATALOG[a];
-                        const isTrial = Boolean(t.agents_enabled.trials[a]);
+                        const meta = getAgentMeta(a);
+                        const isTrial = Boolean(t.agents_enabled.trials[a] || (meta && t.agents_enabled.trials[meta.id]));
                         return (
                           <span
                             key={a}

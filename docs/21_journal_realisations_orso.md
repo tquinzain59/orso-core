@@ -116,6 +116,14 @@ Les informations de ce document s'appuient sur :
     - Modification sécurisée du mot de passe collaborateur avec vérification de l'ancien mot de passe et mise à jour dans Supabase Auth (`PUT /auth/v1/admin/users/{id}`).
     - Section Facturation Stripe réservée aux administrateurs (`is_admin=True`, rejet HTTP 403 pour collaborateurs) : grille de modification d'abonnement (Starter 99€, Duo 169€, Trio 229€, Flotte Complète 279€ HT) synchronisée avec `TIER_STRIPE_PRICES`, ouverture du portail autonome Stripe (`/billing_portal/sessions`) pour mise à jour de la CB/SEPA, et téléchargement immédiat des factures en format PDF officiel.
     - Endpoints backend dédiés dans `hermes_cli/web_routers/client_ui.py`, 10 nouveaux tests unitaires au vert (100% sur `test_client_settings_billing.py` et 29/29 au global client).
+  - **KAN-47 (28/09 - Correction Anomalie Onboarding : Alignement des Slugs d'Agents Officiels vs Rôles Techniques)** :
+    - Résolution du bug où les nouveaux clients onboardés (ex: Nexis solutions) affichaient l'identifiant technique « recouvrement » (badge gris) dans le Cockpit Ops au lieu de « Jérôme » (badge bleu Crédit Manager).
+    - Vitrine `onboarding.html` : Définition des dictionnaires `AGENT_SLUG_MAP` et `CATALOG_TYPE_MAP`, envoi systématique des slugs officiels (`jerome`, `lucas`, `clara`, `victor`) et du catalog_type conforme (`RECOUVREMENT`, `COMMERCIAL`, `SUPPORT_CLIENT`, `APPEL_OFFRES`).
+    - PostgreSQL RPC `submit_onboarding_order` (`scripts/iam/07` et vitrine) : Normalisation défensive automatique à l'insertion et repli sur les noms de baptême officiels par défaut.
+    - Superviseur Olympe (`olympe/ops_manager.py` & `olympe/onboarding_worker.py`) : Ajout de `normalize_agent_slug` / `normalize_agents_enabled` sur toutes les requêtes (KPIs, quotas, toggles), injection du prompt système de base dans le worker et auto-guérison silencieuse des données en base Supabase.
+    - Cockpit Ops (`apps/ui-ops`) : Ajout de `getAgentMeta` et `AGENT_SLUG_ALIASES` dans `data.ts`, `TenantsView`, `TenantDetailModal`, `OnboardingView`, `OnboardingDetailModal` et `DashboardView`.
+    - Script de migration rétroactive `scripts/iam/08_fix_agent_slugs_and_instances.sql`.
+    - 61 tests unitaires validés (100%).
 
 
 ---

@@ -20,7 +20,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { Tenant, OVHSizingRecommendation, OVHStatusResponse } from "../types";
-import { AGENTS_CATALOG } from "../data";
+import { getAgentMeta } from "../data";
 import { requestOVHCredential } from "../api";
 
 interface OnboardingViewProps {
@@ -452,7 +452,7 @@ export const OnboardingView: React.FC<OnboardingViewProps> = ({
                       {/* Agents badges */}
                       <div className="flex items-center space-x-1.5">
                         {agentList.map((ai) => {
-                          const catalog = AGENTS_CATALOG[ai.agent_slug as keyof typeof AGENTS_CATALOG];
+                          const catalog = getAgentMeta(ai.agent_slug);
                           const isAgentPending = ai.provisioning_status === "PENDING_SETUP";
                           return (
                             <span

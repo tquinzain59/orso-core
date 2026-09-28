@@ -42,3 +42,29 @@ export const AGENTS_CATALOG: Record<AgentId, AgentMeta> = {
     description: "Surveille les appels d'offres (BOAMP) et assiste au montage des dossiers DCE.",
   },
 };
+
+export const AGENT_SLUG_ALIASES: Record<string, AgentId> = {
+  recouvrement: "jerome",
+  commercial: "lucas",
+  prospection: "lucas",
+  support: "clara",
+  support_client: "clara",
+  ao: "victor",
+  appel_offres: "victor",
+  appels_offres: "victor",
+  "appels d'offres": "victor",
+};
+
+export function getAgentMeta(idOrSlug?: string | null): AgentMeta | undefined {
+  if (!idOrSlug) return undefined;
+  const key = idOrSlug.toLowerCase().trim();
+  if (key in AGENTS_CATALOG) {
+    return AGENTS_CATALOG[key as AgentId];
+  }
+  const alias = AGENT_SLUG_ALIASES[key];
+  if (alias && alias in AGENTS_CATALOG) {
+    return AGENTS_CATALOG[alias];
+  }
+  return undefined;
+}
+

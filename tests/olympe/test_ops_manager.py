@@ -197,4 +197,36 @@ def test_onboarding_api_endpoints(api_client):
     assert "docker_deploy_snippet" in sizing_data
 
 
+def test_normalize_agent_slugs_and_roles():
+    from olympe.ops_manager import normalize_agent_slug, normalize_agents_enabled, OpsManager
+
+    assert normalize_agent_slug("recouvrement") == "jerome"
+    assert normalize_agent_slug("commercial") == "lucas"
+    assert normalize_agent_slug("prospection") == "lucas"
+    assert normalize_agent_slug("support") == "clara"
+    assert normalize_agent_slug("ao") == "victor"
+    assert normalize_agent_slug("appel_offres") == "victor"
+    assert normalize_agent_slug("jerome") == "jerome"
+
+    # Test normalize_agents_enabled list format
+    norm_list = normalize_agents_enabled(["recouvrement", "ao"])
+    assert norm_list == {"active": ["jerome", "victor"], "trials": {}}
+
+    # Test normalize_agents_enabled dict format with trials
+    norm_dict = normalize_agents_enabled({
+        "active": ["recouvrement"],
+        "trials": {"recouvrement": {"is_trial": True, "days_remaining": 30}}
+    })
+    assert norm_dict["active"] == ["jerome"]
+    assert "jerome" in norm_dict["trials"]
+    assert norm_dict["trials"]["jerome"]["is_trial"] is True
+
+    # Test update_tenant_agents with legacy role alias
+    ops = OpsManager(demo_mode=True)
+    tenant_id = "f3e25379-6531-479e-b276-3b3185e7421b"
+    res = ops.update_tenant_agents(tenant_id, ["recouvrement"])
+    assert res["agents_enabled"]["active"] == ["jerome"]
+
+
+
 

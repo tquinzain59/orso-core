@@ -16,7 +16,7 @@ import {
   CreditCard,
 } from "lucide-react";
 import { Tenant } from "../types";
-import { AGENTS_CATALOG } from "../data";
+import { getAgentMeta } from "../data";
 
 interface OnboardingDetailModalProps {
   tenant: Tenant | null;
@@ -160,7 +160,7 @@ export const OnboardingDetailModal: React.FC<OnboardingDetailModalProps> = ({
               {agentInstances.length > 0 ? (
                 <div className="flex items-center space-x-3 overflow-x-auto pb-2 border-b border-slate-800">
                   {agentInstances.map((ai) => {
-                    const catalog = AGENTS_CATALOG[ai.agent_slug as keyof typeof AGENTS_CATALOG];
+                    const catalog = getAgentMeta(ai.agent_slug);
                     const isSelected = selectedAgentSlug === ai.agent_slug;
                     return (
                       <button

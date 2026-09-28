@@ -95,17 +95,35 @@ class OnboardingWorker:
         if not raw or not isinstance(raw, list):
             return []
 
+        alias_map = {
+            "recouvrement": "jerome",
+            "commercial": "lucas",
+            "prospection": "lucas",
+            "support": "clara",
+            "support_client": "clara",
+            "ao": "victor",
+            "appel_offres": "victor",
+            "appels_offres": "victor",
+        }
+        canonical_names = {"jerome": "Jérôme", "lucas": "Lucas", "clara": "Clara", "victor": "Victor"}
+
         formatted = []
         for item in raw:
             tenant_info = item.get("tenants") or {}
+            raw_slug = str(item.get("agent_slug") or "").strip().lower()
+            norm_slug = alias_map.get(raw_slug, raw_slug)
+            alias = item.get("alias_name")
+            if not alias or str(alias).lower() in ("agent ia", "recouvrement", "commercial", "support", "ao"):
+                alias = canonical_names.get(norm_slug, alias or "Agent IA")
+
             formatted.append({
                 "instance_id": item.get("id"),
                 "tenant_id": item.get("tenant_id"),
                 "tenant_name": tenant_info.get("name", "Organisation"),
                 "tenant_slug": tenant_info.get("slug", ""),
-                "agent_slug": item.get("agent_slug"),
+                "agent_slug": norm_slug,
                 "agent_type": item.get("agent_type"),
-                "alias_name": item.get("alias_name"),
+                "alias_name": alias,
                 "mission_letter": item.get("mission_letter") or "",
                 "tone": item.get("tone"),
                 "autonomy_mode": item.get("autonomy_mode"),
@@ -118,7 +136,19 @@ class OnboardingWorker:
 
     def build_system_prompt(self, agent_slug: str, mission_letter: str) -> str:
         """Injecte la lettre de mission rédigée dans le prompt système de base du conteneur."""
-        base_prompt = BASE_PROMPTS.get(agent_slug.lower(), "Tu es un Agent IA Orso Agents souverain.\n")
+        clean_slug = str(agent_slug).strip().lower()
+        alias_map = {
+            "recouvrement": "jerome",
+            "commercial": "lucas",
+            "prospection": "lucas",
+            "support": "clara",
+            "support_client": "clara",
+            "ao": "victor",
+            "appel_offres": "victor",
+            "appels_offres": "victor",
+        }
+        canonical_slug = alias_map.get(clean_slug, clean_slug)
+        base_prompt = BASE_PROMPTS.get(canonical_slug, "Tu es un Agent IA Orso Agents souverain.\n")
         
         prompt = (
             f"{base_prompt}\n"
