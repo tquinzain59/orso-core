@@ -335,3 +335,92 @@ def test_ca8_secrets_delivery_and_permissions(tmp_path):
     read_text = secrets_file.read_text(encoding="utf-8")
     assert "ORSO_DRONE_ACTOR=drone-clientx" in read_text
     assert "ORSO_TEST_TENANT_SLUG=clientx-orso" in read_text
+
+
+def test_kan39_stripe_signature_strictly_enforced(monkeypatch):
+    """KAN-39 — Rejet strict 400 si l'en-tête Stripe-Signature est manquant ou si la signature est invalide."""
+    client = TestClient(app)
+    fake_secret = "whsec_strict_test_secret_456"
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", fake_secret)
+
+    payload = {"id": "evt_test_strict", "type": "customer.subscription.created"}
+    payload_raw = json.dumps(payload).encode("utf-8")
+
+    # 1. En-tête Stripe-Signature manquant -> 400 Bad Request
+    resp_no_header = client.post(
+        "/api/olympe/ops/webhooks/stripe",
+        content=payload_raw,
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp_no_header.status_code == 400
+    assert "manquant" in resp_no_header.json()["detail"].lower()
+
+    # 2. En-tête Stripe-Signature présent mais signature invalide -> 400 Bad Request
+    resp_bad_sig = client.post(
+        "/api/olympe/ops/webhooks/stripe",
+        content=payload_raw,
+        headers={
+            "Content-Type": "application/json",
+            "Stripe-Signature": f"t={int(time.time())},v1=bad_hash_signature",
+        },
+    )
+    assert resp_bad_sig.status_code == 400
+    assert "invalide" in resp_bad_sig.json()["detail"].lower()
+
+    # 3. Signature valide -> 200 OK
+    t = int(time.time())
+    import hmac, hashlib
+    signed_payload = f"{t}.".encode("utf-8") + payload_raw
+    valid_sig = hmac.new(fake_secret.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
+    resp_valid = client.post(
+        "/api/olympe/ops/webhooks/stripe",
+        content=payload_raw,
+        headers={
+            "Content-Type": "application/json",
+            "Stripe-Signature": f"t={t},v1={valid_sig}",
+        },
+    )
+    assert resp_valid.status_code == 200
+    assert resp_valid.json()["status"] == "processed"
+
+
+def test_kan40_legacy_endpoints_protected_against_unauthenticated_access():
+    """KAN-40 — Les routes legacy (/provision, /status, /wake, /suspend) exigent une authentification stricte."""
+    client = TestClient(app)
+    drone_headers = {"Authorization": f"Bearer {MOCK_DRONE_TOKEN}"}
+    admin_headers = {"Authorization": f"Bearer {MOCK_SUPERADMIN_TOKEN}"}
+
+    # 1. Provisioning legacy sans jeton -> 401 Unauthorized
+    resp_no_auth_prov = client.post(
+        "/api/olympe/tenants/provision",
+        json={"tenant_id": "x", "tenant_slug": "x"},
+    )
+    assert resp_no_auth_prov.status_code == 401
+
+    # 2. Provisioning legacy avec jeton drone -> 403 Forbidden (superadmin requis)
+    resp_drone_prov = client.post(
+        "/api/olympe/tenants/provision",
+        json={"tenant_id": "x", "tenant_slug": "x"},
+        headers=drone_headers,
+    )
+    assert resp_drone_prov.status_code == 403
+
+    # 3. Status legacy sans jeton -> 401 Unauthorized
+    resp_no_auth_status = client.get("/api/olympe/tenants/status/clientx-orso")
+    assert resp_no_auth_status.status_code == 401
+
+    # 4. Status legacy avec jeton drone sur tenant hors-whitelist -> 403 Forbidden
+    resp_drone_status_forbidden = client.get(
+        "/api/olympe/tenants/status/financia-solutions",
+        headers=drone_headers,
+    )
+    assert resp_drone_status_forbidden.status_code == 403
+
+    # 5. Wake legacy sans jeton -> 401 Unauthorized
+    resp_no_auth_wake = client.post("/api/olympe/tenants/wake/clientx-orso")
+    assert resp_no_auth_wake.status_code == 401
+
+    # 6. Suspend legacy sans jeton -> 401 Unauthorized
+    resp_no_auth_suspend = client.post("/api/olympe/tenants/suspend/clientx-orso")
+    assert resp_no_auth_suspend.status_code == 401
+

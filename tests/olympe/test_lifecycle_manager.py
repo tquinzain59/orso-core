@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from olympe.auth import MOCK_SUPERADMIN_TOKEN
 from olympe.lifecycle_manager import DockerLifecycleManager, normalize_container_name
 from olympe.server import app
 
@@ -166,15 +167,17 @@ def test_api_olympe_health(api_client):
 
 def test_api_olympe_wake_not_found(api_client):
     """Vérifie qu'un réveil sur un conteneur introuvable renvoie HTTP 404."""
+    admin_headers = {"Authorization": f"Bearer {MOCK_SUPERADMIN_TOKEN}"}
     with patch("olympe.server.manager.wake_tenant", return_value={"success": False, "status": "not_found"}):
-        resp = api_client.post("/api/olympe/tenants/wake/client-inexistant")
+        resp = api_client.post("/api/olympe/tenants/wake/client-inexistant", headers=admin_headers)
         assert resp.status_code == 404
         assert "Client introuvable" in resp.json()["detail"]
 
 
 def test_api_olympe_wake_success(api_client):
     """Vérifie qu'un réveil réussi renvoie HTTP 200."""
+    admin_headers = {"Authorization": f"Bearer {MOCK_SUPERADMIN_TOKEN}"}
     with patch("olympe.server.manager.wake_tenant", return_value={"success": True, "status": "ready"}):
-        resp = api_client.post("/api/olympe/tenants/wake/financia-solutions")
+        resp = api_client.post("/api/olympe/tenants/wake/financia-solutions", headers=admin_headers)
         assert resp.status_code == 200
         assert resp.json()["status"] == "ready"

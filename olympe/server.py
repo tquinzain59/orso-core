@@ -24,6 +24,7 @@ from olympe.auth import (
     check_sandbox_tenant_access,
     verify_stripe_signature,
     revoke_token,
+    is_mock_auth_enabled,
 )
 from olympe.lifecycle_manager import DockerLifecycleManager
 from olympe.ops_manager import OpsManager
@@ -149,14 +150,16 @@ async def health_check():
 
 
 @app.get("/api/olympe/tenants/status/{tenant_slug}")
-async def get_status(tenant_slug: str):
-    """Consulte l'état d'exécution et de disponibilité de l'environnement client."""
+async def get_status(tenant_slug: str, actor: Dict[str, Any] = Depends(require_ops_actor("tenants:read"))):
+    """Consulte l'état d'exécution et de disponibilité de l'environnement client (sécurisé - KAN-40)."""
+    check_sandbox_tenant_access(actor, tenant_slug, ops_mgr=ops_manager)
     return manager.get_tenant_status(tenant_slug)
 
 
 @app.post("/api/olympe/tenants/wake/{tenant_slug}")
-async def wake_tenant(tenant_slug: str):
-    """Réveille un conteneur placé en veille (Wake-on-Demand)."""
+async def wake_tenant(tenant_slug: str, actor: Dict[str, Any] = Depends(require_ops_actor("tenants:provision:sandbox"))):
+    """Réveille un conteneur placé en veille (Wake-on-Demand - sécurisé - KAN-40)."""
+    check_sandbox_tenant_access(actor, tenant_slug, ops_mgr=ops_manager)
     # VERROU 4 : Interdiction de wake sans abonnement
     tenant = ops_manager.get_tenant_detail(tenant_slug)
     if not tenant:
@@ -165,7 +168,7 @@ async def wake_tenant(tenant_slug: str):
     if sub_status not in ["active", "trialing"]:
         raise HTTPException(status_code=403, detail="Impossible de démarrer le conteneur : ce client n'a aucun abonnement actif.")
         
-    _log.info("Demande de réveil reçue pour : %s", tenant_slug)
+    _log.info("Demande de réveil reçue pour : %s (acteur: %s)", tenant_slug, actor.get("actor"))
     res = manager.wake_tenant(tenant_slug, wait_healthy=True)
     if not res.get("success") and res.get("status") == "not_found":
         raise HTTPException(
@@ -181,9 +184,10 @@ async def wake_tenant(tenant_slug: str):
 
 
 @app.post("/api/olympe/tenants/suspend/{tenant_slug}")
-async def suspend_tenant(tenant_slug: str):
-    """Met en veille un conteneur inactif pour économiser la mémoire vive (docker stop)."""
-    _log.info("Demande de mise en veille reçue pour : %s", tenant_slug)
+async def suspend_tenant(tenant_slug: str, actor: Dict[str, Any] = Depends(require_ops_actor("tenants:provision:sandbox"))):
+    """Met en veille un conteneur inactif pour économiser la mémoire vive (sécurisé - KAN-40)."""
+    check_sandbox_tenant_access(actor, tenant_slug, ops_mgr=ops_manager)
+    _log.info("Demande de mise en veille reçue pour : %s (acteur: %s)", tenant_slug, actor.get("actor"))
     res = manager.suspend_tenant(tenant_slug)
     if not res.get("success") and res.get("status") == "not_found":
         raise HTTPException(status_code=404, detail="Conteneur introuvable.")
@@ -191,9 +195,9 @@ async def suspend_tenant(tenant_slug: str):
 
 
 @app.post("/api/olympe/tenants/provision")
-async def provision_tenant(req: ProvisionRequest):
-    """Provisionne un nouvel environnement conteneurisé dédié pour un client."""
-    _log.info("Provisioning d'un nouvel environnement : %s (%s)", req.tenant_slug, req.tenant_id)
+async def provision_tenant(req: ProvisionRequest, admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Provisionne un nouvel environnement conteneurisé dédié pour un client (strictement superadmin - KAN-40)."""
+    _log.info("Provisioning d'un nouvel environnement par admin %s : %s (%s)", admin.get("email"), req.tenant_slug, req.tenant_id)
     res = manager.provision_tenant(
         tenant_id=req.tenant_id,
         tenant_slug=req.tenant_slug,
@@ -355,15 +359,27 @@ async def list_invoices(actor: Dict[str, Any] = Depends(require_ops_actor("billi
 
 @app.post("/api/olympe/ops/webhooks/stripe")
 async def stripe_webhook(request: Request):
-    """Réceptionne et traite les webhooks Stripe Billing avec vérification de signature (L5)."""
+    """Réceptionne et traite les webhooks Stripe Billing avec vérification de signature obligatoire (KAN-39)."""
     body_bytes = await request.body()
     sig_header = request.headers.get("stripe-signature")
     webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "").strip()
 
-    if webhook_secret and sig_header:
+    # Règle stricte KAN-39 : Rejet obligatoire si en-tête absent ou signature invalide
+    if webhook_secret:
+        if not sig_header:
+            _log.warning("[SECURITY] Rejet 400 : En-tête Stripe-Signature manquant sur le webhook Stripe")
+            raise HTTPException(status_code=400, detail="En-tête Stripe-Signature manquant.")
         if not verify_stripe_signature(body_bytes, sig_header, webhook_secret):
-            _log.warning("[SECURITY] Rejet 400 : signature invalide sur le webhook Stripe")
+            _log.warning("[SECURITY] Rejet 400 : Signature invalide sur le webhook Stripe")
             raise HTTPException(status_code=400, detail="Signature webhook Stripe invalide.")
+    elif not is_mock_auth_enabled():
+        _log.error("[SECURITY] STRIPE_WEBHOOK_SECRET non configuré en production.")
+        raise HTTPException(status_code=500, detail="Configuration webhook Stripe serveur incomplète.")
+    else:
+        # En mode test mocké sans secret global : si un en-tête de test est fourni, on le valide
+        if sig_header:
+            if not verify_stripe_signature(body_bytes, sig_header, "whsec_test_secret_key_123"):
+                raise HTTPException(status_code=400, detail="Signature webhook Stripe invalide.")
 
     try:
         payload = json.loads(body_bytes.decode("utf-8"))
