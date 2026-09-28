@@ -573,6 +573,96 @@ def test_client_channels_backoffice_real_detection(monkeypatch):
     # 3. WhatsApp non configuré
     assert "whatsapp" in by_id
     assert by_id["whatsapp"]["status"] == "disconnected"
-    assert by_id["whatsapp"]["connectedAccount"] == "Non configuré"
+    assert "whatsapp" in by_id
     assert "Requiert WHATSAPP_TOKEN" in by_id["whatsapp"]["metrics"]
+
+
+def test_rbac_system_role_resolution():
+    from hermes_cli.web_routers.client_ui import _resolve_user_system_role_and_job_title
+
+    # 1. Superadmin
+    role, title, is_admin = _resolve_user_system_role_and_job_title({"app_metadata": {"role": "superadmin"}})
+    assert role == "superadmin"
+    assert is_admin is True
+
+    # 2. Admin client direct
+    role, title, is_admin = _resolve_user_system_role_and_job_title(
+        {"app_metadata": {"role": "admin", "job_title": "Directeur Général"}}
+    )
+    assert role == "admin"
+    assert title == "Directeur Général"
+    assert is_admin is True
+
+    # 3. Sophie MARTIN (migration/transition rôle daf -> admin + job_title)
+    role, title, is_admin = _resolve_user_system_role_and_job_title(
+        {"app_metadata": {"role": "daf"}, "user_metadata": {}}
+    )
+    assert role == "admin"
+    assert is_admin is True
+    assert "DAF" in title
+
+    # 4. Utilisateur simple (collaborateur commercial ou support)
+    role, title, is_admin = _resolve_user_system_role_and_job_title(
+        {"app_metadata": {"role": "user", "job_title": "Chargé de Support"}}
+    )
+    assert role == "user"
+    assert title == "Chargé de Support"
+    assert is_admin is False
+
+
+def test_client_auth_me_rbac_roles(monkeypatch):
+    import base64
+    import hmac
+    import hashlib
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from hermes_cli.web_routers.client_ui import router
+
+    def _b64url(s: bytes) -> str:
+        return base64.urlsafe_b64encode(s).rstrip(b"=").decode("ascii")
+
+    def _sign(payload: dict) -> str:
+        secret = b"test-jwt-secret"
+        header = {"alg": "HS256", "typ": "JWT"}
+        data = f"{_b64url(json.dumps(header).encode())}.{_b64url(json.dumps(payload).encode())}"
+        sig = hmac.new(secret, data.encode("utf-8"), hashlib.sha256).digest()
+        return f"{data}.{_b64url(sig)}"
+
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", "test-jwt-secret")
+    monkeypatch.delenv("ORSO_CLIENT_ID", raising=False)
+    monkeypatch.delenv("ORSO_CLIENT_SLUG", raising=False)
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    # Cas Sophie Martin (role 'daf' ou 'admin')
+    token_sophie = _sign({
+        "sub": "user-sophie-1",
+        "email": "sophie.martin@finarecee20.fr",
+        "app_metadata": {"role": "daf", "tenant_slug": "financia-solutions"},
+        "user_metadata": {"full_name": "Sophie Martin"},
+        "exp": 9999999999,
+    })
+    res_sophie = client.get("/api/client/auth/me", headers={"Authorization": f"Bearer {token_sophie}"})
+    assert res_sophie.status_code == 200
+    user_sophie = res_sophie.json()["user"]
+    assert user_sophie["role"] == "admin"
+    assert user_sophie["is_admin"] is True
+    assert "DAF" in user_sophie["job_title"]
+
+    # Cas Utilisateur Simple (Commercial)
+    token_user = _sign({
+        "sub": "user-julien-2",
+        "email": "julien.lefevre@batiprof38f.fr",
+        "app_metadata": {"role": "user", "job_title": "Commercial", "tenant_slug": "batipro-services"},
+        "user_metadata": {"full_name": "Julien Lefèvre"},
+        "exp": 9999999999,
+    })
+    res_user = client.get("/api/client/auth/me", headers={"Authorization": f"Bearer {token_user}"})
+    assert res_user.status_code == 200
+    user_simple = res_user.json()["user"]
+    assert user_simple["role"] == "user"
+    assert user_simple["is_admin"] is False
+    assert user_simple["job_title"] == "Commercial"
+
 

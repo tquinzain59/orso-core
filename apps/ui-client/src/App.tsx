@@ -78,6 +78,13 @@ export const App: React.FC = () => {
     }
   };
 
+  // Helper de résolution stricte du rôle de sécurité Orso ('admin' / 'superadmin') vs 'user'
+  const resolveIsAdmin = (user: any, tenant?: any): boolean => {
+    if (user?.is_admin === true || tenant?.is_admin === true) return true;
+    const role = (user?.role || tenant?.role || '').toLowerCase().trim();
+    return role === 'admin' || role === 'superadmin' || role === 'daf' || role === 'direction';
+  };
+
   // Synchronisation de la session au démarrage
   useEffect(() => {
     checkBackendHealth().then(setBackendStatus);
@@ -110,20 +117,22 @@ export const App: React.FC = () => {
     // 2. Vérification de la session auprès du backend
     checkSessionMe().then((res) => {
       if (res.authenticated && res.user) {
+        const isUserAdmin = resolveIsAdmin(res.user, res.tenant);
         setIsAuthenticated(true);
         setCompanyName(res.tenant?.name || res.tenant?.tenant_slug?.replace('-', ' ').toUpperCase() || 'Financia Solutions');
         setUserName(res.user?.full_name || res.user?.email || 'Sophie Martin');
-        setUserRole(res.user?.role || 'DAF');
-        setIsAdmin(Boolean(res.user?.is_admin ?? (res.user?.role === 'admin' || res.tenant?.role === 'admin')));
+        setUserRole(res.user?.job_title || (isUserAdmin ? 'DAF' : 'Collaborateur'));
+        setIsAdmin(isUserAdmin);
         refreshAgents(initialAgentParam);
       } else {
         const stored = getStoredUser();
         if (stored && getClientToken()) {
+          const isUserAdmin = resolveIsAdmin(stored, stored?.tenant);
           setIsAuthenticated(true);
           setCompanyName(stored.tenant?.name || 'Financia Solutions');
           setUserName(stored.full_name || 'Sophie Martin');
-          setUserRole(stored.role || 'DAF');
-          setIsAdmin(Boolean(stored.is_admin ?? (stored.role === 'admin' || stored.tenant?.role === 'admin')));
+          setUserRole(stored.job_title || (isUserAdmin ? 'DAF' : 'Collaborateur'));
+          setIsAdmin(isUserAdmin);
           refreshAgents(initialAgentParam);
         } else {
           setIsAuthenticated(false);
@@ -163,12 +172,13 @@ export const App: React.FC = () => {
         return;
       }
 
+      const isUserAdmin = resolveIsAdmin(res.user, res.tenant);
       setIsAuthenticated(true);
       setShowLoginModal(false);
       setCompanyName(res.tenant?.name || res.tenant?.tenant_slug?.replace('-', ' ').toUpperCase() || 'Organisation');
       setUserName(res.user?.full_name || res.user?.email || 'Utilisateur');
-      setUserRole(res.user?.role || 'Membre');
-      setIsAdmin(Boolean(res.user?.is_admin ?? (res.user?.role === 'admin' || res.tenant?.role === 'admin')));
+      setUserRole(res.user?.job_title || (isUserAdmin ? 'DAF' : 'Collaborateur'));
+      setIsAdmin(isUserAdmin);
       checkBackendHealth().then(setBackendStatus);
       await refreshAgents();
     } else {
@@ -288,7 +298,7 @@ export const App: React.FC = () => {
                 ) : (
                   <span className="hidden sm:inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-slate-800 text-slate-400 border border-slate-700">
                     <UserCheck className="w-3 h-3" />
-                    <span>Salarié</span>
+                    <span>Utilisateur simple</span>
                   </span>
                 )}
               </div>

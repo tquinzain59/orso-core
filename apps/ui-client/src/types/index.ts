@@ -88,7 +88,8 @@ export interface ClientUser {
   id: string;
   email: string;
   full_name: string;
-  role?: string;
+  role?: 'superadmin' | 'admin' | 'user' | string;
+  job_title?: string;
   is_admin?: boolean;
 }
 

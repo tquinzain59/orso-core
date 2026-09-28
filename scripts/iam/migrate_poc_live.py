@@ -46,7 +46,9 @@ POC_DATA = [
             "password": "TempOrso2026!Financia",
             "full_name": "Sophie Martin",
             "phone": "+33 6 45 78 12 34",
-            "role": "daf",
+            "role": "admin",
+            "job_title": "Directrice Administrative et Financière (DAF)",
+            "is_admin": True,
         },
     },
     {
@@ -67,7 +69,9 @@ POC_DATA = [
             "password": "TempOrso2026!Commercia",
             "full_name": "Claire Dubois",
             "phone": "+33 1 56 78 90 12",
-            "role": "support",
+            "role": "user",
+            "job_title": "Responsable Support Client",
+            "is_admin": False,
         },
     },
     {
@@ -88,7 +92,9 @@ POC_DATA = [
             "password": "TempOrso2026!Helpdesk",
             "full_name": "Hugo Bernard",
             "phone": "+33 9 12 34 56 78",
-            "role": "operator",
+            "role": "user",
+            "job_title": "Opérateur IA",
+            "is_admin": False,
         },
     },
     {
@@ -109,7 +115,9 @@ POC_DATA = [
             "password": "TempOrso2026!Batipro",
             "full_name": "Julien Lefèvre",
             "phone": "+33 7 81 23 45 67",
-            "role": "commercial",
+            "role": "user",
+            "job_title": "Chargé d'Affaires Commercial",
+            "is_admin": False,
         },
     },
     {
@@ -131,6 +139,8 @@ POC_DATA = [
             "full_name": "Amélie Petit",
             "phone": "+33 6 98 76 54 32",
             "role": "admin",
+            "job_title": "Direction Générale",
+            "is_admin": True,
         },
     },
     {
@@ -259,7 +269,9 @@ def upsert_profile(user_id, tenant_id, u_dict):
         "full_name": u_dict["full_name"],
         "phone": u_dict["phone"],
         "role": u_dict["role"],
-        "is_primary_contact": True,
+        "is_admin": u_dict.get("is_admin", False),
+        "job_title": u_dict.get("job_title", "Collaborateur"),
+        "is_primary_contact": u_dict.get("is_admin", False),
     }
     check_url = f"{SUPABASE_URL}/rest/v1/profiles?id=eq.{user_id}&select=id"
     req_check = urllib.request.Request(check_url, headers=HEADERS)

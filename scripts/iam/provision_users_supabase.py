@@ -20,28 +20,36 @@ POC_USERS = [
         "email": "sophie.martin@finarecee20.fr",
         "full_name": "Sophie Martin",
         "phone": "+33 6 45 78 12 34",
-        "role": "daf",
+        "role": "admin",
+        "job_title": "Directrice Administrative et Financière (DAF)",
+        "is_admin": True,
         "tenant_slug": "financia-solutions",
     },
     {
         "email": "claire.dubois@servicallc322.com",
         "full_name": "Claire Dubois",
         "phone": "+33 1 56 78 90 12",
-        "role": "support",
+        "role": "user",
+        "job_title": "Responsable Support Client",
+        "is_admin": False,
         "tenant_slug": "commercialink",
     },
     {
         "email": "h.bernard@recoviaa60a.fr",
         "full_name": "Hugo Bernard",
         "phone": "+33 9 12 34 56 78",
-        "role": "operator",
+        "role": "user",
+        "job_title": "Opérateur IA",
+        "is_admin": False,
         "tenant_slug": "helpdesk360",
     },
     {
         "email": "julien.lefevre@batiprof38f.fr",
         "full_name": "Julien Lefèvre",
         "phone": "+33 7 81 23 45 67",
-        "role": "commercial",
+        "role": "user",
+        "job_title": "Chargé d'Affaires Commercial",
+        "is_admin": False,
         "tenant_slug": "batipro-services",
     },
     {
@@ -49,6 +57,8 @@ POC_USERS = [
         "full_name": "Amélie Petit",
         "phone": "+33 6 98 76 54 32",
         "role": "admin",
+        "job_title": "Direction Générale",
+        "is_admin": True,
         "tenant_slug": "eurotech-conseil",
     },
 ]
@@ -95,11 +105,14 @@ def provision_users():
             "email_confirm": True,
             "user_metadata": {
                 "full_name": u["full_name"],
+                "job_title": u["job_title"],
             },
             "app_metadata": {
                 "tenant_id": tenant_id,
                 "tenant_slug": slug,
                 "role": u["role"],
+                "is_admin": u.get("is_admin", False),
+                "job_title": u["job_title"],
             }
         }
         data = json.dumps(body).encode("utf-8")
@@ -118,7 +131,9 @@ def provision_users():
                     "full_name": u["full_name"],
                     "phone": u["phone"],
                     "role": u["role"],
-                    "is_primary_contact": True,
+                    "is_admin": u.get("is_admin", False),
+                    "job_title": u["job_title"],
+                    "is_primary_contact": u.get("is_admin", False),
                 }
                 req_prof = urllib.request.Request(
                     profile_url,

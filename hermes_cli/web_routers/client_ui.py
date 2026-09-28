@@ -1339,6 +1339,65 @@ def _trigger_support_alert(
         _log.warning("Impossible d'enregistrer l'alerte support dans public.support_alerts: %s", e)
 
 
+def _resolve_user_system_role_and_job_title(
+    auth_payload: Dict[str, Any],
+    profile_data: Optional[Dict[str, Any]] = None,
+) -> tuple[str, str, bool]:
+    """Résout de manière étanche :
+    1. system_role : Un des 3 rôles de sécurité Orso stricts ('superadmin', 'admin', 'user').
+    2. job_title   : La fonction métier interne dans l'entreprise (informatif : 'DAF', 'DSI', etc.).
+    3. is_admin    : Booléen True uniquement pour 'superadmin' et 'admin'.
+    """
+    app_meta = auth_payload.get("app_metadata") or {}
+    user_meta = auth_payload.get("user_metadata") or {}
+    tenant = auth_payload.get("tenant") or {}
+    profile = profile_data or {}
+
+    raw_role = (
+        profile.get("role")
+        or app_meta.get("role")
+        or tenant.get("role")
+        or user_meta.get("role")
+        or "user"
+    )
+    raw_role_str = str(raw_role).strip().lower()
+
+    job_title = (
+        profile.get("job_title")
+        or user_meta.get("job_title")
+        or app_meta.get("job_title")
+        or tenant.get("job_title")
+    )
+
+    if raw_role_str == "superadmin":
+        system_role = "superadmin"
+        is_admin = True
+    elif raw_role_str == "admin":
+        system_role = "admin"
+        is_admin = True
+    elif (
+        # Rétrocompatibilité / transition si le compte avait temporairement un rôle métier dans 'role'
+        raw_role_str in ("daf", "direction", "gerant", "directeur", "owner")
+        or profile.get("is_admin") is True
+        or profile.get("is_primary_contact") is True
+        or tenant.get("is_admin") is True
+        or app_meta.get("is_admin") is True
+        or user_meta.get("is_admin") is True
+    ):
+        system_role = "admin"
+        is_admin = True
+        if not job_title and raw_role_str in ("daf", "direction", "gerant", "directeur", "owner"):
+            job_title = "Directrice Administrative et Financière (DAF)" if raw_role_str == "daf" else raw_role_str.title()
+    else:
+        system_role = "user"
+        is_admin = False
+
+    if not job_title:
+        job_title = "Directrice Administrative et Financière (DAF)" if is_admin else "Collaborateur"
+
+    return system_role, str(job_title), is_admin
+
+
 @router.post("/api/client/auth/login")
 async def client_auth_login(req: ClientLoginRequest, request: Request):
     """Authentifie un client auprès de Supabase Auth, résout son environnement cible et vérifie l'accès."""
@@ -1453,14 +1512,29 @@ async def client_auth_login(req: ClientLoginRequest, request: Request):
                     detail="Accès refusé : Vos identifiants ne vous permettent pas d'accéder à cette instance.",
                 )
 
+    # Récupération du profil public.profiles si possible pour consolider le rôle système et job_title
+    profile_data = None
+    user_id = user_info.get("id")
+    if supabase_url and service_key and user_id:
+        try:
+            p_req = urllib.request.Request(
+                f"{supabase_url}/rest/v1/profiles?id=eq.{user_id}&select=*",
+                headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"},
+            )
+            with urllib.request.urlopen(p_req, timeout=3.0) as resp:
+                p_rows = json.loads(resp.read().decode("utf-8"))
+                if p_rows and len(p_rows) > 0:
+                    profile_data = p_rows[0]
+        except Exception as e:
+            _log.debug("Notice lecture Supabase profile login: %s", e)
+
     raw_tenant = app_meta.get("tenant") if isinstance(app_meta.get("tenant"), dict) else {}
-    is_admin = bool(
-        app_meta.get("is_admin")
-        or raw_tenant.get("is_admin")
-        or user_meta.get("is_admin")
-        or app_meta.get("role") in ("admin", "direction", "superadmin")
-        or raw_tenant.get("role") in ("admin", "direction", "superadmin")
-    )
+    auth_sim = {
+        "app_metadata": app_meta,
+        "user_metadata": user_meta,
+        "tenant": raw_tenant,
+    }
+    system_role, job_title, is_admin = _resolve_user_system_role_and_job_title(auth_sim, profile_data)
 
     response_data = {
         "success": True,
@@ -1470,8 +1544,9 @@ async def client_auth_login(req: ClientLoginRequest, request: Request):
         "user": {
             "id": user_info.get("id"),
             "email": user_info.get("email"),
-            "full_name": user_meta.get("full_name") or user_info.get("email"),
-            "role": user_meta.get("role") or raw_tenant.get("role") or app_meta.get("role", "client"),
+            "full_name": (profile_data and profile_data.get("full_name")) or user_meta.get("full_name") or user_info.get("email"),
+            "role": system_role,
+            "job_title": job_title,
             "is_admin": is_admin,
         },
         "tenant": {
@@ -1507,20 +1582,33 @@ async def client_auth_me(auth: Dict[str, Any] = Depends(verify_client_access)):
         tenant_slug=tenant_slug,
         auth_agents=tenant.get("agents"),
     )
-    is_admin = bool(
-        tenant.get("is_admin")
-        or app_meta.get("is_admin")
-        or user_meta.get("is_admin")
-        or tenant.get("role") in ("admin", "direction", "superadmin")
-        or app_meta.get("role") in ("admin", "direction", "superadmin")
-    )
+    supabase_url = os.environ.get("SUPABASE_URL", "").strip()
+    service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    user_id = auth.get("sub")
+    profile_data = None
+    if supabase_url and service_key and user_id:
+        try:
+            p_req = urllib.request.Request(
+                f"{supabase_url}/rest/v1/profiles?id=eq.{user_id}&select=*",
+                headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"},
+            )
+            with urllib.request.urlopen(p_req, timeout=3.0) as resp:
+                p_rows = json.loads(resp.read().decode("utf-8"))
+                if p_rows and len(p_rows) > 0:
+                    profile_data = p_rows[0]
+        except Exception as e:
+            _log.debug("Notice lecture Supabase profile me: %s", e)
+
+    system_role, job_title, is_admin = _resolve_user_system_role_and_job_title(auth, profile_data)
+
     return {
         "authenticated": True,
         "user": {
             "id": auth.get("sub"),
             "email": auth.get("email"),
-            "full_name": user_meta.get("full_name") or auth.get("email"),
-            "role": user_meta.get("role") or tenant.get("role", "client"),
+            "full_name": (profile_data and profile_data.get("full_name")) or user_meta.get("full_name") or auth.get("email"),
+            "role": system_role,
+            "job_title": job_title,
             "is_admin": is_admin,
         },
         "tenant": tenant,
@@ -2248,24 +2336,7 @@ async def get_client_settings_profile(auth: Dict[str, Any] = Depends(verify_clie
     # Données utilisateur
     user_id = auth.get("sub")
     user_email = auth.get("email") or "client@orso-agents.fr"
-    is_admin = bool(
-        tenant.get("is_admin")
-        or app_meta.get("is_admin")
-        or user_meta.get("is_admin")
-        or tenant.get("role") in ("admin", "direction", "superadmin")
-        or app_meta.get("role") in ("admin", "direction", "superadmin")
-    )
-
-    user_data: Dict[str, Any] = {
-        "id": user_id,
-        "email": user_email,
-        "full_name": user_meta.get("full_name") or user_email.split("@")[0].replace(".", " ").title(),
-        "role": user_meta.get("role") or tenant.get("role", "Direction Financière"),
-        "phone": user_meta.get("phone") or "+33 6 45 78 12 34",
-        "job_title": user_meta.get("job_title") or "Responsable Financier & Dirigeant",
-        "is_admin": is_admin,
-        "created_at": "2026-09-16T07:50:00Z",
-    }
+    profile_data = None
 
     # Interrogation public.profiles si Supabase est actif
     if supabase_url and service_key and user_id:
@@ -2277,14 +2348,22 @@ async def get_client_settings_profile(auth: Dict[str, Any] = Depends(verify_clie
             with urllib.request.urlopen(p_req, timeout=3.0) as resp:
                 p_rows = json.loads(resp.read().decode("utf-8"))
                 if p_rows and len(p_rows) > 0:
-                    pr = p_rows[0]
-                    user_data["full_name"] = pr.get("full_name") or user_data["full_name"]
-                    user_data["phone"] = pr.get("phone") or user_data["phone"]
-                    user_data["role"] = pr.get("role") or user_data["role"]
-                    user_data["is_admin"] = bool(pr.get("is_admin", is_admin))
-                    user_data["created_at"] = pr.get("created_at") or user_data["created_at"]
+                    profile_data = p_rows[0]
         except Exception as e:
             _log.debug("Notice lecture Supabase profiles: %s", e)
+
+    system_role, job_title, is_admin = _resolve_user_system_role_and_job_title(auth, profile_data)
+
+    user_data: Dict[str, Any] = {
+        "id": user_id,
+        "email": user_email,
+        "full_name": (profile_data and profile_data.get("full_name")) or user_meta.get("full_name") or user_email.split("@")[0].replace(".", " ").title(),
+        "role": system_role,
+        "job_title": job_title,
+        "phone": (profile_data and profile_data.get("phone")) or user_meta.get("phone") or "+33 6 45 78 12 34",
+        "is_admin": is_admin,
+        "created_at": (profile_data and profile_data.get("created_at")) or "2026-09-16T07:50:00Z",
+    }
 
     return {
         "company": company_data,
@@ -2373,13 +2452,7 @@ async def get_client_billing(auth: Dict[str, Any] = Depends(verify_client_access
     user_meta = auth.get("user_metadata") or {}
     app_meta = auth.get("app_metadata") or {}
 
-    is_admin = bool(
-        tenant.get("is_admin")
-        or app_meta.get("is_admin")
-        or user_meta.get("is_admin")
-        or tenant.get("role") in ("admin", "direction", "superadmin")
-        or app_meta.get("role") in ("admin", "direction", "superadmin")
-    )
+    _, _, is_admin = _resolve_user_system_role_and_job_title(auth)
     if not is_admin:
         raise HTTPException(
             status_code=403,
@@ -2561,13 +2634,7 @@ async def update_client_subscription(
     user_meta = auth.get("user_metadata") or {}
     app_meta = auth.get("app_metadata") or {}
 
-    is_admin = bool(
-        tenant.get("is_admin")
-        or app_meta.get("is_admin")
-        or user_meta.get("is_admin")
-        or tenant.get("role") in ("admin", "direction", "superadmin")
-        or app_meta.get("role") in ("admin", "direction", "superadmin")
-    )
+    _, _, is_admin = _resolve_user_system_role_and_job_title(auth)
     if not is_admin:
         raise HTTPException(status_code=403, detail="Seul un administrateur peut modifier l'abonnement.")
 
@@ -2685,13 +2752,7 @@ async def create_billing_portal_session(
     user_meta = auth.get("user_metadata") or {}
     app_meta = auth.get("app_metadata") or {}
 
-    is_admin = bool(
-        tenant.get("is_admin")
-        or app_meta.get("is_admin")
-        or user_meta.get("is_admin")
-        or tenant.get("role") in ("admin", "direction", "superadmin")
-        or app_meta.get("role") in ("admin", "direction", "superadmin")
-    )
+    _, _, is_admin = _resolve_user_system_role_and_job_title(auth)
     if not is_admin:
         raise HTTPException(status_code=403, detail="Accès réservé aux administrateurs.")
 

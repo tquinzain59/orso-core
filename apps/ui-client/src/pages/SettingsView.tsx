@@ -475,24 +475,24 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ isAdmin, onBack }) =
                   <div className="grid grid-cols-2 gap-3">
                     <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-850 space-y-1">
                       <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-                        Rôle / Fonction
+                        Fonction dans l'entreprise
                       </span>
-                      <p className="text-sm font-bold text-white">{userProfile?.role || 'Direction'}</p>
+                      <p className="text-sm font-bold text-white">{userProfile?.job_title || 'Directrice Administrative et Financière (DAF)'}</p>
                     </div>
 
                     <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-850 space-y-1">
                       <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-                        Habilitation
+                        Habilitation Orso
                       </span>
                       <div>
                         {userProfile?.is_admin ? (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-emerald-950 text-emerald-300 border border-emerald-800">
                             <ShieldCheck className="w-3 h-3" />
-                            <span>Administrateur</span>
+                            <span>{userProfile?.role === 'superadmin' ? 'Super Admin' : 'Admin'}</span>
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-slate-800 text-slate-300 border border-slate-700">
-                            <span>Collaborateur</span>
+                            <span>Utilisateur simple</span>
                           </span>
                         )}
                       </div>
