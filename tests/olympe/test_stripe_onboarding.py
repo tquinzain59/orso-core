@@ -142,3 +142,74 @@ def test_create_admin_user_error_handling():
         assert resp.status_code == 400
         assert "Tenant inexistant" in resp.json()["detail"]
 
+
+def test_create_admin_user_with_password():
+    """Vérifie que le mot de passe utilisateur est bien transmis lorsqu'il est renseigné."""
+    mock_ops = MagicMock(spec=OpsManager)
+    mock_ops.create_onboarding_admin_user.return_value = {
+        "id": "usr_with_pass_123",
+        "email": "client@entreprise.fr",
+        "full_name": "Jean Dupont",
+        "role": "Dirigeant",
+        "is_admin": True,
+    }
+
+    with patch("olympe.server.ops_manager", mock_ops):
+        payload = {
+            "tenant_id": "3a4cb49e-970c-46a4-ada5-70163f2bee06",
+            "email": "client@entreprise.fr",
+            "full_name": "Jean Dupont",
+            "role": "Dirigeant",
+            "phone": "06 12 34 56 78",
+            "password": "SecurePassword2026!",
+        }
+        resp = client.post("/api/olympe/onboarding/create-admin-user", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+        mock_ops.create_onboarding_admin_user.assert_called_once_with(
+            tenant_id="3a4cb49e-970c-46a4-ada5-70163f2bee06",
+            email="client@entreprise.fr",
+            full_name="Jean Dupont",
+            role="Dirigeant",
+            phone="06 12 34 56 78",
+            password="SecurePassword2026!",
+        )
+
+
+def test_rewrite_mission_letter_endpoint():
+    """Vérifie l'endpoint de réécriture serveur sécurisée de la lettre de mission."""
+    mock_ops = MagicMock(spec=OpsManager)
+    mock_ops.rewrite_mission_letter.return_value = {
+        "success": True,
+        "content": "1. Contexte & Enjeux Stratégiques\nMission recouv...",
+        "provider": "deepseek-v3",
+        "cached": False,
+    }
+
+    with patch("olympe.server.ops_manager", mock_ops):
+        payload = {
+            "agent_id": "jerome",
+            "agent_name": "Jérôme",
+            "role_title": "Recouvrement & DSO",
+            "company_name": "Lumina Solutions",
+            "sector": "Conseil",
+            "raw_notes": "Sécuriser les impayés",
+            "extracted_docs_text": "",
+        }
+        resp = client.post("/api/olympe/onboarding/rewrite-mission-letter", json=payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["success"] is True
+        assert "Mission recouv" in data["content"]
+        mock_ops.rewrite_mission_letter.assert_called_once_with(
+            agent_id="jerome",
+            agent_name="Jérôme",
+            role_title="Recouvrement & DSO",
+            company_name="Lumina Solutions",
+            sector="Conseil",
+            raw_notes="Sécuriser les impayés",
+            extracted_docs_text="",
+        )
+
+

@@ -259,12 +259,20 @@ class DockerLifecycleManager:
                 "message": f"Le conteneur {container_name} est déjà provisionné.",
             }
 
+        default_image = os.environ.get("ORSO_BACKEND_IMAGE", "orso-core-orso-backend:latest")
+        target_image = default_image if (not image_name or image_name == "orso-backend:latest") else image_name
+
         base_envs = {
             "ORSO_CLIENT_ID": tenant_id,
             "ORSO_CLIENT_SLUG": tenant_slug,
             "HERMES_CONFIG_PATH": "/app/config/hermes.yaml",
             "HERMES_HOME": "/app/data/hermes_home",
         }
+        for key in ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY"]:
+            val = os.environ.get(key)
+            if val:
+                base_envs[key] = val
+
         if self.supabase_url:
             base_envs["SUPABASE_URL"] = self.supabase_url
         if self.supabase_key:
@@ -288,6 +296,8 @@ class DockerLifecycleManager:
             "-d",
             "--name", container_name,
             "--network", self.network_name,
+            "--network-alias", container_name,
+            "--network-alias", f"orso_client_{tenant_slug}",
             "--restart", "unless-stopped",
             "--label", "com.orso.managed=true",
             "--label", f"com.orso.tenant_id={tenant_id}",
@@ -297,10 +307,17 @@ class DockerLifecycleManager:
             "-v", f"{tenant_data_dir}:/app/data",
         ]
 
+        # Montages partagés de configuration et compétences si présents
+        project_root = Path(__file__).resolve().parent.parent
+        for shared_dir in ["config", "skills", "profiles"]:
+            p = project_root / shared_dir
+            if p.is_dir():
+                run_args.extend(["-v", f"{p}:/app/{shared_dir}:ro"])
+
         for k, v in base_envs.items():
             run_args.extend(["-e", f"{k}={v}"])
 
-        run_args.append(image_name)
+        run_args.append(target_image)
 
         _log.info("Lancement du provisioning pour %s (%s)", tenant_slug, container_name)
         proc = self._exec_docker(run_args, timeout=20.0)

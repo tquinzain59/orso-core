@@ -164,12 +164,14 @@ BEGIN
 
     -- 7. Initialisation de l'instance infrastructure (public.tenant_instances)
     INSERT INTO public.tenant_instances (
-        tenant_id, internal_route_key, status, agents_enabled, environment_status
+        tenant_id, internal_route_key, docker_container_name, instance_url, status, agents_enabled, environment_status
     ) VALUES (
-        v_tenant_id, 'orso_backend_' || v_slug, 'provisioning',
+        v_tenant_id, 'orso_client_' || v_slug, 'orso_client_' || v_slug, 'https://app.orso-agents.fr/t/' || v_slug, 'provisioning',
         to_jsonb(v_agents_arr), 'inactive'
     )
     ON CONFLICT (internal_route_key) DO UPDATE SET
+        docker_container_name = EXCLUDED.docker_container_name,
+        instance_url = EXCLUDED.instance_url,
         agents_enabled = EXCLUDED.agents_enabled,
         updated_at = NOW();
 

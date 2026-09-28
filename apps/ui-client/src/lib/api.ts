@@ -509,20 +509,6 @@ export async function fetchClientAgents(): Promise<Agent[]> {
     if (filtered.length > 0) return filtered;
   }
 
-  // Si l'utilisateur est identifié sur Financia Solutions (ou autre compte à restriction), ne jamais ouvrir la flotte complète par erreur
-  const tenantSlug = stored?.tenant?.tenant_slug || stored?.tenant_slug;
-  if (tenantSlug === 'financia-solutions') {
-    return ORSO_AGENTS.filter((a) => a.id === 'jerome');
-  } else if (tenantSlug === 'commercialink') {
-    return ORSO_AGENTS.filter((a) => a.id === 'lucas');
-  } else if (tenantSlug === 'helpdesk360') {
-    return ORSO_AGENTS.filter((a) => a.id === 'clara');
-  } else if (tenantSlug === 'batipro-services') {
-    return ORSO_AGENTS.filter((a) => a.id === 'victor');
-  } else if (tenantSlug === 'eurotech-conseil') {
-    return ORSO_AGENTS;
-  }
-
   // Par défaut, seul Jérôme est actif si aucune information de flotte n'est disponible
   return ORSO_AGENTS.filter((a) => a.id === 'jerome');
 }

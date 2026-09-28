@@ -102,6 +102,17 @@ class OnboardingCreateAdminUserRequest(BaseModel):
     full_name: str = Field(..., description="Prénom et nom de l'administrateur")
     role: Optional[str] = Field("Dirigeant", description="Fonction ou rôle dans l'entreprise")
     phone: Optional[str] = Field(None, description="Téléphone professionnel direct")
+    password: Optional[str] = Field(None, description="Mot de passe initial sécurisé")
+
+
+class RewriteMissionLetterRequest(BaseModel):
+    agent_id: str = Field(..., description="Identifiant de l'agent (jerome, lucas, clara, victor)")
+    agent_name: str = Field(..., description="Nom d'usage de l'agent")
+    role_title: str = Field(..., description="Titre du rôle")
+    company_name: str = Field(..., description="Nom de l'entreprise")
+    sector: str = Field(..., description="Secteur d'activité")
+    raw_notes: Optional[str] = Field("", description="Notes ou consignes rédigées par l'utilisateur")
+    extracted_docs_text: Optional[str] = Field("", description="Extraits textuels de documents d'entreprise")
 
 
 # ── Endpoints Supervision & Cycle de Vie Conteneurs ──────────────────────────
@@ -346,16 +357,39 @@ async def onboarding_create_subscription(req: OnboardingCreateSubscriptionReques
 async def onboarding_create_admin_user(req: OnboardingCreateAdminUserRequest):
     """Crée ou rattache le compte administrateur du client suite à la souscription d'onboarding."""
     try:
-        user = ops_manager.create_onboarding_admin_user(
-            tenant_id=req.tenant_id,
-            email=req.email,
-            full_name=req.full_name,
-            role=req.role or "Dirigeant",
-            phone=req.phone,
-        )
+        kwargs: Dict[str, Any] = {
+            "tenant_id": req.tenant_id,
+            "email": req.email,
+            "full_name": req.full_name,
+            "role": req.role or "Dirigeant",
+            "phone": req.phone,
+        }
+        if req.password:
+            kwargs["password"] = req.password
+
+        user = ops_manager.create_onboarding_admin_user(**kwargs)
         return {"success": True, "user": user}
     except Exception as e:
         _log.error("Erreur lors de la création du compte administrateur onboarding : %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/olympe/onboarding/rewrite-mission-letter")
+async def rewrite_mission_letter(req: RewriteMissionLetterRequest):
+    """Génère ou réécrit la lettre de mission opérationnelle avec DeepSeek côté serveur."""
+    try:
+        res = ops_manager.rewrite_mission_letter(
+            agent_id=req.agent_id,
+            agent_name=req.agent_name,
+            role_title=req.role_title,
+            company_name=req.company_name,
+            sector=req.sector,
+            raw_notes=req.raw_notes or "",
+            extracted_docs_text=req.extracted_docs_text or "",
+        )
+        return res
+    except Exception as e:
+        _log.error("Erreur réécriture lettre de mission : %s", e)
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -394,6 +428,19 @@ async def get_ovh_sizing(admin: Dict[str, Any] = Depends(require_superadmin)):
 async def provision_onboarding_order(tenant_id: str, admin: Dict[str, Any] = Depends(require_superadmin)):
     """Valide le déploiement d'un client et active ses agents en production."""
     try:
+        tenant_detail = ops_manager.get_tenant_detail(tenant_id)
+        if tenant_detail:
+            actual_tenant_id = tenant_detail["id"]
+            tenant_slug = tenant_detail.get("slug", "")
+            # Déclenchement du provisioning physique Docker
+            try:
+                manager.provision_tenant(
+                    tenant_id=actual_tenant_id,
+                    tenant_slug=tenant_slug,
+                )
+            except Exception as pe:
+                _log.warning("Provisioning conteneur Docker client %s (%s): %s", tenant_slug, actual_tenant_id, pe)
+
         return ops_manager.provision_onboarding_order(tenant_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

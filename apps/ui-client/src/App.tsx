@@ -48,8 +48,8 @@ export const App: React.FC = () => {
   const [authError, setAuthError] = useState<string | null>(null);
   const [isWaking, setIsWaking] = useState<boolean>(false);
   const [wakeMessage, setWakeMessage] = useState<string>('');
-  const [loginEmail, setLoginEmail] = useState<string>('sophie.martin@finarecee20.fr');
-  const [loginPassword, setLoginPassword] = useState<string>('TempOrso2026!Financia');
+  const [loginEmail, setLoginEmail] = useState<string>('');
+  const [loginPassword, setLoginPassword] = useState<string>('');
   const [showLoginModal, setShowLoginModal] = useState<boolean>(false);
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
 
@@ -164,9 +164,9 @@ export const App: React.FC = () => {
 
       setIsAuthenticated(true);
       setShowLoginModal(false);
-      setCompanyName(res.tenant?.name || res.tenant?.tenant_slug?.replace('-', ' ').toUpperCase() || 'Financia Solutions');
-      setUserName(res.user?.full_name || res.user?.email || 'Sophie Martin');
-      setUserRole(res.user?.role || 'DAF');
+      setCompanyName(res.tenant?.name || res.tenant?.tenant_slug?.replace('-', ' ').toUpperCase() || 'Organisation');
+      setUserName(res.user?.full_name || res.user?.email || 'Utilisateur');
+      setUserRole(res.user?.role || 'Membre');
       setIsAdmin(Boolean(res.user?.is_admin ?? (res.user?.role === 'admin' || res.tenant?.role === 'admin')));
       checkBackendHealth().then(setBackendStatus);
       await refreshAgents();
@@ -467,91 +467,6 @@ export const App: React.FC = () => {
                 )}
               </button>
             </form>
-
-            {/* Séparateur pour Tests 1-Clic */}
-            <div className="relative flex items-center justify-center my-2">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-slate-800" />
-              </div>
-              <span className="relative px-3 bg-slate-900 text-[10px] font-bold text-slate-500 uppercase tracking-widest">
-                Validation & Démonstration
-              </span>
-            </div>
-
-            {/* Boutons de test rapide */}
-            <div className="space-y-2">
-              <button
-                type="button"
-                disabled={authLoading}
-                onClick={() =>
-                  handleLogin(
-                    undefined,
-                    'sophie.martin@finarecee20.fr',
-                    'TempOrso2026!Financia'
-                  )
-                }
-                className="w-full p-2.5 rounded-xl bg-emerald-950/50 hover:bg-emerald-950/80 border border-emerald-700/50 text-emerald-200 text-xs font-semibold flex items-center justify-between transition-all group active:scale-95"
-              >
-                <div className="flex items-center gap-2">
-                  <UserCheck className="w-4 h-4 text-emerald-400 group-hover:scale-110 transition-transform" />
-                  <div className="text-left">
-                    <p className="font-bold text-white">⚡ Connexion Sophie Martin</p>
-                    <p className="text-[10px] text-emerald-300/80">Financia Solutions • DAF (Accès Autorisé)</p>
-                  </div>
-                </div>
-                <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-900/80 border border-emerald-700 text-emerald-300 font-bold">
-                  200 OK
-                </span>
-              </button>
-
-              <button
-                type="button"
-                disabled={authLoading}
-                onClick={() =>
-                  handleLogin(
-                    undefined,
-                    'claire.dubois@servicallc322.com',
-                    'TempOrso2026!Commercia'
-                  )
-                }
-                className="w-full p-2.5 rounded-xl bg-rose-950/40 hover:bg-rose-950/70 border border-rose-800/40 text-rose-200 text-xs font-semibold flex items-center justify-between transition-all group active:scale-95"
-              >
-                <div className="flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 text-rose-400 group-hover:scale-110 transition-transform" />
-                  <div className="text-left">
-                    <p className="font-bold text-white">🚫 Test Compte Non Autorisé</p>
-                    <p className="text-[10px] text-rose-300/80">Compte tiers (Rejet étanchéité attendu 403)</p>
-                  </div>
-                </div>
-                <span className="text-[10px] px-2 py-0.5 rounded bg-rose-900/80 border border-rose-700 text-rose-300 font-bold">
-                  403 Rejet
-                </span>
-              </button>
-
-              <button
-                type="button"
-                disabled={authLoading}
-                onClick={() =>
-                  handleLogin(
-                    undefined,
-                    'test.sansenv@orso-agents.fr',
-                    'TempOrso2026!SansEnv'
-                  )
-                }
-                className="w-full p-2.5 rounded-xl bg-amber-950/40 hover:bg-amber-950/70 border border-amber-800/40 text-amber-200 text-xs font-semibold flex items-center justify-between transition-all group active:scale-95"
-              >
-                <div className="flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 text-amber-400 group-hover:scale-110 transition-transform" />
-                  <div className="text-left">
-                    <p className="font-bold text-white">⚠️ Test Sans Environnement</p>
-                    <p className="text-[10px] text-amber-300/80">Aura Sans Env (Alerte Support Orso 404)</p>
-                  </div>
-                </div>
-                <span className="text-[10px] px-2 py-0.5 rounded bg-amber-900/80 border border-amber-700 text-amber-300 font-bold">
-                  404 Alerte
-                </span>
-              </button>
-            </div>
           </div>
         </div>
       )}
@@ -582,16 +497,16 @@ export const App: React.FC = () => {
               <div className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-2">
                 <div className="flex justify-between items-center py-1 border-b border-slate-850">
                   <span className="text-slate-400">Organisation :</span>
-                  <span className="font-bold text-white">{companyName || 'Financia Solutions'}</span>
+                  <span className="font-bold text-white">{companyName || 'Organisation'}</span>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-slate-850">
                   <span className="text-slate-400">Contact référent :</span>
-                  <span className="font-semibold text-slate-200">{userName || 'Sophie Martin'}</span>
+                  <span className="font-semibold text-slate-200">{userName || 'Utilisateur'}</span>
                 </div>
                 <div className="flex justify-between items-center py-1">
                   <span className="text-slate-400">Rôle d'accès :</span>
                   <span className="px-2 py-0.5 rounded font-bold bg-blue-950 text-blue-300 border border-blue-800">
-                    {userRole || 'DAF'}
+                    {userRole || 'Membre'}
                   </span>
                 </div>
               </div>

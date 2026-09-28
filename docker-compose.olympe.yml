@@ -102,5 +102,8 @@ services:
       com.orso.tenant_id: "f3e25379-6531-479e-b276-3b3185e7421b"
       com.orso.tenant_slug: "financia-solutions"
     networks:
-      - orso_network
+      orso_network:
+        aliases:
+          - orso_client_financia_solutions
+          - orso_client_financia-solutions
     restart: unless-stopped
