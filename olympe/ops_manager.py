@@ -74,6 +74,12 @@ def _format_timestamp(ts: Optional[float] = None) -> str:
     return dt.isoformat()
 
 
+def is_production() -> bool:
+    """Détecte si l'environnement d'exécution courant est la production."""
+    env = os.environ.get("ORSO_ENV", os.environ.get("ENV", os.environ.get("ENVIRONMENT", ""))).lower().strip()
+    return env in ("production", "prod")
+
+
 class OpsManager:
     """Gestionnaire des opérations clients, facturation Stripe et activation des agents."""
 
@@ -82,6 +88,7 @@ class OpsManager:
         supabase_url: Optional[str] = None,
         supabase_key: Optional[str] = None,
         stripe_secret_key: Optional[str] = None,
+        demo_mode: Optional[bool] = None,
     ):
         self.supabase_url = (supabase_url or os.environ.get("SUPABASE_URL", "")).rstrip("/")
         self.supabase_key = supabase_key or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
@@ -98,8 +105,26 @@ class OpsManager:
             except Exception:
                 pass
 
+        # ── Gestion du mode démonstration et verrouillage en production (KAN-43) ──
+        self.is_production = is_production()
+        if demo_mode is not None:
+            self.demo_mode = demo_mode
+        else:
+            demo_env = os.environ.get("ORSO_DEMO_MODE", "").lower().strip()
+            if demo_env:
+                self.demo_mode = demo_env in ("1", "true", "yes", "on")
+            else:
+                # En production : désactivé par défaut (et interdit)
+                # Hors production : actif uniquement si Supabase n'est pas configuré
+                self.demo_mode = not self.is_production and not bool(self.supabase_url and self.supabase_key)
+
+        if self.is_production and self.demo_mode:
+            raise RuntimeError(
+                "[SECURITY] Configuration invalide : Le mode démonstration (ORSO_DEMO_MODE) est formellement interdit en environnement de production."
+            )
+
         # État en mémoire / cache pour le mode sans base distante ou le développement local
-        self._mock_tenants: Dict[str, Dict[str, Any]] = self._init_seed_data()
+        self._mock_tenants: Dict[str, Dict[str, Any]] = self._init_seed_data() if self.demo_mode else {}
 
         # Cache mémoire TTL pour la table de correspondance auth.users (évite les requêtes Supabase répétitives)
         self._cached_auth_emails: Optional[tuple[float, Dict[str, str]]] = None
@@ -110,6 +135,9 @@ class OpsManager:
 
         # Journal d'audit des actions humaines et machine (CA7)
         self._audit_log: List[Dict[str, Any]] = []
+
+        # Table des événements Webhooks déjà traités pour idempotence au rejeu (Décision 3 / KAN-44 CA4)
+        self._processed_events: Dict[str, Dict[str, Any]] = {}
 
     def _init_seed_data(self) -> Dict[str, Dict[str, Any]]:
         """Données d'amorçage réalistes représentant les premiers clients du projet Orso."""
@@ -576,26 +604,36 @@ class OpsManager:
 
     # ── Requetage Supabase / Source de Vérité ─────────────────────────────────
 
-    def _query_supabase(self, path: str, method: str = "GET", payload: Optional[dict] = None) -> Optional[Any]:
-        """Exécute un appel HTTP authentifié vers l'API PostgREST de Supabase."""
+    def _query_supabase(
+        self,
+        path: str,
+        method: str = "GET",
+        payload: Optional[dict] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+    ) -> Optional[Any]:
+        """Exécute un appel HTTP authentifié vers l'API PostgREST de Supabase.
+
+        Args:
+            extra_headers: En-têtes additionnels qui surchargent les valeurs par défaut
+                           (ex. ``{"Prefer": "resolution=merge-duplicates"}`` pour un UPSERT).
+        """
         if not self.supabase_url or not self.supabase_key:
             return None
 
         url = f"{self.supabase_url}/rest/v1/{path}"
         data_bytes = json.dumps(payload).encode("utf-8") if payload else None
 
-        req = urllib.request.Request(
-            url,
-            data=data_bytes,
-            headers={
-                "apikey": self.supabase_key,
-                "Authorization": f"Bearer {self.supabase_key}",
-                "Content-Type": "application/json",
-                "User-Agent": "OrsoOlympeOps/1.0",
-                "Prefer": "return=representation",
-            },
-            method=method,
-        )
+        headers = {
+            "apikey": self.supabase_key,
+            "Authorization": f"Bearer {self.supabase_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "OrsoOlympeOps/1.0",
+            "Prefer": "return=representation",
+        }
+        if extra_headers:
+            headers.update(extra_headers)
+
+        req = urllib.request.Request(url, data=data_bytes, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=5.0) as resp:
                 return json.loads(resp.read().decode("utf-8"))
@@ -640,95 +678,147 @@ class OpsManager:
     def get_tenants_overview(self) -> List[Dict[str, Any]]:
         """Retourne la liste consolidée de tous les clients avec instance, contact, agents et abonnement."""
         # 1. Tentative de lecture Supabase si configuré
-        sb_tenants = self._query_supabase("tenants?select=*,profiles(*),tenant_instances(*),agent_instances(*),subscriptions(*)")
-        if sb_tenants and isinstance(sb_tenants, list) and len(sb_tenants) > 0:
-            auth_emails = self._fetch_supabase_auth_users()
-            result = []
-            for t in sb_tenants:
-                slug = t.get("slug") or ""
-                # Exclure les comptes de test technique interne
-                if slug == "aura-sans-env" or t.get("contact_email") == "test.sansenv@orso-agents.fr":
-                    continue
-                tenant_id = t.get("id")
-                cached = self._mock_tenants.get(tenant_id, {})
-                profiles = t.get("profiles", [])
-                user_list = []
-                for p in profiles:
-                    p_id = p.get("id")
-                    p_email = p.get("email") or auth_emails.get(p_id, "")
-                    user_list.append({
-                        "id": p_id,
-                        "email": p_email,
-                        "full_name": p.get("full_name") or "Utilisateur",
-                        "phone": p.get("phone", ""),
-                        "role": p.get("role") or "Membre",
-                        "is_admin": bool(p.get("is_admin", False) or p.get("role") == "admin"),
-                        "is_primary_contact": bool(p.get("is_primary_contact", False)),
-                        "created_at": p.get("created_at") or t.get("created_at"),
-                    })
-                if not user_list and cached.get("users"):
-                    user_list = list(cached.get("users", []))
+        if self.supabase_url and self.supabase_key:
+            # invoices(*) exclu du JOIN : la table invoices n'a pas de FK vers tenants
+            # dans le schéma actuel (PGRST200 → 400 sur toute la requête).
+            # Les factures sont chargées séparément via list_all_invoices().
+            sb_tenants = self._query_supabase("tenants?select=*,profiles(*),tenant_instances(*),agent_instances(*),subscriptions(*)")
+            if sb_tenants is not None and isinstance(sb_tenants, list):
+                auth_emails = self._fetch_supabase_auth_users()
+                result = []
+                for t in sb_tenants:
+                    slug = t.get("slug") or ""
+                    # Exclure les comptes de test technique interne
+                    if slug == "aura-sans-env" or t.get("contact_email") == "test.sansenv@orso-agents.fr":
+                        continue
+                    tenant_id = t.get("id")
+                    cached = self._mock_tenants.get(tenant_id, {})
+                    profiles = t.get("profiles", [])
+                    user_list = []
+                    for p in profiles:
+                        p_id = p.get("id")
+                        p_email = p.get("email") or auth_emails.get(p_id, "")
+                        user_list.append({
+                            "id": p_id,
+                            "email": p_email,
+                            "full_name": p.get("full_name") or "Utilisateur",
+                            "phone": p.get("phone", ""),
+                            "role": p.get("role") or "Membre",
+                            "is_admin": bool(p.get("is_admin", False) or p.get("role") == "admin"),
+                            "is_primary_contact": bool(p.get("is_primary_contact", False)),
+                            "created_at": p.get("created_at") or t.get("created_at"),
+                        })
+                    if not user_list and cached.get("users"):
+                        user_list = list(cached.get("users", []))
 
-                primary_contact = next((u for u in user_list if u.get("is_primary_contact")), user_list[0] if user_list else {})
-                instances = t.get("tenant_instances", [])
-                instance_info = instances[0] if instances else {}
+                    primary_contact = next((u for u in user_list if u.get("is_primary_contact")), user_list[0] if user_list else {})
+                    instances = t.get("tenant_instances", [])
+                    instance_info = instances[0] if instances else {}
 
-                agents_data = instance_info.get("agents_enabled") or cached.get("agents_enabled", {"active": [], "trials": {}})
-                if isinstance(agents_data, list):
-                    agents_data = {"active": agents_data, "trials": {}}
+                    agents_data = instance_info.get("agents_enabled") or cached.get("agents_enabled", {"active": [], "trials": {}})
+                    if isinstance(agents_data, list):
+                        agents_data = {"active": agents_data, "trials": {}}
 
-                subs = t.get("subscriptions", [])
-                sb_sub = subs[0] if subs else None
-                sub = sb_sub or cached.get("subscription") or {
-                    "id": f"sub_{t.get('slug')}",
-                    "tier_id": "none",
-                    "tier_label": "Aucun abonnement",
-                    "price_ht": 0.00,
-                    "status": "none",
-                    "current_period_start": t.get("created_at"),
-                    "current_period_end": t.get("created_at"),
-                }
+                    subs = t.get("subscriptions", [])
+                    sb_sub = subs[0] if subs else None
+                    if sb_sub:
+                        tier_k = sb_sub.get("tier_id") or "1_agent"
+                        tier_cfg = TIER_PRICING.get(tier_k, {})
+                        sub = {
+                            "id": sb_sub.get("id"),
+                            "tier_id": tier_k,
+                            "tier_label": tier_cfg.get("label", tier_k),
+                            "price_ht": float(sb_sub.get("monthly_price_ht") or sb_sub.get("price_ht") or tier_cfg.get("price_ht", 0.0)),
+                            "status": (sb_sub.get("status") or "active").lower(),
+                            "current_period_start": sb_sub.get("current_period_start") or sb_sub.get("trial_start") or t.get("created_at"),
+                            "current_period_end": sb_sub.get("current_period_end") or sb_sub.get("trial_end") or t.get("created_at"),
+                            "stripe_customer_id": sb_sub.get("stripe_customer_id"),
+                            "stripe_subscription_id": sb_sub.get("stripe_subscription_id"),
+                            "payment_method": sb_sub.get("payment_method"),
+                        }
+                    else:
+                        sub = cached.get("subscription") or {
+                            "id": f"sub_{t.get('slug')}",
+                            "tier_id": "none",
+                            "tier_label": "Aucun abonnement",
+                            "price_ht": 0.00,
+                            "status": "none",
+                            "current_period_start": t.get("created_at"),
+                            "current_period_end": t.get("created_at"),
+                        }
 
-                contact_email = primary_contact.get("email") or cached.get("contact", {}).get("email", "")
+                    # Factures réelles en base
+                    sb_invs = t.get("invoices", [])
+                    inv_list = []
+                    for inv in sb_invs:
+                        inv_list.append({
+                            "id": inv.get("id"),
+                            "number": inv.get("number"),
+                            "amount_ht": float(inv.get("amount_ht", 0.0)),
+                            "amount_ttc": float(inv.get("amount_ttc", 0.0)),
+                            "status": inv.get("status", "paid"),
+                            "date": inv.get("date") or inv.get("created_at"),
+                            "pdf_url": inv.get("pdf_url"),
+                        })
+                    if not inv_list and cached.get("invoices"):
+                        inv_list = list(cached.get("invoices", []))
 
-                item = {
-                    "id": tenant_id,
-                    "name": t.get("name"),
-                    "siret": t.get("siret") or cached.get("siret"),
-                    "siren": t.get("siren") or cached.get("siren"),
-                    "vat_number": t.get("vat_number") or cached.get("vat_number"),
-                    "legal_form": t.get("legal_form") or cached.get("legal_form"),
-                    "sector": t.get("sector") or cached.get("sector") or "Services",
-                    "employee_count_range": t.get("employee_count_range") or cached.get("employee_count_range"),
-                    "address_line1": t.get("address_line1") or cached.get("address_line1"),
-                    "postal_code": t.get("postal_code") or cached.get("postal_code"),
-                    "city": t.get("city") or cached.get("city"),
-                    "slug": t.get("slug"),
-                    "status": t.get("status", "active"),
-                    "created_at": t.get("created_at"),
-                    "contact": {
-                        "full_name": t.get("contact_name") or primary_contact.get("full_name", "Contact Principal"),
-                        "email": t.get("contact_email") or contact_email,
-                        "phone": t.get("contact_phone") or primary_contact.get("phone", "") or cached.get("contact", {}).get("phone", ""),
-                        "role": t.get("contact_role") or primary_contact.get("role", "Direction"),
-                    },
-                    "users": user_list,
-                    "instance": {
-                        "container_name": instance_info.get("docker_container_name") or instance_info.get("internal_route_key") or f"orso_client_{t.get('slug')}",
-                        "internal_route_key": instance_info.get("internal_route_key") or f"orso_backend_{t.get('slug')}",
-                        "status": instance_info.get("status", "not_provisioned"),
-                        "environment_status": instance_info.get("environment_status", "inactive"),
-                    },
-                    "agents_enabled": agents_data,
-                    "agent_instances": t.get("agent_instances") or cached.get("agent_instances", []),
-                    "subscription": sub,
-                    "invoices": cached.get("invoices", []),
-                }
-                result.append(item)
-            return result
+                    contact_email = primary_contact.get("email") or cached.get("contact", {}).get("email", "")
 
-        # 2. Fallback sur le référentiel d'amorçage
-        return list(self._mock_tenants.values())
+                    item = {
+                        "id": tenant_id,
+                        "name": t.get("name"),
+                        "siret": t.get("siret") or cached.get("siret"),
+                        "siren": t.get("siren") or cached.get("siren"),
+                        "vat_number": t.get("vat_number") or cached.get("vat_number"),
+                        "legal_form": t.get("legal_form") or cached.get("legal_form"),
+                        "sector": t.get("sector") or cached.get("sector") or "Services",
+                        "employee_count_range": t.get("employee_count_range") or cached.get("employee_count_range"),
+                        "address_line1": t.get("address_line1") or cached.get("address_line1"),
+                        "postal_code": t.get("postal_code") or cached.get("postal_code"),
+                        "city": t.get("city") or cached.get("city"),
+                        "slug": t.get("slug"),
+                        "status": t.get("status", "active"),
+                        "created_at": t.get("created_at"),
+                        "contact": {
+                            "full_name": t.get("contact_name") or primary_contact.get("full_name", "Contact Principal"),
+                            "email": t.get("contact_email") or contact_email,
+                            "phone": t.get("contact_phone") or primary_contact.get("phone", "") or cached.get("contact", {}).get("phone", ""),
+                            "role": t.get("contact_role") or primary_contact.get("role", "Direction"),
+                        },
+                        "users": user_list,
+                        "instance": {
+                            "container_name": instance_info.get("docker_container_name") or instance_info.get("internal_route_key") or f"orso_client_{t.get('slug')}",
+                            "internal_route_key": instance_info.get("internal_route_key") or f"orso_backend_{t.get('slug')}",
+                            "status": instance_info.get("status", "not_provisioned"),
+                            "environment_status": instance_info.get("environment_status", "inactive"),
+                        },
+                        "agents_enabled": agents_data,
+                        "agent_instances": t.get("agent_instances") or cached.get("agent_instances", []),
+                        "subscription": sub,
+                        "invoices": inv_list,
+                    }
+                    result.append(item)
+
+                # Inclure les sandboxes créés en mémoire non présents en base
+                existing_slugs = {item["slug"] for item in result}
+                for m_id, m_data in self._mock_tenants.items():
+                    if m_data.get("is_sandbox") and m_data.get("slug") not in existing_slugs:
+                        result.append(m_data)
+
+                return result
+
+        # 2. En production sans base ou erreur de base : AUCUN jeu d'amorçage (KAN-43 CA1)
+        if self.is_production:
+            _log.critical("[DATABASE] Impossible de charger les tenants depuis la base en production.")
+            return []
+
+        # 3. Hors production : si mode démo explicite, renvoyer les données d'amorçage
+        if self.demo_mode:
+            return list(self._mock_tenants.values())
+
+        # 4. Hors production et sans mode démo : uniquement les sandboxes explicites
+        return [t for t in self._mock_tenants.values() if t.get("is_sandbox")]
 
     def get_tenant_detail(self, tenant_id: str) -> Optional[Dict[str, Any]]:
         """Retourne la fiche détaillée complète d'un client."""
@@ -1271,6 +1361,26 @@ class OpsManager:
                 if self.supabase_url and self.supabase_key:
                     self._query_supabase(f"tenant_instances?tenant_id=eq.{tenant_id}", method="PATCH", payload={"agents_enabled": new_agents})
 
+        # ── Persistance Supabase : UPSERT sur tenant_id (évite les doublons) ──
+        # PostgREST : POST + ?on_conflict=tenant_id + Prefer: resolution=merge-duplicates
+        # → UPDATE la ligne existante si elle existe, INSERT sinon. Idempotent.
+        if self.supabase_url and self.supabase_key:
+            sub_payload = {
+                "tenant_id": tenant_id,
+                "tier_id": tier_id,
+                "monthly_price_ht": pricing["price_ht"],
+                "status": status,
+            }
+            self._query_supabase(
+                "subscriptions?on_conflict=tenant_id",
+                method="POST",
+                payload=sub_payload,
+                extra_headers={"Prefer": "resolution=merge-duplicates,return=representation"},
+            )
+            _log.info(
+                "UPSERT abonnement Supabase pour tenant %s : tier=%s status=%s",
+                tenant_id, tier_id, status,
+            )
 
         return {
             "success": True,
@@ -1327,6 +1437,26 @@ class OpsManager:
 
     def list_all_invoices(self) -> List[Dict[str, Any]]:
         """Agrège l'historique complet des factures de tous les clients."""
+        if self.supabase_url and self.supabase_key:
+            sb_invs = self._query_supabase("invoices?select=*,tenants(id,name,slug)&order=date.desc")
+            if sb_invs is not None and isinstance(sb_invs, list):
+                res = []
+                for inv in sb_invs:
+                    t_info = inv.get("tenants") or {}
+                    res.append({
+                        "id": inv.get("id"),
+                        "number": inv.get("number"),
+                        "amount_ht": float(inv.get("amount_ht", 0.0)),
+                        "amount_ttc": float(inv.get("amount_ttc", 0.0)),
+                        "status": inv.get("status", "paid"),
+                        "date": inv.get("date") or inv.get("created_at"),
+                        "pdf_url": inv.get("pdf_url"),
+                        "tenant_id": inv.get("tenant_id") or t_info.get("id"),
+                        "tenant_name": t_info.get("name", "Organisation"),
+                        "tenant_slug": t_info.get("slug", ""),
+                    })
+                return res
+
         all_invoices = []
         for t in self.get_tenants_overview():
             for inv in t.get("invoices", []):
@@ -1484,7 +1614,7 @@ class OpsManager:
         }
 
     def handle_stripe_webhook(self, event: Dict[str, Any]) -> Dict[str, Any]:
-        """Traite les événements Webhook émis par Stripe Billing et alimente le journal de livraison (L5/CA6)."""
+        """Traite les événements Webhook émis par Stripe Billing avec idempotence et réconciliation stricte (KAN-44)."""
         event_id = event.get("id") or f"evt_test_{int(time.time()*1000)}"
         event_type = event.get("type", "")
         data_obj = event.get("data", {}).get("object", {})
@@ -1495,29 +1625,321 @@ class OpsManager:
         sub_id = data_obj.get("id") if "subscription" in event_type else data_obj.get("subscription")
         status = data_obj.get("status")
 
-        matched_slug = None
-        # Recherche du tenant correspondant
-        for tid, tdata in self._mock_tenants.items():
-            t_sub = tdata.get("subscription", {})
-            meta_slug = data_obj.get("metadata", {}).get("tenant_slug")
-            if (
-                t_sub.get("stripe_customer_id") == cus_id
-                or tdata.get("slug") == meta_slug
-                or (meta_slug and tdata.get("slug") == meta_slug)
-                or tdata.get("slug") == "clientx-orso"
-            ):
-                matched_slug = tdata.get("slug")
-                # Synchronisation de l'état Stripe
-                if event_type in ("customer.subscription.created", "customer.subscription.updated"):
-                    t_sub["status"] = status or "active"
-                    if sub_id:
-                        t_sub["subscription_id"] = sub_id
-                    t_sub["updated_at"] = _format_timestamp()
-                elif event_type == "invoice.payment_succeeded":
-                    t_sub["status"] = "active"
-                    t_sub["updated_at"] = _format_timestamp()
-                break
+        # ── 1. Vérification d'idempotence au rejeu (Décision 3 / KAN-44 CA4) ───
+        if event_id in self._processed_events:
+            existing = self._processed_events[event_id]
+            existing["replay_count"] = existing.get("replay_count", 0) + 1
+            existing["last_replayed_at"] = _format_timestamp()
 
+            replay_record = {
+                "id": event_id,
+                "type": event_type,
+                "received_at": _format_timestamp(),
+                "status": "already_processed",
+                "replay_count": existing["replay_count"],
+                "customer_id": cus_id,
+                "subscription_id": sub_id,
+                "tenant_slug": existing.get("tenant_slug"),
+                "summary": f"Événement {event_id} déjà traité (rejeu #{existing['replay_count']})",
+            }
+            self._webhook_deliveries.append(replay_record)
+
+            if self.supabase_url and self.supabase_key:
+                try:
+                    self._query_supabase(
+                        f"processed_webhook_events?event_id=eq.{event_id}",
+                        method="PATCH",
+                        payload={
+                            "replay_count": existing["replay_count"],
+                            "last_replayed_at": existing["last_replayed_at"],
+                        },
+                    )
+                except Exception:
+                    pass
+
+            return {
+                "status": "already_processed",
+                "type": event_type,
+                "event_id": event_id,
+                "replay_count": existing["replay_count"],
+                "tenant_slug": existing.get("tenant_slug"),
+                "message": f"Événement {event_id} déjà traité précédemment. Aucun effet supplémentaire.",
+            }
+
+        if self.supabase_url and self.supabase_key:
+            sb_check = self._query_supabase(f"processed_webhook_events?event_id=eq.{event_id}&select=*")
+            if sb_check and isinstance(sb_check, list) and len(sb_check) > 0:
+                rec = sb_check[0]
+                new_count = int(rec.get("replay_count", 0)) + 1
+                self._processed_events[event_id] = {
+                    "event_id": event_id,
+                    "event_type": event_type,
+                    "customer_id": cus_id,
+                    "subscription_id": sub_id,
+                    "tenant_slug": rec.get("tenant_slug"),
+                    "status": "already_processed",
+                    "replay_count": new_count,
+                    "processed_at": rec.get("processed_at") or _format_timestamp(),
+                    "last_replayed_at": _format_timestamp(),
+                }
+                replay_record = {
+                    "id": event_id,
+                    "type": event_type,
+                    "received_at": _format_timestamp(),
+                    "status": "already_processed",
+                    "replay_count": new_count,
+                    "customer_id": cus_id,
+                    "subscription_id": sub_id,
+                    "tenant_slug": rec.get("tenant_slug"),
+                    "summary": f"Événement {event_id} déjà consigné en base (rejeu #{new_count})",
+                }
+                self._webhook_deliveries.append(replay_record)
+                try:
+                    self._query_supabase(
+                        f"processed_webhook_events?event_id=eq.{event_id}",
+                        method="PATCH",
+                        payload={"replay_count": new_count, "last_replayed_at": _format_timestamp()},
+                    )
+                except Exception:
+                    pass
+
+                return {
+                    "status": "already_processed",
+                    "type": event_type,
+                    "event_id": event_id,
+                    "replay_count": new_count,
+                    "tenant_slug": rec.get("tenant_slug"),
+                    "message": f"Événement {event_id} déjà traité en base. Aucun effet supplémentaire.",
+                }
+
+        # ── 2. Rapprochement certain client vers tenant (Décision 2 / KAN-44 CA1 & CA5) ───
+        meta_slug = data_obj.get("metadata", {}).get("tenant_slug") or data_obj.get("metadata", {}).get("slug")
+        client_ref = data_obj.get("client_reference_id")
+        matched_slug = None
+        matched_tenant_id = None
+        matched_sub_dict = None
+
+        target_slug = meta_slug or client_ref
+
+        # A. Recherche dans Supabase si configuré
+        if self.supabase_url and self.supabase_key:
+            try:
+                if target_slug:
+                    sb_t = self._query_supabase(f"tenants?slug=eq.{target_slug}&select=id,slug,name,status")
+                    if sb_t and isinstance(sb_t, list) and len(sb_t) > 0:
+                        matched_slug = sb_t[0]["slug"]
+                        matched_tenant_id = sb_t[0]["id"]
+                if not matched_slug and cus_id:
+                    sb_s = self._query_supabase(f"subscriptions?stripe_customer_id=eq.{cus_id}&select=id,tenant_id,tenants(id,slug)")
+                    if sb_s and isinstance(sb_s, list) and len(sb_s) > 0:
+                        t_rel = sb_s[0].get("tenants") or {}
+                        matched_slug = t_rel.get("slug")
+                        matched_tenant_id = sb_s[0].get("tenant_id") or t_rel.get("id")
+                if not matched_slug and sub_id:
+                    sb_s = self._query_supabase(f"subscriptions?stripe_subscription_id=eq.{sub_id}&select=id,tenant_id,tenants(id,slug)")
+                    if sb_s and isinstance(sb_s, list) and len(sb_s) > 0:
+                        t_rel = sb_s[0].get("tenants") or {}
+                        matched_slug = t_rel.get("slug")
+                        matched_tenant_id = sb_s[0].get("tenant_id") or t_rel.get("id")
+            except Exception as e:
+                _log.warning("Erreur lors de la réconciliation Supabase du webhook : %s", e)
+
+        # B. Recherche dans le référentiel mémoire / sandboxes (strictement sans attrape-tout !)
+        if not matched_slug:
+            for tid, tdata in self._mock_tenants.items():
+                t_sub = tdata.get("subscription", {})
+                if (
+                    (target_slug and tdata.get("slug") == target_slug)
+                    or (cus_id and t_sub.get("stripe_customer_id") == cus_id)
+                    or (sub_id and t_sub.get("stripe_subscription_id") == sub_id)
+                ):
+                    matched_slug = tdata.get("slug")
+                    matched_tenant_id = tid
+                    matched_sub_dict = t_sub
+                    break
+
+        # ── 3. Refus sans effet de bord si le client est inconnu (KAN-44 CA3) ─
+        if not matched_slug:
+            err_msg = f"TENANT_NOT_FOUND: Aucun tenant associé au client Stripe '{cus_id or 'inconnu'}'"
+            _log.warning("[WEBHOOK REJECTED] %s (event_id: %s)", err_msg, event_id)
+
+            delivery_record = {
+                "id": event_id,
+                "type": event_type,
+                "received_at": _format_timestamp(),
+                "status": "failed",
+                "customer_id": cus_id,
+                "subscription_id": sub_id,
+                "tenant_slug": None,
+                "error_reason": err_msg,
+                "summary": f"Événement {event_type} refusé : client non réconcilié",
+            }
+            self._webhook_deliveries.append(delivery_record)
+
+            self.record_audit_event(
+                actor={"actor": "stripe-webhook", "role": "system"},
+                action="webhook:rejected",
+                target=cus_id or "unknown",
+                details={"event_id": event_id, "error": err_msg, "type": event_type},
+            )
+
+            self._processed_events[event_id] = {
+                "event_id": event_id,
+                "event_type": event_type,
+                "customer_id": cus_id,
+                "subscription_id": sub_id,
+                "tenant_slug": None,
+                "status": "failed",
+                "error_reason": err_msg,
+                "replay_count": 0,
+                "processed_at": _format_timestamp(),
+            }
+
+            return {
+                "status": "failed",
+                "error": "TENANT_NOT_FOUND",
+                "event_id": event_id,
+                "type": event_type,
+                "customer_id": cus_id,
+                "detail": err_msg,
+            }
+
+        # ── 4. Relecture de l'abonnement à la source Stripe (Décision 4) ──────
+        effective_status = status or "active"
+        effective_tier_id = data_obj.get("metadata", {}).get("tier_id")
+        if sub_id and self.stripe_secret_key:
+            try:
+                live_sub_data = self._stripe_request(f"subscriptions/{sub_id}")
+                if live_sub_data and live_sub_data.get("status"):
+                    effective_status = live_sub_data.get("status")
+                    effective_tier_id = live_sub_data.get("metadata", {}).get("tier_id") or effective_tier_id
+                    _log.info("Relecture Stripe à la source réussie pour sub %s: statut=%s", sub_id, effective_status)
+            except Exception as e:
+                _log.info("Relecture Stripe ignorée/échouée pour %s: %s (utilisation payload)", sub_id, e)
+
+        # ── 5. Cycle de vie de l'environnement conteneurisé (Décision 5 / KAN-44 CA2) ───
+        container_name = f"orso_client_{matched_slug.replace('-', '_')}"
+        env_result = None
+
+        if effective_status in ("active", "trialing"):
+            try:
+                from olympe.server import manager as docker_mgr
+                status_info = docker_mgr.get_tenant_status(matched_slug)
+                if status_info.get("status") in ("not_found", "unknown"):
+                    _log.info("Provisioning automatique conteneur pour %s suite à abonnement", matched_slug)
+                    docker_mgr.provision_tenant(
+                        tenant_id=matched_tenant_id or f"tenant_{matched_slug}",
+                        tenant_slug=matched_slug,
+                    )
+                if not status_info.get("running"):
+                    _log.info("Réveil automatique conteneur pour %s", matched_slug)
+                    docker_mgr.wake_tenant(matched_slug, wait_healthy=False)
+                env_result = "active"
+            except Exception as e:
+                _log.warning("Erreur cycle de vie conteneur pour %s: %s", matched_slug, e)
+                env_result = "error"
+
+        elif effective_status in ("canceled", "unpaid", "past_due"):
+            try:
+                from olympe.server import manager as docker_mgr
+                _log.info("Mise en veille automatique conteneur pour %s suite à statut %s", matched_slug, effective_status)
+                docker_mgr.suspend_tenant(matched_slug)
+                env_result = "suspended"
+            except Exception as e:
+                _log.warning("Erreur suspension conteneur pour %s: %s", matched_slug, e)
+                env_result = "error"
+
+        # ── 6. Synchronisation de l'état en base (Supabase) ou en mémoire ────
+        if self.supabase_url and self.supabase_key and matched_tenant_id:
+            try:
+                sub_patch = {"status": effective_status.upper()}
+                if sub_id:
+                    sub_patch["stripe_subscription_id"] = sub_id
+                if cus_id:
+                    sub_patch["stripe_customer_id"] = cus_id
+                if effective_tier_id:
+                    sub_patch["tier_id"] = effective_tier_id
+                    sub_patch["monthly_price_ht"] = TIER_PRICING.get(effective_tier_id, {}).get("price_ht", 99.00)
+                self._query_supabase(f"subscriptions?tenant_id=eq.{matched_tenant_id}", method="PATCH", payload=sub_patch)
+
+                if env_result:
+                    inst_patch = {
+                        "environment_status": "active" if env_result == "active" else "inactive",
+                        "status": "ready" if env_result == "active" else "sleeping",
+                    }
+                    self._query_supabase(f"tenant_instances?tenant_id=eq.{matched_tenant_id}", method="PATCH", payload=inst_patch)
+
+                if event_type == "invoice.payment_succeeded":
+                    inv_id = data_obj.get("id")
+                    amount_paid = float(data_obj.get("amount_paid", 0)) / 100.0
+                    currency = data_obj.get("currency", "eur").upper()
+                    pdf_url = data_obj.get("hosted_invoice_url") or data_obj.get("invoice_pdf")
+                    inv_payload = {
+                        "tenant_id": matched_tenant_id,
+                        "stripe_invoice_id": inv_id,
+                        "stripe_customer_id": cus_id,
+                        "number": data_obj.get("number") or f"ORSO-{int(time.time())}",
+                        "amount_ht": round(amount_paid / 1.20, 2),
+                        "amount_ttc": amount_paid,
+                        "currency": currency,
+                        "status": "paid",
+                        "date": _format_timestamp(),
+                        "pdf_url": pdf_url,
+                    }
+                    self._query_supabase("invoices", method="POST", payload=inv_payload)
+            except Exception as e:
+                _log.warning("Erreur synchronisation Supabase post-webhook: %s", e)
+
+        # Synchronisation mémoire si présent
+        if matched_sub_dict is not None:
+            matched_sub_dict["status"] = effective_status
+            if sub_id:
+                matched_sub_dict["subscription_id"] = sub_id
+            if cus_id:
+                matched_sub_dict["stripe_customer_id"] = cus_id
+            matched_sub_dict["updated_at"] = _format_timestamp()
+            if matched_tenant_id in self._mock_tenants:
+                t_inst = self._mock_tenants[matched_tenant_id].get("instance", {})
+                if env_result == "active":
+                    t_inst["status"] = "ready"
+                    t_inst["environment_status"] = "active"
+                elif env_result == "suspended":
+                    t_inst["status"] = "sleeping"
+                    t_inst["environment_status"] = "inactive"
+
+                if event_type == "invoice.payment_succeeded":
+                    inv_id = data_obj.get("id")
+                    amount_paid = float(data_obj.get("amount_paid", 0)) / 100.0
+                    self._mock_tenants[matched_tenant_id].setdefault("invoices", []).append({
+                        "id": inv_id or f"inv_{int(time.time())}",
+                        "number": data_obj.get("number") or f"ORSO-{int(time.time())}",
+                        "amount_ht": round(amount_paid / 1.20, 2),
+                        "amount_ttc": amount_paid,
+                        "status": "paid",
+                        "date": _format_timestamp(),
+                        "pdf_url": data_obj.get("hosted_invoice_url"),
+                    })
+
+        # ── 7. Mémorisation de l'événement traité (Idempotence) ─────────────
+        processed_entry = {
+            "event_id": event_id,
+            "event_type": event_type,
+            "customer_id": cus_id,
+            "subscription_id": sub_id,
+            "tenant_slug": matched_slug,
+            "status": "processed",
+            "replay_count": 0,
+            "processed_at": _format_timestamp(),
+        }
+        self._processed_events[event_id] = processed_entry
+
+        if self.supabase_url and self.supabase_key:
+            try:
+                self._query_supabase("processed_webhook_events", method="POST", payload=processed_entry)
+            except Exception:
+                pass
+
+        # ── 8. Consignation dans le journal de livraison ────────────────────
         delivery_record = {
             "id": event_id,
             "type": event_type,
@@ -1526,31 +1948,27 @@ class OpsManager:
             "customer_id": cus_id,
             "subscription_id": sub_id,
             "tenant_slug": matched_slug,
-            "summary": f"Événement {event_type} traité avec succès",
+            "container_name": container_name,
+            "summary": f"Événement {event_type} traité avec succès pour {matched_slug}",
         }
         self._webhook_deliveries.append(delivery_record)
 
-        if event_type in ("customer.subscription.created", "customer.subscription.updated"):
-            return {
-                "status": "processed",
-                "type": event_type,
-                "subscription_id": sub_id,
-                "event_id": event_id,
-                "tenant_slug": matched_slug,
-            }
+        self.record_audit_event(
+            actor={"actor": "stripe-webhook", "role": "system"},
+            action=f"webhook:{event_type}",
+            target=matched_slug,
+            details={"event_id": event_id, "status": effective_status, "container": container_name},
+        )
 
-        elif event_type == "invoice.payment_succeeded":
-            inv_id = data_obj.get("id")
-            amount_paid = data_obj.get("amount_paid", 0) / 100.0
-            return {
-                "status": "processed",
-                "type": event_type,
-                "invoice_id": inv_id,
-                "event_id": event_id,
-                "tenant_slug": matched_slug,
-            }
-
-        return {"status": "processed", "type": event_type, "event_id": event_id}
+        return {
+            "status": "processed",
+            "type": event_type,
+            "event_id": event_id,
+            "subscription_id": sub_id,
+            "tenant_slug": matched_slug,
+            "container_name": container_name,
+            "environment_status": env_result,
+        }
 
     def list_webhook_deliveries(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Retourne l'historique chronologique des événements Webhook reçus (L5/CA6)."""

@@ -251,14 +251,19 @@ async def ops_logout():
 async def get_ops_stats(actor: Dict[str, Any] = Depends(require_ops_actor("tenants:read"))):
     """Retourne les indicateurs consolidés (KPIs, MRR, répartition des forfaits)."""
     ops_manager.record_audit_event(actor, "stats:read", "fleet")
-    return ops_manager.get_stats()
+    stats = ops_manager.get_stats()
+    stats["demo_mode"] = ops_manager.demo_mode
+    return stats
 
 
 @app.get("/api/olympe/ops/tenants")
 async def list_tenants(actor: Dict[str, Any] = Depends(require_ops_actor("tenants:read"))):
     """Retourne la liste des clients inscrits avec contact, abonnement et agents activés (CA1)."""
     ops_manager.record_audit_event(actor, "tenants:read", "fleet")
-    return {"tenants": ops_manager.get_tenants_overview()}
+    return {
+        "tenants": ops_manager.get_tenants_overview(),
+        "demo_mode": ops_manager.demo_mode,
+    }
 
 
 @app.post("/api/olympe/ops/tenants")
@@ -354,7 +359,10 @@ async def delete_user_for_tenant(tenant_id: str, user_id: str, admin: Dict[str, 
 async def list_invoices(actor: Dict[str, Any] = Depends(require_ops_actor("billing:read"))):
     """Retourne l'historique complet des factures clients (portée billing:read)."""
     ops_manager.record_audit_event(actor, "invoices:read", "billing")
-    return {"invoices": ops_manager.list_all_invoices()}
+    return {
+        "invoices": ops_manager.list_all_invoices(),
+        "demo_mode": ops_manager.demo_mode,
+    }
 
 
 @app.post("/api/olympe/ops/webhooks/stripe")

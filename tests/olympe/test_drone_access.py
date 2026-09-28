@@ -343,7 +343,15 @@ def test_kan39_stripe_signature_strictly_enforced(monkeypatch):
     fake_secret = "whsec_strict_test_secret_456"
     monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", fake_secret)
 
-    payload = {"id": "evt_test_strict", "type": "customer.subscription.created"}
+    payload = {
+        "id": "evt_test_strict",
+        "type": "customer.subscription.created",
+        "data": {
+            "object": {
+                "metadata": {"tenant_slug": "clientx-orso"},
+            }
+        },
+    }
     payload_raw = json.dumps(payload).encode("utf-8")
 
     # 1. En-tête Stripe-Signature manquant -> 400 Bad Request

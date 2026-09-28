@@ -234,13 +234,11 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
   const handleSave = async () => {
     setSaving(true);
     try {
+      // 1. Persister le forfait EN PREMIER — le backend valide l'abonnement
+      //    avant d'autoriser l'activation des agents.
+      await onSaveSubscription(tenant.id, selectedTier, selectedStatus);
+      // 2. Persister les agents une fois le forfait confirmé en base.
       await onSaveAgents(tenant.id, activeAgents, trials);
-      if (
-        selectedTier !== tenant.subscription.tier_id ||
-        selectedStatus !== tenant.subscription.status
-      ) {
-        await onSaveSubscription(tenant.id, selectedTier, selectedStatus);
-      }
       setToastMessage("Modifications enregistrées avec succès !");
       setTimeout(() => setToastMessage(null), 3000);
     } catch (e: any) {
