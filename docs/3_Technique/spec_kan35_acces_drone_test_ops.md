@@ -148,3 +148,35 @@ Suite de tests automatisée exécutée via `scripts/run_tests.sh tests/olympe/te
 - [x] **CA6** : Événement Webhook Stripe reçu, journalisé et vérifiable via `webhooks:read`.
 - [x] **CA7** : Actions enregistrées dans `_audit_log` sous l'acteur `drone-clientx`.
 - [x] **CA8** : Fichier `~/.hermes/secrets/orso_drone.env` vérifié en permissions `0600` et hors git.
+
+---
+
+## 8. Clôture des Réserves de Sécurité PO (KAN-39 & KAN-40)
+
+Lors de la première revue, le PO Jarvis a soulevé deux vulnérabilités critiques immédiatement colmatées :
+
+1. **KAN-39 (Vérification Stripe obligatoire)** :
+   - *Problème identifié* : En cas d'omission du header `Stripe-Signature`, la requête webhook retournait 200 sans vérification.
+   - *Correction* : Rejet strict `HTTP 400 Bad Request` dès que `Stripe-Signature` est manquant ou que le HMAC SHA-256 ne correspond pas. Enregistrement actif de l'endpoint webhook sur le compte Stripe réel (`we_1UKbAc06XM8Z6gbSXgK53MPa`).
+2. **KAN-40 (Sécurisation des routes legacy)** :
+   - *Problème identifié* : Les routes directes `/api/olympe/tenants/provision`, `/status`, `/wake`, `/suspend` étaient non authentifiées.
+   - *Correction* : Provisioning strictement réservé au rôle `superadmin` ; status/wake/suspend soumis au RBAC OPS (`require_ops_actor`) avec validation de la sandbox whitelistée. Purge immédiate du tenant résiduel `x` créé lors du test PO (DB et disque propres).
+
+---
+
+## 9. Déploiement en Production & Pull Request
+
+- **Pull Request GitHub** : [PR #1 (KAN-35-access-drone-ops -> feature/ops-admin-cockpit)](https://github.com/tquinzain59/orso-core/pull/1)
+- **Déploiement VPS (`92.222.68.80`)** : Branche déployée, conteneur `olympe_core` redémarré avec variables d'environnement actives (`STRIPE_WEBHOOK_SECRET`, `ORSO_DRONE_API_TOKEN`).
+- **Preuves curl directes en production (`ops.orso-agents.fr`)** :
+  - `GET /api/olympe/ops/webhooks/deliveries` (sans jeton) : **HTTP 401** (route existante et sécurisée)
+  - `POST /api/olympe/tenants/provision` (sans jeton) : **HTTP 401** (faille KAN-40 close)
+  - `POST /api/olympe/ops/webhooks/stripe` (sans signature) : **HTTP 400** (faille KAN-39 close)
+  - `GET /api/olympe/ops/tenants` (avec jeton drone) : **HTTP 200** (6 tenants retournés)
+  - `GET /api/olympe/ops/tenants/financia-solutions` (avec jeton drone) : **HTTP 403** (isolation sandbox garantie)
+- **Récupération runner drone (CA8)** :
+  ```bash
+  scp -p ubuntu@92.222.68.80:~/.hermes/secrets/orso_drone.env ~/.hermes/secrets/orso_drone.env
+  chmod 600 ~/.hermes/secrets/orso_drone.env
+  ```
+
