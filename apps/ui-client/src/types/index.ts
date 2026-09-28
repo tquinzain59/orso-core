@@ -91,3 +91,87 @@ export interface ClientUser {
   role?: string;
   is_admin?: boolean;
 }
+
+export interface CompanyData {
+  id: string;
+  name: string;
+  slug: string;
+  siret?: string;
+  siren?: string;
+  vat_number?: string;
+  legal_form?: string;
+  sector?: string;
+  address_line1?: string;
+  address_line2?: string;
+  postal_code?: string;
+  city?: string;
+  country?: string;
+  status?: string;
+  created_at?: string;
+  environment?: {
+    container_name?: string;
+    status?: string;
+    region?: string;
+    dedicated_url?: string;
+    isolation_type?: string;
+    host?: string;
+    port?: number;
+  };
+  agents_deployed?: string[];
+}
+
+export interface UserProfileData {
+  id: string;
+  email: string;
+  full_name: string;
+  role?: string;
+  phone?: string;
+  job_title?: string;
+  is_admin?: boolean;
+  created_at?: string;
+}
+
+export interface SubscriptionTier {
+  id: string;
+  name: string;
+  price_ht: number;
+  max_agents: number;
+  description: string;
+  features: string[];
+  popular?: boolean;
+}
+
+export interface ClientSubscription {
+  id?: string;
+  tier_id: string;
+  tier_label: string;
+  price_ht: number;
+  status: string;
+  agents_count: number;
+  current_period_start?: string;
+  current_period_end?: string;
+  trial_end?: string;
+  payment_method?: string;
+  stripe_customer_id?: string;
+  stripe_subscription_id?: string;
+  cancel_at_period_end?: boolean;
+}
+
+export interface ClientInvoice {
+  id: string;
+  number: string;
+  date: string;
+  amount_ht: number;
+  amount_ttc: number;
+  status: 'paid' | 'pending' | 'draft' | string;
+  pdf_url?: string;
+}
+
+export interface BillingData {
+  subscription: ClientSubscription;
+  available_tiers: SubscriptionTier[];
+  invoices: ClientInvoice[];
+  has_stripe: boolean;
+  stripe_portal_enabled: boolean;
+}
+

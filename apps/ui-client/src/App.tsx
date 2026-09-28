@@ -4,6 +4,7 @@ import { AgentSelector } from '@/components/AgentSelector';
 import { ChatView } from '@/pages/ChatView';
 import { IntegrationsView } from '@/pages/IntegrationsView';
 import { ChannelsView } from '@/pages/ChannelsView';
+import { SettingsView } from '@/pages/SettingsView';
 import {
   checkBackendHealth,
   checkSessionMe,
@@ -28,7 +29,8 @@ import {
   RefreshCw,
 } from 'lucide-react';
 
-type Tab = 'chat' | 'integrations' | 'channels';
+type Tab = 'chat' | 'integrations' | 'channels' | 'settings';
+
 
 export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<Tab>('chat');
@@ -51,7 +53,6 @@ export const App: React.FC = () => {
   const [loginEmail, setLoginEmail] = useState<string>('');
   const [loginPassword, setLoginPassword] = useState<string>('');
   const [showLoginModal, setShowLoginModal] = useState<boolean>(false);
-  const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
 
   // Redirection de sécurité : si non-admin, seul l'onglet chat est accessible
   useEffect(() => {
@@ -323,11 +324,15 @@ export const App: React.FC = () => {
 
           {/* Bouton Paramètres Client */}
           <button
-            onClick={() => setShowSettingsModal(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-850/80 hover:bg-slate-800 border border-slate-750 text-slate-300 hover:text-white text-xs font-semibold shadow-sm transition-all active:scale-95 group"
-            title="Paramètres de l'entreprise et du compte client"
+            onClick={() => setCurrentTab('settings')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold shadow-sm transition-all active:scale-95 group ${
+              currentTab === 'settings'
+                ? 'bg-blue-600 border-blue-500 text-white shadow-blue-900/30'
+                : 'bg-slate-850/80 hover:bg-slate-800 border-slate-750 text-slate-300 hover:text-white'
+            }`}
+            title="Paramètres de l'entreprise, profil et abonnement"
           >
-            <Settings className="w-3.5 h-3.5 text-blue-400 group-hover:rotate-45 transition-transform" />
+            <Settings className={`w-3.5 h-3.5 ${currentTab === 'settings' ? 'text-white' : 'text-blue-400 group-hover:rotate-45'} transition-transform`} />
             <span className="hidden sm:inline">Paramètres</span>
           </button>
         </div>
@@ -365,6 +370,12 @@ export const App: React.FC = () => {
         )}
         {currentTab === 'integrations' && <IntegrationsView />}
         {currentTab === 'channels' && <ChannelsView />}
+        {currentTab === 'settings' && (
+          <SettingsView
+            isAdmin={isAdmin}
+            onBack={() => setCurrentTab('chat')}
+          />
+        )}
       </main>
 
       {/* Modal d'Authentification Sécurisée Client (Supabase IAM) */}
@@ -470,63 +481,7 @@ export const App: React.FC = () => {
           </div>
         </div>
       )}
-
-      {/* Modal Paramètres Client (Consultation Entreprise & Compte) */}
-      {showSettingsModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in">
-          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl shadow-blue-950/50 space-y-5">
-            <div className="flex items-start justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-blue-950/80 border border-blue-800/80 flex items-center justify-center text-blue-400">
-                  <Settings className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-base font-extrabold text-white">Paramètres Client</h3>
-                  <p className="text-xs text-slate-400">Informations entreprise et compte personnel</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowSettingsModal(false)}
-                className="text-slate-400 hover:text-slate-200 text-xs px-2.5 py-1 rounded-lg hover:bg-slate-800 transition-all"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="space-y-3 text-xs">
-              <div className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-2">
-                <div className="flex justify-between items-center py-1 border-b border-slate-850">
-                  <span className="text-slate-400">Organisation :</span>
-                  <span className="font-bold text-white">{companyName || 'Organisation'}</span>
-                </div>
-                <div className="flex justify-between items-center py-1 border-b border-slate-850">
-                  <span className="text-slate-400">Contact référent :</span>
-                  <span className="font-semibold text-slate-200">{userName || 'Utilisateur'}</span>
-                </div>
-                <div className="flex justify-between items-center py-1">
-                  <span className="text-slate-400">Rôle d'accès :</span>
-                  <span className="px-2 py-0.5 rounded font-bold bg-blue-950 text-blue-300 border border-blue-800">
-                    {userRole || 'Membre'}
-                  </span>
-                </div>
-              </div>
-
-              <div className="p-3.5 rounded-2xl bg-blue-950/30 border border-blue-800/40 text-[11px] text-blue-200/90 leading-relaxed">
-                💡 <span className="font-semibold text-blue-300">Module en cours d'évolution</span> : La gestion avancée des profils (modification de mot de passe, coordonnées de facturation et préférences de notification) sera disponible dans une prochaine mise à jour.
-              </div>
-            </div>
-
-            <div className="flex justify-end pt-2">
-              <button
-                onClick={() => setShowSettingsModal(false)}
-                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold transition-all"
-              >
-                Fermer
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
+

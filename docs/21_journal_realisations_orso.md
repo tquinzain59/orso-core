@@ -60,6 +60,8 @@ Les informations de ce document s'appuient sur :
 | **25/09** | Exploitation & IAM | **Gestion Multi-utilisateurs par Client & Rôles Admin (KAN-32/Ops)** : Gestion de collaborateurs multiples par entreprise dans le Cockpit Ops (`https://ops.orso-agents.fr`) avec email (login), mot de passe sécurisé, rôle métier et switch Admin. Gating des onglets sensibles (*Interfaces & ERP*, *Canaux*) réservés aux administrateurs dans l'UI Client (`https://prod-fr-002.orso-agents.fr`), les collaborateurs standards étant restreints à l'espace *Discussion*. Migration SQL Supabase `04_add_profile_is_admin_and_multiuser.sql`, 41 tests unitaires au vert (100%), déployé sur le VPS OVH. | `orso-core` (Docker 9230/9229/9300) |
 | **27/09** | Onboarding & Métier | **Souscription Souveraine & Calibration des Agents** : Migration SQL `06_onboarding_subscriptions_agent_calibration.sql` et fonction RPC PostgreSQL `07_rpc_submit_onboarding_order.sql`. Enregistrement atomique de l'organisation (`public.tenants`), de l'abonnement d'essai 30 jours (`public.subscriptions`), et des agents IA calibrés (`public.agent_instances`) avec lettres de mission personnalisées. | Supabase / `orso-site` |
 | **27/09 - 28/09** | Paiement & IAM | **Tunnel d'Onboarding Public, Facturation Stripe Billing & Provisioning Administrateur** : Intégration de l'empreinte bancaire carte/SEPA (`/api/olympe/onboarding/init-setup`), création d'abonnement récurrent officiel 30j à 0 € dans Stripe (`/create-subscription`) et création/synchronisation automatique du compte administrateur dans Supabase Auth (`auth.users`) et `public.profiles` (`/create-admin-user`). Verrouillage strict de l'empreinte bancaire dans `onboarding.html` et remplacement des fichiers techniques par un récapitulatif exécutif clair. Déployé et validé en production sur le VPS OVH (`https://ops.orso-agents.fr`). 39 tests unitaires validés (100%). | `orso-core` / `ops.orso-agents.fr` / `orso-site` |
+| **28/09** | Client & Facturation | **Page Paramètres UI Client, Gestion de Compte & Synchronisation Stripe Billing (KAN-33)** : Remplacement de l'ancienne modale factice par une page complète intégrée dans l'UI Client (`SettingsView.tsx`). Consultation des données de l'organisation et infrastructure souveraine, profil utilisateur avec modification sécurisée de mot de passe via Supabase Auth Admin (`PUT /auth/v1/admin/users/{id}`). Espace Abonnement & Facturation réservé aux administrateurs : consultation du forfait actif, mise à jour du moyen de paiement (session Stripe Customer Portal), changement de formule en 1-clic avec prorata Stripe, et historique des factures avec téléchargement direct en PDF officiel. 29 tests unitaires validés (100%), bundle Vite compilé. | `orso-core` (Docker 9229/9300, Jira [KAN-33](https://orso-agents.atlassian.net/browse/KAN-33)) |
+
 
 ---
 
@@ -107,9 +109,16 @@ Les informations de ce document s'appuient sur :
     - Sécurisation stricte du tunnel côté vitrine (`onboarding.html`) : interdiction de valider l'inscription sans confirmation d'empreinte bancaire par Stripe.
     - Évolution UX : suppression définitive du téléchargement des fichiers d'infrastructure (`soul.md`, `agent-config.json`) au profit d'un récapitulatif contractuel et exécutif de commande complet.
     - Déploiement validé en production sur le VPS OVH (`92.222.68.80` / `ops.orso-agents.fr`). 39 tests unitaires au vert (100%).
+  - **KAN-33 (28/09 - Page Paramètres Client, Gestion de Compte & Synchronisation Stripe Billing)** :
+    - Développement d'une vue complète `SettingsView.tsx` dans `apps/ui-client` avec 3 onglets thématiques : *Entreprise & Infrastructure*, *Mon Profil & Sécurité*, et *Abonnement & Facturation*.
+    - Consultation des données légales de l'entreprise (Raison sociale, SIRET, SIREN, TVA, adresse) et de l'infrastructure souveraine (conteneur Docker dédié sur OVHcloud Gravelines en France).
+    - Modification sécurisée du mot de passe collaborateur avec vérification de l'ancien mot de passe et mise à jour dans Supabase Auth (`PUT /auth/v1/admin/users/{id}`).
+    - Section Facturation Stripe réservée aux administrateurs (`is_admin=True`, rejet HTTP 403 pour collaborateurs) : grille de modification d'abonnement (Starter 99€, Duo 169€, Trio 229€, Flotte Complète 279€ HT) synchronisée avec `TIER_STRIPE_PRICES`, ouverture du portail autonome Stripe (`/billing_portal/sessions`) pour mise à jour de la CB/SEPA, et téléchargement immédiat des factures en format PDF officiel.
+    - Endpoints backend dédiés dans `hermes_cli/web_routers/client_ui.py`, 10 nouveaux tests unitaires au vert (100% sur `test_client_settings_billing.py` et 29/29 au global client).
 
 
 ---
+
 
 ## 5. Cause des reversions du 08/09/2026
 

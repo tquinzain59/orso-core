@@ -1,4 +1,15 @@
-import { Agent, AgentId, ActionCardData, ChatMessage, Integration, MessagingChannel } from '@/types';
+import {
+  Agent,
+  AgentId,
+  ActionCardData,
+  ChatMessage,
+  Integration,
+  MessagingChannel,
+  CompanyData,
+  UserProfileData,
+  BillingData,
+  ClientSubscription,
+} from '@/types';
 import { ORSO_AGENTS, SAMPLE_INTEGRATIONS, SAMPLE_CHANNELS } from '@/lib/data';
 
 export function getTenantSlug(): string | null {
@@ -626,4 +637,161 @@ export async function removeChannelAllowedUser(
   }
   return { success: true };
 }
+
+// ── Paramètres Client & Gestion de Compte ───────────────────────────────────
+
+export async function fetchClientSettingsProfile(): Promise<{
+  company: CompanyData;
+  user: UserProfileData;
+} | null> {
+  const base = getApiBaseUrl();
+  try {
+    const res = await fetch(`${base}/api/client/settings/profile`, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        ...getAuthHeaders(),
+      },
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.warn('fetchClientSettingsProfile fallback:', err);
+  }
+  return null;
+}
+
+export async function updateClientPassword(payload: {
+  current_password?: string;
+  new_password: string;
+  confirm_password?: string;
+}): Promise<{ success: boolean; message: string }> {
+  const base = getApiBaseUrl();
+  try {
+    const res = await fetch(`${base}/api/client/settings/password`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        ...getAuthHeaders(),
+      },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { success: false, message: data.detail || 'Erreur lors du changement de mot de passe.' };
+    }
+    return { success: true, message: data.message || 'Mot de passe modifié avec succès.' };
+  } catch (err: any) {
+    return { success: false, message: err?.message || 'Erreur de connexion au serveur.' };
+  }
+}
+
+// ── Abonnement & Facturation (Stripe) ───────────────────────────────────────
+
+export async function fetchClientBilling(): Promise<BillingData | null> {
+  const base = getApiBaseUrl();
+  try {
+    const res = await fetch(`${base}/api/client/billing`, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        ...getAuthHeaders(),
+      },
+    });
+    if (res.ok) {
+      return await res.json();
+    }
+  } catch (err) {
+    console.warn('fetchClientBilling fallback:', err);
+  }
+  return null;
+}
+
+export async function updateClientSubscription(tierId: string): Promise<{
+  success: boolean;
+  message: string;
+  subscription?: ClientSubscription;
+}> {
+  const base = getApiBaseUrl();
+  try {
+    const res = await fetch(`${base}/api/client/billing/subscription`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        ...getAuthHeaders(),
+      },
+      body: JSON.stringify({ tier_id: tierId }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { success: false, message: data.detail || 'Impossible de mettre à jour le forfait.' };
+    }
+    return {
+      success: true,
+      message: data.message || 'Forfait mis à jour avec succès.',
+      subscription: data.subscription,
+    };
+  } catch (err: any) {
+    return { success: false, message: err?.message || 'Erreur réseau lors de la mise à jour.' };
+  }
+}
+
+export async function createStripePortalSession(): Promise<{
+  success: boolean;
+  url?: string;
+  error?: string;
+}> {
+  const base = getApiBaseUrl();
+  try {
+    const res = await fetch(`${base}/api/client/billing/portal-session`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        ...getAuthHeaders(),
+      },
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { success: false, error: data.detail || 'Impossible de générer le portail Stripe.' };
+    }
+    return { success: true, url: data.url };
+  } catch (err: any) {
+    return { success: false, error: err?.message || 'Erreur réseau vers le portail Stripe.' };
+  }
+}
+
+export async function downloadClientInvoice(invoiceId: string, invoiceNumber?: string): Promise<void> {
+  const base = getApiBaseUrl();
+  const token = getClientToken();
+  const url = `${base}/api/client/billing/invoices/${encodeURIComponent(invoiceId)}/download`;
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+      },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Échec du téléchargement.' }));
+      throw new Error(err.detail || 'Échec du téléchargement.');
+    }
+    const blob = await res.blob();
+    const downloadUrl = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    a.download = `facture-${invoiceNumber || invoiceId}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(downloadUrl);
+  } catch (err) {
+    console.error('Erreur téléchargement facture:', err);
+    throw err;
+  }
+}
+
 
