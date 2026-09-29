@@ -18,6 +18,16 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      "^/t/[^/]+/api": {
+        target: BACKEND,
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/t\/[^/]+/, ""),
+      },
+      "^/t/[^/]+/ws": {
+        target: BACKEND.replace("http", "ws"),
+        ws: true,
+        rewrite: (path) => path.replace(/^\/t\/[^/]+/, ""),
+      },
       "/api": {
         target: BACKEND,
         changeOrigin: true,
