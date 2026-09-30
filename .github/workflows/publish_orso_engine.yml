@@ -8,6 +8,9 @@ on:
         required: false
         default: 'v1.0.0'
   push:
+    branches:
+      - 'KAN-64-execution-reelle-distribution'
+      - 'main'
     tags:
       - 'v*'
 
@@ -28,6 +31,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Get current date
+        id: date
+        run: echo "date=$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

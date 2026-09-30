@@ -3,6 +3,8 @@ FROM python:3.11-slim
 
 LABEL maintainer="Thibaut - Orso Agents (www.orso-agents.fr)"
 LABEL version="1.0-orso-core"
+LABEL org.opencontainers.image.source="https://github.com/tquinzain59/orso-core"
+LABEL org.opencontainers.image.description="Orso Agents Core Engine Image"
 
 # Empêche Python d'écrire des fichiers .pyc et configure le tampon de sortie pour Docker
 ENV PYTHONDONTWRITEBYTECODE=1
