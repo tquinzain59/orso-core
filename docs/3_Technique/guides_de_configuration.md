@@ -90,14 +90,18 @@ Le portail statique est directement consultable en ouvrant les fichiers dans un 
 Variables à exporter sur la machine hôte :
 ```bash
 # Backend Hermès
-export OPENROUTER_API_KEY="sk-or-v1-..."
-export HERMES_DASHBOARD_BASIC_AUTH_USERNAME="admin"
-export HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH="scrypt$$16384$$..."
+export OPENROUTER_API_KEY="<votre_cle_openrouter>"
+export HERMES_DASHBOARD_BASIC_AUTH_USERNAME="<votre_identifiant_administrateur>"
+export HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH="<votre_hash_mot_de_passe_genere>"
 
 # Données & Messageries
-export PAPPERS_API_TOKEN="votre_cle_pappers"
-export TELEGRAM_BOT_TOKEN="votre_token_telegram_ici"
+export PAPPERS_API_TOKEN="<votre_cle_pappers>"
+export TELEGRAM_BOT_TOKEN="<votre_token_telegram>"
 ```
+
+> [!TIP]
+> Pour générer un identifiant et un hash sécurisé pour le Dashboard d'administration sans jamais écrire de mot de passe dans les fichiers du dépôt, utilisez le script utilitaire :
+> `python3 scripts/security/generate_dashboard_credentials.py`
 
 Le filtre **Tirith** inspecte automatiquement tous les scripts dans `skills/` avant exécution, et la fonctionnalité **Secret Redaction** masque automatiquement les tokens et clés privées dans les logs de l'agent.
 

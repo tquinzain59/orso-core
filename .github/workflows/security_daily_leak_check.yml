@@ -1,13 +1,18 @@
-name: Daily Production Secrets Leak Check (KAN-46)
+name: Daily Production Secrets Leak Check (KAN-46 & KAN-49)
 
 on:
   schedule:
-    # Tous les jours à 06:00 UTC
-    - cron: '0 6 * * *'
+    # Tous les jours à 03:00 UTC (heures creuses)
+    - cron: '0 3 * * *'
   workflow_dispatch:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
-  audit-vitrine-secrets:
+  audit-secrets-and-live-probes:
+    name: Secrets Leak & Live Production Conformance
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -24,6 +29,40 @@ jobs:
           python -m pip install --upgrade pip
           pip install pytest requests python-dotenv
 
-      - name: Execute Security Conformance Tests (KAN-46)
+      - name: Static Security Audit (Docs & Codebase)
+        run: |
+          python -c "
+          import sys
+          from pathlib import Path
+          
+          # 1. Vérification absence de fichiers interdits
+          forbidden_files = ['Secrets/secrets_poc.md', 'admin.html', 'monitoring.html']
+          for f in forbidden_files:
+              if Path(f).exists():
+                  print(f'::error:: Fichier interdit présent : {f}')
+                  sys.exit(1)
+                  
+          # 2. Vérification de l'assainissement de guides_de_configuration.md
+          guide = Path('docs/3_Technique/guides_de_configuration.md').read_text(encoding='utf-8')
+          if 'scrypt$$16384$$' in guide:
+              print('::error:: Hash scrypt exposé dans guides_de_configuration.md')
+              sys.exit(1)
+          if 'HERMES_DASHBOARD_BASIC_AUTH_USERNAME=\"admin\"' in guide:
+              print('::error:: Username admin par défaut exposé dans guides_de_configuration.md')
+              sys.exit(1)
+              
+          print('[✓] Audit statique de sécurité réussi : aucun hash ou identifiant par défaut.')
+          "
+
+      - name: Live URL Probe (Production Vitrine)
+        run: |
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://www.orso-agents.fr/Secrets/secrets_poc.md)
+          echo "Status /Secrets/secrets_poc.md: $HTTP_STATUS"
+          if [ "$HTTP_STATUS" != "404" ] && [ "$HTTP_STATUS" != "410" ]; then
+            echo "::error:: Alerte critique : le fichier de secrets est accessible en production (HTTP $HTTP_STATUS) !"
+            exit 1
+          fi
+
+      - name: Execute Security Conformance Tests
         run: |
           pytest tests/security/test_kan46_vitrine_security.py -v
