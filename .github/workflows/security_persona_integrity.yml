@@ -1,0 +1,45 @@
+name: Security Persona Integrity CI (KAN-33)
+
+on:
+  push:
+    branches:
+      - main
+      - 'KAN-*'
+      - 'feature/*'
+  pull_request:
+    branches:
+      - main
+      - 'KAN-*'
+      - 'feature/*'
+
+jobs:
+  persona-integrity:
+    name: Verrouillage et Intégrité Personas SOUL.md
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip uv
+          uv pip install --system -r requirements-base.txt
+
+      - name: Contrôle d'Intégrité Statique des Personas (Boot Check)
+        run: |
+          python3 scripts/security/persona_integrity.py verify --profiles-dir profiles --fail-fast
+
+      - name: Exécution des Tests d'Intégrité Cryptographique (KAN-33)
+        run: |
+          scripts/run_tests.sh tests/security/test_persona_integrity.py
+
+      - name: Exécution des Tests de Garde-Fous d'Écriture (Write Guards)
+        run: |
+          scripts/run_tests.sh tests/tools/test_file_write_safety.py

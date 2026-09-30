@@ -88,6 +88,12 @@ def export_telemetry(
                 "api_calls": 0,
                 "cost_usd": 0.0,
             },
+            "persona_integrity": {
+                "status": "healthy",
+                "last_verified": now,
+                "events_count": 0,
+                "recent_incidents": [],
+            },
             "errors": [],
             "status": "idle",
         }
@@ -174,6 +180,37 @@ def export_telemetry(
         # Détermination de l'état d'activité
         is_active = (now - last_activity) < 3600
 
+        # 3. Intégrité des personas (KAN-33)
+        persona_integrity_info = {
+            "status": "healthy",
+            "last_verified": now,
+            "events_count": 0,
+            "recent_incidents": [],
+        }
+        jsonl_candidates = [
+            os.path.join(os.path.dirname(effective_export), "telemetry", "personas_integrity.jsonl"),
+            os.path.join(os.path.dirname(effective_export), "personas_integrity.jsonl"),
+            "/app/data/telemetry/personas_integrity.jsonl",
+            "./data/telemetry/personas_integrity.jsonl",
+        ]
+        for jf in jsonl_candidates:
+            if os.path.exists(jf):
+                try:
+                    with open(jf, "r", encoding="utf-8") as f_j:
+                        lines = [line.strip() for line in f_j if line.strip()]
+                    persona_integrity_info["events_count"] = len(lines)
+                    incidents = []
+                    for line in lines[-20:]:
+                        p_entry = json.loads(line)
+                        if p_entry.get("status") in {"compromised", "failed", "hmac_failed"}:
+                            incidents.append(p_entry)
+                    if incidents:
+                        persona_integrity_info["status"] = "compromised"
+                        persona_integrity_info["recent_incidents"] = incidents
+                    break
+                except Exception:
+                    pass
+
         telemetry_data = {
             "tenant_id": effective_tenant,
             "timestamp": now,
@@ -185,6 +222,7 @@ def export_telemetry(
                 "api_calls": api_calls,
                 "cost_usd": round(cost_usd, 4),
             },
+            "persona_integrity": persona_integrity_info,
             "errors": recent_errors,
             "status": "active" if is_active else "idle",
         }

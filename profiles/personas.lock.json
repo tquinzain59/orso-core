@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": "1.0.0",
+  "updated_at": "2026-09-30T09:37:48.989732+00:00",
+  "hash_algorithm": "sha256",
+  "hmac_algorithm": "hmac-sha256",
+  "personas": {
+    "clara": {
+      "name": "clara",
+      "role": "Support Client & Relation Usagers",
+      "version": "1.0.0",
+      "date": "2026-09-30",
+      "sha256": "8b08185b1f486bf0c34918fa8952796e72239878b2e851f432b7401bf19ba8f2",
+      "hmac_signature": "d7e2253601d411ee29335beefb3b287aaeaec4332ffa5d56fb56119b041f3704"
+    },
+    "jerome": {
+      "name": "jerome",
+      "role": "Crédit Manager & Recouvrement",
+      "version": "1.0.0",
+      "date": "2026-09-30",
+      "sha256": "3028885bc107cf1f372d6e198e8fc4605fabfbbf155269a8ae670ac76ead803e",
+      "hmac_signature": "d2437493a5a965a06cf0dae9770eec14debb0ccaee50d17941a3dd1e5149cd44"
+    },
+    "lucas": {
+      "name": "lucas",
+      "role": "Commercial & Prospection",
+      "version": "1.0.0",
+      "date": "2026-09-30",
+      "sha256": "5a12dc6d5531b630ef6f7a67cb84622f966c405c40080f178ce4eb2fbfa39d90",
+      "hmac_signature": "eedf1a55cf054955706d1f2b27a39894ff25e5daec8c90b6f479ed0a15fef813"
+    },
+    "victor": {
+      "name": "victor",
+      "role": "Assistant Appels d'Offres & Marchés Publics",
+      "version": "1.0.0",
+      "date": "2026-09-30",
+      "sha256": "d74deb79ab52681c5d740606be3f213b32747d5f5ae1cb986545cf12d2bc628f",
+      "hmac_signature": "0de4253c18d5bf438af9780aa6ab0d5b87a01e85d3b5103a06174cc669079578"
+    }
+  }
+}

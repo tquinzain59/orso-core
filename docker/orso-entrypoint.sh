@@ -20,7 +20,10 @@ if [ "$(id -u)" = "0" ]; then
     chown -R orso:orso /app/data /app/config 2>/dev/null || true
     chmod -R 775 /app/data 2>/dev/null || true
     if [ -d "/app/profiles" ]; then
-        chmod -R a+rX /app/profiles 2>/dev/null || true
+        # R2, CA2: Propriété root:root, mode 0555 répertoires et 0444 fichiers
+        chown -R root:root /app/profiles 2>/dev/null || true
+        chmod -R 0555 /app/profiles 2>/dev/null || true
+        find /app/profiles -type f -exec chmod 0444 {} + 2>/dev/null || true
     fi
 fi
 
@@ -79,6 +82,26 @@ fi
 
 echo "==> [Orso Entrypoint] HERMES_HOME configuré sur : $HERMES_HOME"
 echo "==> [Orso Entrypoint] HERMES_CONFIG_PATH : $HERMES_CONFIG_PATH"
+
+# 4bis. Contrôle d'intégrité cryptographique des personas (KAN-33, R3, R4, R6, R7)
+# Purge préventive de tout SOUL.md illégitime dans les répertoires de données inscriptibles (faille de repli ambient)
+rm -f /app/data/hermes_home/SOUL.md /app/data/SOUL.md /home/orso/.hermes/SOUL.md ./data/hermes_home/SOUL.md ./data/SOUL.md 2>/dev/null || true
+
+echo "==> [Orso Entrypoint] Contrôle d'intégrité des personas (KAN-33)..."
+INTEGRITY_SCRIPT="/app/scripts/security/persona_integrity.py"
+if [ ! -f "$INTEGRITY_SCRIPT" ] && [ -f "./scripts/security/persona_integrity.py" ]; then
+    INTEGRITY_SCRIPT="./scripts/security/persona_integrity.py"
+fi
+
+if [ -f "$INTEGRITY_SCRIPT" ]; then
+    if ! python3 "$INTEGRITY_SCRIPT" verify --fail-fast; then
+        echo "🚨 [PER-INTEGRITY-001] Échec critique d'intégrité des personas au démarrage. Arrêt immédiat." >&2
+        exit 1
+    fi
+    echo "==> [Orso Entrypoint] Intégrité des personas validée (PER-INTEGRITY-000)."
+    echo "==> [Orso Entrypoint] Démarrage du moniteur d'intégrité périodique (300s)..."
+    python3 "$INTEGRITY_SCRIPT" monitor --interval 300 &
+fi
 
 # 5. Exécution de la commande
 if [ "$(id -u)" = "0" ]; then
