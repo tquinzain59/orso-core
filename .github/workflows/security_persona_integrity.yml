@@ -1,0 +1,52 @@
+name: Security Persona Integrity CI (KAN-33)
+
+on:
+  push:
+    branches:
+      - main
+      - 'KAN-*'
+      - 'feature/*'
+  pull_request:
+    branches:
+      - main
+      - 'KAN-*'
+      - 'feature/*'
+
+jobs:
+  persona-integrity:
+    name: Verrouillage et Intégrité Personas SOUL.md
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install astral-sh/setup-uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.28"
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install dependencies (uv sync)
+        run: uv sync --locked --python 3.11 --extra dev
+
+      - name: Contrôle d'Intégrité Statique des Personas (Boot Check)
+        env:
+          ORSO_PERSONA_HMAC_KEY: ${{ secrets.ORSO_PERSONA_HMAC_KEY }}
+        run: |
+          .venv/bin/python scripts/security/persona_integrity.py verify --profiles-dir profiles --fail-fast
+
+      - name: Exécution des Tests d'Intégrité Cryptographique (KAN-33)
+        run: |
+          scripts/run_tests.sh tests/security/test_persona_integrity.py
+
+      - name: Exécution des Tests de Garde-Fous d'Écriture (Write Guards)
+        run: |
+          scripts/run_tests.sh tests/tools/test_file_write_safety.py

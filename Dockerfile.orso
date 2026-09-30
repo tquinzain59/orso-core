@@ -63,6 +63,13 @@ RUN ln -sf /app/config/hermes.yaml /home/orso/.hermes/config.yaml && \
     chown -h orso:orso /home/orso/.hermes/config.yaml /home/orso/.hermes/skills && \
     chown -R orso:orso /app /home/orso
 
+# Sécurisation stricte des personas d'agents (KAN-33, R2, CA2) : propriété root:root et mode 0444
+RUN if [ -d /app/profiles ]; then \
+        chown -R root:root /app/profiles && \
+        chmod -R 0555 /app/profiles && \
+        find /app/profiles -type f -exec chmod 0444 {} +; \
+    fi
+
 # Droits d'exécution sur le script d'entrypoint
 RUN chmod +x /app/docker/orso-entrypoint.sh
 
