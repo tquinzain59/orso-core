@@ -138,7 +138,7 @@ def test_login_environment_found_matches_instance(client, monkeypatch):
     with patch("urllib.request.urlopen", side_effect=mock_urlopen):
         resp = client.post(
             "/api/client/auth/login",
-            json={"email": "sophie.martin@finarecee20.fr", "password": "TempOrso2026!Financia"},
+            json={"email": "sophie.martin@finarecee20.fr", "password": "TestPassword123!Mock"},
         )
         assert resp.status_code == 200
         data = resp.json()
@@ -194,7 +194,7 @@ def test_login_environment_found_on_different_instance_provides_redirect(client,
     with patch("urllib.request.urlopen", return_value=MockResp(mock_auth_resp)):
         resp = client.post(
             "/api/client/auth/login",
-            json={"email": "sophie.martin@finarecee20.fr", "password": "TempOrso2026!Financia"},
+            json={"email": "sophie.martin@finarecee20.fr", "password": "TestPassword123!Mock"},
         )
         assert resp.status_code == 200
         data = resp.json()

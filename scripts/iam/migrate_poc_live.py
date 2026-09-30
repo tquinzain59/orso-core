@@ -9,6 +9,7 @@ Ce script :
 
 import json
 import os
+import secrets
 import urllib.error
 import urllib.request
 
@@ -43,7 +44,7 @@ POC_DATA = [
         },
         "user": {
             "email": "sophie.martin@finarecee20.fr",
-            "password": "TempOrso2026!Financia",
+            "password": os.environ.get("POC_DEFAULT_PASSWORD") or secrets.token_urlsafe(16),
             "full_name": "Sophie Martin",
             "phone": "+33 6 45 78 12 34",
             "role": "admin",
@@ -66,7 +67,7 @@ POC_DATA = [
         },
         "user": {
             "email": "claire.dubois@servicallc322.com",
-            "password": "TempOrso2026!Commercia",
+            "password": os.environ.get("POC_DEFAULT_PASSWORD") or secrets.token_urlsafe(16),
             "full_name": "Claire Dubois",
             "phone": "+33 1 56 78 90 12",
             "role": "user",
@@ -89,7 +90,7 @@ POC_DATA = [
         },
         "user": {
             "email": "h.bernard@recoviaa60a.fr",
-            "password": "TempOrso2026!Helpdesk",
+            "password": os.environ.get("POC_DEFAULT_PASSWORD") or secrets.token_urlsafe(16),
             "full_name": "Hugo Bernard",
             "phone": "+33 9 12 34 56 78",
             "role": "user",
@@ -112,7 +113,7 @@ POC_DATA = [
         },
         "user": {
             "email": "julien.lefevre@batiprof38f.fr",
-            "password": "TempOrso2026!Batipro",
+            "password": os.environ.get("POC_DEFAULT_PASSWORD") or secrets.token_urlsafe(16),
             "full_name": "Julien Lefèvre",
             "phone": "+33 7 81 23 45 67",
             "role": "user",
@@ -135,7 +136,7 @@ POC_DATA = [
         },
         "user": {
             "email": "amelie.petit@ventelinkc009.com",
-            "password": "TempOrso2026!EuroTech",
+            "password": os.environ.get("POC_DEFAULT_PASSWORD") or secrets.token_urlsafe(16),
             "full_name": "Amélie Petit",
             "phone": "+33 6 98 76 54 32",
             "role": "admin",
@@ -154,7 +155,7 @@ POC_DATA = [
         "instance": None,
         "user": {
             "email": "test.sansenv@orso-agents.fr",
-            "password": "TempOrso2026!SansEnv",
+            "password": os.environ.get("POC_DEFAULT_PASSWORD") or secrets.token_urlsafe(16),
             "full_name": "Testeur Sans Environnement",
             "phone": "+33 6 00 00 00 00",
             "role": "direction",

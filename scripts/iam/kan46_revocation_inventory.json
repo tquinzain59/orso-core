@@ -1,0 +1,56 @@
+[
+  {
+    "email": "sophie.martin@finarecee20.fr",
+    "user_id": "244683bd-7898-4fd9-8cfd-3a73fa44c8c3",
+    "tenant": "Financia Solutions",
+    "revoked_at": "2026-09-30T07:24:09.125571+00:00",
+    "status": "ROTATED_AND_REVOKED",
+    "old_password_rejected": true,
+    "new_password_active": true
+  },
+  {
+    "email": "claire.dubois@servicallc322.com",
+    "user_id": "33253cce-5a3a-407e-8a9f-0cd960dc002b",
+    "tenant": "CommerciaLink",
+    "revoked_at": "2026-09-30T07:24:09.739665+00:00",
+    "status": "ROTATED_AND_REVOKED",
+    "old_password_rejected": true,
+    "new_password_active": true
+  },
+  {
+    "email": "h.bernard@recoviaa60a.fr",
+    "user_id": "8c40e7fa-128c-4e1d-9d24-33c1059462da",
+    "tenant": "HelpDesk360",
+    "revoked_at": "2026-09-30T07:24:10.365966+00:00",
+    "status": "ROTATED_AND_REVOKED",
+    "old_password_rejected": true,
+    "new_password_active": true
+  },
+  {
+    "email": "julien.lefevre@batiprof38f.fr",
+    "user_id": "0115edba-34c1-4a1a-850e-ce2a5f692833",
+    "tenant": "BatiPro Services",
+    "revoked_at": "2026-09-30T07:24:10.987937+00:00",
+    "status": "ROTATED_AND_REVOKED",
+    "old_password_rejected": true,
+    "new_password_active": true
+  },
+  {
+    "email": "amelie.petit@ventelinkc009.com",
+    "user_id": "4c3d242b-4404-4a4d-a1e8-4ab66ed05e09",
+    "tenant": "EuroTech Conseil",
+    "revoked_at": "2026-09-30T07:24:11.629044+00:00",
+    "status": "ROTATED_AND_REVOKED",
+    "old_password_rejected": true,
+    "new_password_active": true
+  },
+  {
+    "email": "test.sansenv@orso-agents.fr",
+    "user_id": "be0d823b-0a19-4669-8ccb-669abfa8a340",
+    "tenant": "Aura Sans Environnement",
+    "revoked_at": "2026-09-30T07:24:12.227123+00:00",
+    "status": "ROTATED_AND_REVOKED",
+    "old_password_rejected": true,
+    "new_password_active": true
+  }
+]
