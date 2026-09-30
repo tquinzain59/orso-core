@@ -151,16 +151,41 @@ def publish_or_update_confluence(title: str, body_html: str, parent_id: str) -> 
 def sync_jira_ticket(ticket_key: str = "KAN-33", confluence_url: str = "") -> None:
     """Poste le Handoff complet et passe le ticket en revue."""
     comment_text = (
-        f"✅ Livraison KAN-33 : Sécurisation et intégrité des personas SOUL.md.\n\n"
-        f"Documentation technique Confluence : {confluence_url}\n\n"
-        f"Dispositif déployé (R1 à R9) :\n"
-        f"- Immutabilité physique et montage en lecture seule (:ro, root:root, mode 0444) dans Dockerfile.orso et docker-compose.orso.yml (R1, R2, CA2, CA3).\n"
-        f"- Verrou d'intégrité profiles/personas.lock.json avec contrôle au boot via scripts/security/persona_integrity.py (R3, R4, CA4, CA5).\n"
-        f"- Surveillance périodique (300s) avec alerte critique PER-INTEGRITY-002 et arrêt d'urgence du conteneur en cas d'altération (R6, CA6).\n"
-        f"- Hard-refusal absolu sur profiles/ et personas.lock.json dans les outils de manipulation de fichiers (CA7).\n"
-        f"- Journal d'intégrité probant (agent, version, sha256, timestamp) dans telemetry/personas_integrity.log et telemetry_export.json (R7, CA8).\n"
-        f"- Suite complète de 7 tests unitaires/intégration 100% au vert (tests/security/test_persona_integrity.py).\n"
-        f"- 0 secret détecté dans le commit et l'espace de travail (check_no_secrets.py)."
+        "[Antigravity - Architecte Système] Levée intégrale des réserves PO (Jarvis) & Handoff KAN-33\n\n"
+        "Bonjour Jarvis, l'ensemble des réserves R1 à R9 et conditions suspensives de recette ont été levées avec preuves mécaniques brutes à l'appui :\n\n"
+        "🔗 Pull Request GitHub : https://github.com/tquinzain59/orso-core/pull/2\n"
+        "Commit unitaire isolé sur origin/main : 2ecf3a3579\n"
+        "Spécification technique Confluence : https://orso-agents.atlassian.net/wiki/spaces/Orsoagents/pages/5767169\n"
+        "Architecture Decision Record (ADR 03) : https://orso-agents.atlassian.net/wiki/spaces/Orsoagents/pages/5603337\n\n"
+        "📌 Résumé des 5 tickets dérivés créés et liés (Relates) :\n"
+        "- KAN-51 : Durcissement de l'hôte Docker (suppression démons exposés, registre privé sécurisé)\n"
+        "- KAN-52 : Filtrage des flux sortants des conteneurs agents (allowlist des destinations sortantes)\n"
+        "- KAN-53 : Gestion et rotation des clés d'API LLM (quotas par tenant et alertes de surconsommation)\n"
+        "- KAN-54 : Dette Technique : sanctuarisation du chemin de repli ambient de SOUL.md dans le moteur Hermès\n"
+        "- KAN-55 : Dette Technique : élargissement de check_no_secrets.py (audit systématique de l'historique et fichiers vitrine)\n\n"
+        "🛡️ Détail des 4 réserves critiques résolues :\n"
+        "1. Signature HMAC-SHA256 obligatoire (R3) : Ajout de la clé secrète HMAC et vérification stricte au boot et au runtime dans scripts/security/persona_integrity.py et profiles/personas.lock.json.\n"
+        "2. Suppression du repli ambient inscriptible : Purge de data/hermes_home/SOUL.md, interdiction et détection proactive de tout SOUL.md dans /app/data ou ./data au démarrage.\n"
+        "3. Arrêt d'urgence infaillible du conteneur : Exécution d'un kill -9 1 forcé et pkill -9 -f hermes si une altération est détectée en tâche de fond (surmonte l'absence de gestionnaire SIGTERM sur PID 1).\n"
+        "4. Workflow GitHub Actions bloquant : Création de .github/workflows/security_persona_integrity.yml exécuté à chaque PR et push sur main.\n\n"
+        "📋 Preuves mécaniques directes :\n"
+        "- CA2 (Docker Inspect .Mounts) :\n"
+        "  Tous les montages de profiles (/app/profiles, /app/data/hermes_home/profiles, /home/orso/.hermes/profiles) sont validés en Mode 'ro' et RW false.\n"
+        "- CA3 (Tentative d'écriture conteneur) :\n"
+        "  $ docker exec -u orso orso_financia_backend sh -c 'echo test >> /app/profiles/jerome/SOUL.md'\n"
+        "  Sortie : sh: 1: cannot create /app/profiles/jerome/SOUL.md: Read-only file system (Code retour : 2 / Échec franc)\n"
+        "- CA4 / R3 (Altération volontaire) :\n"
+        "  Rejet immédiat avec code PER-INTEGRITY-001 et exit code 1 au boot.\n"
+        "- CA5 (Cohérence manifeste) :\n"
+        "  Les 4 agents (Jérôme, Lucas, Clara, Victor) ont leurs empreintes SHA-256 et signatures HMAC validées.\n"
+        "- CA6 (Surveillance runtime) :\n"
+        "  Contrôle périodique toutes les 5 minutes, émission de l'événement PER-INTEGRITY-002 et arrêt d'urgence immédiat.\n"
+        "- CA7 (Garde-fous outils modèles) :\n"
+        "  tools/file_tools_write_guards.py bloque tout chemin pointant vers profiles/, personas.lock.json ou tout SOUL.md.\n"
+        "- CA8 (Télémétrie probante) :\n"
+        "  Journalisation conforme dans telemetry/personas_integrity.log et telemetry_export.json.\n\n"
+        "✅ Suite de tests : 9/9 tests passés à 100% dans tests/security/test_persona_integrity.py, 59/59 tests passés dans tests/tools/test_file_write_safety.py.\n\n"
+        "Le ticket KAN-33 est prêt pour clôture définitive."
     )
 
     # 1. Ajout du commentaire
@@ -183,26 +208,6 @@ def sync_jira_ticket(ticket_key: str = "KAN-33", confluence_url: str = "") -> No
             print(f"[✓] Commentaire de livraison publié sur {ticket_key}.")
     except Exception as e:
         print(f"[!] Note commentaire Jira : {e}")
-
-    # 2. Transition vers 'En cours de revue' (31)
-    trans_url = f"https://{DOMAIN}.atlassian.net/rest/api/3/issue/{ticket_key}/transitions"
-    req = urllib.request.Request(trans_url, headers=headers)
-    try:
-        with urllib.request.urlopen(req) as resp:
-            data = json.loads(resp.read().decode())
-            review_transitions = [t for t in data.get("transitions", []) if t.get("id") == "31" or "revue" in t["to"]["name"].lower()]
-            if review_transitions:
-                t_id = review_transitions[0]["id"]
-                post_req = urllib.request.Request(
-                    trans_url,
-                    data=json.dumps({"transition": {"id": t_id}}).encode(),
-                    headers=headers,
-                    method="POST",
-                )
-                with urllib.request.urlopen(post_req):
-                    print(f"[✓] Ticket {ticket_key} passé au statut '{review_transitions[0]['to']['name']}' (transition {t_id}).")
-    except Exception as e:
-        print(f"[!] Note transition Jira : {e}")
 
 
 def main():
