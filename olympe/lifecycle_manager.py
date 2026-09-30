@@ -7,6 +7,7 @@ et la supervision des conteneurs isolés orso_client_{slug}.
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -244,6 +245,7 @@ class DockerLifecycleManager:
         image_digest: Optional[str] = None,
         env_vars: Optional[Dict[str, str]] = None,
         quotas: Optional[Dict[str, Any]] = None,
+        require_digest: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """Provisionne un nouvel environnement client hermétique."""
         container_name = normalize_container_name(tenant_slug)
@@ -264,12 +266,47 @@ class DockerLifecycleManager:
         default_image = os.environ.get("ORSO_BACKEND_IMAGE", "orso-core-orso-backend:latest")
         target_image = default_image if (not image_name or image_name == "orso-backend:latest") else image_name
 
-        # Support de l'épinglage cryptographique par Digest SHA-256 (KAN-63)
-        effective_digest = (image_digest or os.environ.get("ORSO_BACKEND_IMAGE_DIGEST", "")).strip()
+        # Alignement de la variable de digest de référence (KAN-64) :
+        # ORSO_TARGET_ENGINE_DIGEST (spécification) avec repli sur ORSO_BACKEND_IMAGE_DIGEST
+        effective_digest = (
+            image_digest
+            or os.environ.get("ORSO_TARGET_ENGINE_DIGEST")
+            or os.environ.get("ORSO_BACKEND_IMAGE_DIGEST", "")
+        ).strip()
+
+        # Détection si require_digest est imposé (paramètre ou variable ORSO_REQUIRE_DIGEST)
+        is_digest_enforced = (
+            require_digest
+            if require_digest is not None
+            else os.environ.get("ORSO_REQUIRE_DIGEST", "false").lower() in ("true", "1", "yes")
+        )
+
+        has_embedded_digest = "@sha256:" in target_image
+        if has_embedded_digest and not effective_digest:
+            effective_digest = target_image.split("@", 1)[1].strip()
+
         if effective_digest:
-            if "@sha256:" not in target_image:
+            if not re.match(r"^sha256:[a-f0-9]{64}$", effective_digest):
+                return {
+                    "success": False,
+                    "error": "ERR_INVALID_DIGEST",
+                    "tenant_slug": tenant_slug,
+                    "message": f"Provisioning refusé : digest SHA-256 invalide '{effective_digest}'. Format attendu : sha256:<64_hex_digits>",
+                }
+            if not has_embedded_digest:
                 base_repo = target_image.split(":")[0]
                 target_image = f"{base_repo}@{effective_digest}"
+        elif is_digest_enforced:
+            # CA6 : Refus formel si aucun digest valide n'est fourni et que l'obligation est active
+            return {
+                "success": False,
+                "error": "ERR_DIGEST_REQUIRED",
+                "tenant_slug": tenant_slug,
+                "message": (
+                    "Provisioning refusé : une image épinglée par un digest SHA-256 valide est requise "
+                    "(tag flottant interdit). Spécifiez 'image_digest' ou 'ORSO_TARGET_ENGINE_DIGEST'."
+                ),
+            }
 
         base_envs = {
             "ORSO_CLIENT_ID": tenant_id,

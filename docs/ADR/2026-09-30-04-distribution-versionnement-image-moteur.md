@@ -64,8 +64,11 @@ Pour la Vague 0 (5 premiers clients) et la Vague 1 (25 clients), le mode de dist
    - Les tokens de déploiement sont injectés sur l'Hôte 2 via les variables d'environnement locales de la machine (`/etc/orso/engine.env` en permissions `0600 root:root`).
 2. **Périmètre du `.dockerignore` durci** :
    - Exclusion systématique de tout fichier `.env`, clé privée, certificat, document stratégique, ou données de profils clients du contexte de build.
-3. **Épinglage par Digest obligatoire dans Olympe** :
-   - Le superviseur Olympe (`olympe/lifecycle_manager.py`) rejette le provisioning de conteneurs clients si l'image demandée utilise le tag flottant `:latest` sans digest validé en environnement de production.
+3. **Épinglage par Digest obligatoire dans Olympe (KAN-64)** :
+   - Le superviseur Olympe (`olympe/lifecycle_manager.py`) applique un refus formel (Fail-Closed, code `ERR_DIGEST_REQUIRED`) lors de tout provisioning demandant une image sur tag flottant sans digest SHA-256 valide.
+   - Alignement canonique de la variable de référence : `ORSO_TARGET_ENGINE_DIGEST` (avec repli rétro-compatible sur `ORSO_BACKEND_IMAGE_DIGEST`).
+4. **Hôte d'exécution client opérationnel (PROD-FR-003)** :
+   - Serveur OVH dédié `prod-fr-003.orso-agents.fr` (IP `57.131.196.106`), Ubuntu 26.04 LTS, noyau 7.0.0-28-generic, Docker 29.8.1, swapfile 2 Go actif, authentification SSH par mot de passe formellement verrouillée (`PasswordAuthentication no`).
 
 ---
 

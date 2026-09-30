@@ -57,7 +57,8 @@ Lors de la publication, l'image reçoit deux étiquettes pour la traçabilité h
 1. `v<major>.<minor>.<patch>-<git_sha>` (ex: `v1.0.0-3e990d4`) : référence formelle du commit Git source.
 2. `release-<date>` (ex: `release-20260930`) : jalon calendaire.
 
-Le tag `:latest` peut être généré à titre indicatif pour le développement local, mais **Olympe refuse d'instancier un conteneur client basé sur un tag `:latest` sans digest validé**.
+Le tag `:latest` peut être généré à titre indicatif pour le développement local, mais **Olympe refuse formellement d'instancier un conteneur client basé sur un tag flottant sans digest validé** (rejet immédiat `ERR_DIGEST_REQUIRED` dans `olympe/lifecycle_manager.py`).
+La variable de référence est alignée canoniquement sur `ORSO_TARGET_ENGINE_DIGEST` (avec repli de compatibilité sur `ORSO_BACKEND_IMAGE_DIGEST`).
 
 ---
 

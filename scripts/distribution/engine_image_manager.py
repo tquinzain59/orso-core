@@ -14,9 +14,14 @@ Respecte les critères d'acceptation KAN-63 :
 
 import os
 import re
+import sys
+import time
 import json
 import hashlib
 import logging
+import shlex
+import argparse
+import subprocess
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple, Any
@@ -252,6 +257,139 @@ class EngineDistributionManager:
         }
         return rolled_back_state, audit_log
 
+    def audit_hosts_drift_live(self, host_specs: Optional[List[Dict[str, Any]]] = None) -> DriftAuditReport:
+        """
+        CA3 : Interroge réellement les démons Docker distants et audite la dérive de version.
+        """
+        specs = host_specs or DEFAULT_HOSTS
+        probed_inventory = [probe_docker_host(h) for h in specs]
+        return self.audit_hosts_drift(probed_inventory)
+
+    def execute_live_host_update(
+        self,
+        host_spec: Dict[str, Any],
+        new_digest: str,
+        container_name: str = "orso_client_demo",
+        human_tag: Optional[str] = None,
+        health_check_port: int = 9119,
+    ) -> Dict[str, Any]:
+        """
+        CA4 : Exécute en direct sur l'hôte distant le pull de l'image, le redémarrage et la sonde de santé.
+        """
+        if not validate_digest(new_digest):
+            raise ValueError(f"Digest invalide : {new_digest}")
+
+        ssh_target = host_spec.get("ssh_target")
+        target_image = format_pinned_image(self.registry_base, new_digest, tag=human_tag)
+
+        # 1. État avant
+        state_before = probe_docker_host(host_spec)
+
+        # 2. Pull sur l'hôte distant
+        pull_cmd = f"docker pull {target_image}"
+        rc_pull, stdout_pull, stderr_pull = run_remote_or_local_cmd(pull_cmd, ssh_target, timeout=120)
+
+        # 3. Arrêt gracieux du conteneur si existant
+        stop_cmd = f"docker stop -t 10 {container_name} 2>/dev/null || true"
+        run_remote_or_local_cmd(stop_cmd, ssh_target)
+        rm_cmd = f"docker rm -f {container_name} 2>/dev/null || true"
+        run_remote_or_local_cmd(rm_cmd, ssh_target)
+
+        # 4. Relance du conteneur avec l'image épinglée
+        run_cmd = (
+            f"docker run -d --name {container_name} "
+            f"-p {health_check_port}:9119 "
+            f"--label com.orso.managed=true "
+            f"--label com.orso.engine.digest={new_digest} "
+            f"--label com.orso.engine.pinned=true "
+            f"{target_image}"
+        )
+        rc_run, stdout_run, stderr_run = run_remote_or_local_cmd(run_cmd, ssh_target, timeout=30)
+
+        # 5. Sonde de santé
+        health_cmd = f"curl -s -o /dev/null -w '%{{http_code}}' http://localhost:{health_check_port}/api/client/status || echo '000'"
+        health_code = "000"
+        for _ in range(6):
+            time.sleep(2)
+            rc_h, stdout_h, _ = run_remote_or_local_cmd(health_cmd, ssh_target, timeout=5)
+            if rc_h == 0 and stdout_h.strip() in ("200", "401", "403"):
+                health_code = stdout_h.strip()
+                break
+
+        # 6. État après
+        state_after = probe_docker_host(host_spec)
+        success = (rc_run == 0 and state_after.get("active_digest") == new_digest)
+
+        return {
+            "action": "LIVE_UPDATE",
+            "host_id": host_spec.get("host_id"),
+            "target_digest": new_digest,
+            "target_image": target_image,
+            "state_before": state_before,
+            "state_after": state_after,
+            "pull_output": stdout_pull or stderr_pull,
+            "run_output": stdout_run,
+            "health_http_code": health_code,
+            "success": success,
+        }
+
+    def execute_live_host_rollback(
+        self,
+        host_spec: Dict[str, Any],
+        rollback_digest: str,
+        container_name: str = "orso_client_demo",
+        health_check_port: int = 9119,
+    ) -> Dict[str, Any]:
+        """
+        CA4 : Exécute le rollback en direct sur l'hôte distant vers l'empreinte précédente.
+        """
+        if not validate_digest(rollback_digest):
+            raise ValueError(f"Digest invalide pour rollback : {rollback_digest}")
+
+        ssh_target = host_spec.get("ssh_target")
+        target_image = format_pinned_image(self.registry_base, rollback_digest)
+
+        state_before = probe_docker_host(host_spec)
+
+        # Relance instantanée (image déjà présente en cache local)
+        stop_cmd = f"docker stop -t 5 {container_name} 2>/dev/null && docker rm -f {container_name} 2>/dev/null || true"
+        run_remote_or_local_cmd(stop_cmd, ssh_target)
+
+        run_cmd = (
+            f"docker run -d --name {container_name} "
+            f"-p {health_check_port}:9119 "
+            f"--label com.orso.managed=true "
+            f"--label com.orso.engine.digest={rollback_digest} "
+            f"--label com.orso.engine.pinned=true "
+            f"{target_image}"
+        )
+        rc_run, stdout_run, _ = run_remote_or_local_cmd(run_cmd, ssh_target, timeout=20)
+
+        # Sonde de santé
+        health_cmd = f"curl -s -o /dev/null -w '%{{http_code}}' http://localhost:{health_check_port}/api/client/status || echo '000'"
+        health_code = "000"
+        for _ in range(6):
+            time.sleep(2)
+            rc_h, stdout_h, _ = run_remote_or_local_cmd(health_cmd, ssh_target, timeout=5)
+            if rc_h == 0 and stdout_h.strip() in ("200", "401", "403"):
+                health_code = stdout_h.strip()
+                break
+
+        state_after = probe_docker_host(host_spec)
+        success = (rc_run == 0 and state_after.get("active_digest") == rollback_digest)
+
+        return {
+            "action": "LIVE_ROLLBACK",
+            "host_id": host_spec.get("host_id"),
+            "rollback_digest": rollback_digest,
+            "target_image": target_image,
+            "state_before": state_before,
+            "state_after": state_after,
+            "run_output": stdout_run,
+            "health_http_code": health_code,
+            "success": success,
+        }
+
     @staticmethod
     def calculate_file_sha256(filepath: str) -> str:
         """Calcule le hash SHA-256 d'un fichier (ex: archive Docker .tar.gz)."""
@@ -268,8 +406,167 @@ class EngineDistributionManager:
         return actual_sha.lower() == expected_sha256.lower().replace("sha256:", "").strip()
 
 
+DEFAULT_HOSTS = [
+    {
+        "host_id": "prod-fr-002",
+        "host_name": "Serveur Olympe & Build (Hôte 1)",
+        "ssh_target": "ubuntu@92.222.68.80",
+        "container_filter": "orso_client",
+    },
+    {
+        "host_id": "prod-fr-003",
+        "host_name": "Serveur Clients OVH (Hôte 2)",
+        "ssh_target": "ubuntu@57.131.196.106",
+        "container_filter": "orso_client",
+    },
+]
+
+
+def run_remote_or_local_cmd(cmd: str, ssh_target: Optional[str] = None, timeout: int = 25) -> Tuple[int, str, str]:
+    """Exécute une commande localement ou à distance via SSH."""
+    if ssh_target:
+        full_cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", ssh_target, cmd]
+    else:
+        full_cmd = shlex.split(cmd)
+
+    try:
+        proc = subprocess.run(full_cmd, capture_output=True, text=True, timeout=timeout)
+        return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+    except subprocess.TimeoutExpired:
+        return 124, "", "Commande expirée (Timeout)"
+    except Exception as e:
+        return 1, "", str(e)
+
+
+def probe_docker_host(host_spec: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    CA3 : Sonde le démon Docker d'un hôte distant pour en extraire l'empreinte active réelle.
+    """
+    host_id = host_spec.get("host_id", "unknown")
+    host_name = host_spec.get("host_name", host_id)
+    ssh_target = host_spec.get("ssh_target")
+    container_filter = host_spec.get("container_filter", "orso_client")
+
+    rc, stdout, stderr = run_remote_or_local_cmd("docker ps --format '{{.Names}}'", ssh_target)
+    if rc != 0:
+        return {
+            "host_id": host_id,
+            "host_name": host_name,
+            "active_digest": "",
+            "running_containers": [],
+            "is_reachable": False,
+            "error": stderr or "Démon Docker inaccessible",
+        }
+
+    running_containers = [c.strip() for c in stdout.splitlines() if c.strip()]
+    matching_containers = [c for c in running_containers if container_filter in c]
+
+    active_digest = ""
+    pinned_image = ""
+
+    if matching_containers:
+        target_c = matching_containers[0]
+        inspect_cmd = (
+            f"docker inspect --format '{{{{.Image}}}} | {{{{.Config.Image}}}} | "
+            f"{{{{index .Config.Labels \"com.orso.engine.digest\"}}}}' {target_c}"
+        )
+        rc_i, stdout_i, _ = run_remote_or_local_cmd(inspect_cmd, ssh_target)
+        if rc_i == 0 and stdout_i:
+            parts = [p.strip() for p in stdout_i.split("|")]
+            img_id = parts[0] if len(parts) > 0 else ""
+            cfg_img = parts[1] if len(parts) > 1 else ""
+            lbl_digest = parts[2] if len(parts) > 2 else ""
+
+            if lbl_digest and validate_digest(lbl_digest):
+                active_digest = lbl_digest
+            elif "@sha256:" in cfg_img:
+                active_digest = "sha256:" + cfg_img.split("@sha256:")[1].strip()
+            elif validate_digest(img_id):
+                active_digest = img_id
+
+            pinned_image = cfg_img or img_id
+    else:
+        # Aucun conteneur client actif, inspecte les images orso locales avec digest
+        img_cmd = "docker images --digests --format '{{.Repository}}:{{.Tag}}@{{.Digest}} | {{.ID}}'"
+        rc_img, stdout_img, _ = run_remote_or_local_cmd(img_cmd, ssh_target)
+        if rc_img == 0 and stdout_img:
+            for line in stdout_img.splitlines():
+                if "orso" in line.lower() and "@sha256:" in line:
+                    ref, _, _ = line.partition(" | ")
+                    active_digest = "sha256:" + ref.split("@sha256:")[1].strip()
+                    pinned_image = ref.strip()
+                    break
+
+    return {
+        "host_id": host_id,
+        "host_name": host_name,
+        "active_digest": active_digest,
+        "pinned_image": pinned_image,
+        "running_containers": running_containers,
+        "is_reachable": True,
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Orso Engine Image Distribution Manager")
+    parser.add_argument("--target-digest", default=os.environ.get("ORSO_TARGET_ENGINE_DIGEST", "sha256:d8a5f82c448bb95b28a9b49b43e8b0b8c6e07eb4838a1f2987a123456789abcd"))
+    parser.add_argument("--registry-base", default="ghcr.io/tquinzain59/orso-engine")
+
+    sub = parser.add_subparsers(dest="command")
+    sub.add_parser("probe", help="Sonde l'état réel des démons Docker de tous les hôtes")
+    sub.add_parser("audit", help="Exécute un audit de dérive en direct")
+
+    up_parser = sub.add_parser("update", help="Exécute une mise à jour sur un hôte")
+    up_parser.add_argument("--host-id", required=True)
+    up_parser.add_argument("--new-digest", required=True)
+    up_parser.add_argument("--container", default="orso_client_demo")
+
+    rb_parser = sub.add_parser("rollback", help="Exécute un rollback sur un hôte")
+    rb_parser.add_argument("--host-id", required=True)
+    rb_parser.add_argument("--rollback-digest", required=True)
+    rb_parser.add_argument("--container", default="orso_client_demo")
+
+    args = parser.parse_args()
+
+    mgr = EngineDistributionManager(target_digest=args.target_digest, registry_base=args.registry_base)
+
+    if args.command == "probe":
+        print("\n=== Sonde en Direct des Hôtes de Déploiement ===")
+        for h in DEFAULT_HOSTS:
+            state = probe_docker_host(h)
+            print(f"[{state['host_id']}] {state['host_name']}")
+            print(f"  Accessible        : {state['is_reachable']}")
+            print(f"  Digest Actif      : {state.get('active_digest') or 'Aucun conteneur actif'}")
+            print(f"  Image Épinglée    : {state.get('pinned_image') or 'N/A'}")
+            print(f"  Conteneurs        : {', '.join(state.get('running_containers', [])) or 'Aucun'}")
+        print("================================================\n")
+
+    elif args.command == "audit":
+        report = mgr.audit_hosts_drift_live()
+        print(json.dumps(asdict(report), indent=2))
+        sys.exit(1 if report.is_drift_detected else 0)
+
+    elif args.command == "update":
+        target_host = next((h for h in DEFAULT_HOSTS if h["host_id"] == args.host_id), None)
+        if not target_host:
+            print(f"Hôte inconnu : {args.host_id}")
+            sys.exit(1)
+        res = mgr.execute_live_host_update(target_host, new_digest=args.new_digest, container_name=args.container)
+        print(json.dumps(res, indent=2))
+        sys.exit(0 if res.get("success") else 1)
+
+    elif args.command == "rollback":
+        target_host = next((h for h in DEFAULT_HOSTS if h["host_id"] == args.host_id), None)
+        if not target_host:
+            print(f"Hôte inconnu : {args.host_id}")
+            sys.exit(1)
+        res = mgr.execute_live_host_rollback(target_host, rollback_digest=args.rollback_digest, container_name=args.container)
+        print(json.dumps(res, indent=2))
+        sys.exit(0 if res.get("success") else 1)
+
+    else:
+        print("Moteur Orso épinglé :", mgr.get_target_pinned_image(human_tag="v1.0.0"))
+
+
 if __name__ == "__main__":
-    # Test d'auto-diagnostic CLI
-    ref_digest = "sha256:d8a5f82c448bb95b28a9b49b43e8b0b8c6e07eb4838a1f2987a123456789abcd"
-    mgr = EngineDistributionManager(target_digest=ref_digest)
-    print("Moteur Orso épinglé :", mgr.get_target_pinned_image(human_tag="v1.0.0"))
+    main()

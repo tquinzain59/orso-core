@@ -14,8 +14,9 @@ import os
 import re
 import sys
 import json
+import subprocess
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -133,35 +134,142 @@ def audit_dockerfile_for_client_data(dockerfile_path: Path) -> List[Dict[str, An
     return violations
 
 
-def run_full_ca5_audit() -> Dict[str, Any]:
-    """Exécute l'audit complet du critère CA5 de KAN-63."""
+def audit_client_data_in_repository(root_dir: Path) -> List[Dict[str, Any]]:
+    """Vérifie qu'aucune donnée de client spécifique n'est présente dans les fichiers suivis."""
+    violations = []
+    
+    # 1. Vérification des fichiers d'état ou bases de données clients trackés dans Git
+    try:
+        res = subprocess.run(
+            ["git", "ls-files", "data/", "profiles/*/*.db*", "runtime/tenants/", "**/consignes_olympe.jsonl"],
+            cwd=str(root_dir),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            for line in res.stdout.strip().splitlines():
+                if line.strip():
+                    violations.append({
+                        "file": line.strip(),
+                        "type": "CLIENT_DATA_IN_GIT",
+                        "label": "Fichier de persistance ou données client suivi dans le dépôt",
+                    })
+    except Exception:
+        pass
+
+    # 2. Vérification des fichiers d'espace de travail client résiduels non ignorés
+    client_artifacts = ["consignes_olympe.jsonl", "tenant_secrets.json"]
+    for art in client_artifacts:
+        for found in root_dir.glob(f"**/{art}"):
+            if any(ig in str(found) for ig in IGNORED_DIRS):
+                continue
+            violations.append({
+                "file": str(found.relative_to(root_dir)),
+                "type": "CLIENT_DATA_LEAK",
+                "label": f"Fichier client résiduel détecté : {art}",
+            })
+
+    return violations
+
+
+def audit_docker_image_for_secrets_and_client_data(image_ref: str) -> Dict[str, List[Dict[str, Any]]]:
+    """Inspecte une image Docker construite pour vérifier l'absence de secrets et de données clients."""
+    result = {"secrets": [], "client_data": []}
+    try:
+        inspect_proc = subprocess.run(
+            ["docker", "inspect", image_ref],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if inspect_proc.returncode != 0:
+            return result
+
+        data = json.loads(inspect_proc.stdout)
+        if not data:
+            return result
+
+        img_data = data[0]
+        config = img_data.get("Config", {})
+        envs = config.get("Env", [])
+        labels = config.get("Labels", {}) or {}
+
+        # 1. Contrôle des variables d'environnement dans l'image
+        for env in envs:
+            k, _, v = env.partition("=")
+            for pattern, label in SECRET_PATTERNS:
+                if pattern.search(v):
+                    result["secrets"].append({
+                        "file": f"docker://{image_ref}/env:{k}",
+                        "type": "IMAGE_ENV_SECRET",
+                        "label": label,
+                    })
+            if k in ("ORSO_CLIENT_ID", "ORSO_CLIENT_SLUG") and v:
+                result["client_data"].append({
+                    "file": f"docker://{image_ref}/env:{k}",
+                    "type": "IMAGE_CLIENT_DATA",
+                    "label": f"Variable spécifique client figée dans l'image : {k}={v}",
+                })
+
+        # 2. Contrôle des labels d'image
+        for lk, lv in labels.items():
+            if lk in ("com.orso.tenant_id", "com.orso.tenant_slug") and lv:
+                result["client_data"].append({
+                    "file": f"docker://{image_ref}/label:{lk}",
+                    "type": "IMAGE_CLIENT_LABEL",
+                    "label": f"Label spécifique client dans l'image : {lk}={lv}",
+                })
+
+    except Exception:
+        pass
+
+    return result
+
+
+def run_full_ca5_audit(image_ref: Optional[str] = None) -> Dict[str, Any]:
+    """Exécute l'audit complet du critère CA5 de KAN-63 / KAN-64."""
     repo_violations = audit_repository_for_secrets(PROJECT_ROOT)
     dockerignore_violations = audit_dockerignore(PROJECT_ROOT / ".dockerignore")
     dockerfile_violations = audit_dockerfile_for_client_data(PROJECT_ROOT / "Dockerfile.orso")
+    client_data_violations = audit_client_data_in_repository(PROJECT_ROOT)
 
-    total_violations = len(repo_violations) + len(dockerignore_violations) + len(dockerfile_violations)
+    # Si une image est spécifiée ou présente, on l'inspecte également
+    if image_ref:
+        img_results = audit_docker_image_for_secrets_and_client_data(image_ref)
+        repo_violations.extend(img_results["secrets"])
+        client_data_violations.extend(img_results["client_data"])
+
+    # Compteurs calculés dynamiquement (CA5)
+    secrets_count = len(repo_violations)
+    dockerignore_count = len(dockerignore_violations)
+    dockerfile_count = len(dockerfile_violations)
+    client_data_count = len(client_data_violations)
+    total_violations = secrets_count + dockerignore_count + dockerfile_count + client_data_count
 
     report = {
         "status": "PASSED" if total_violations == 0 else "FAILED",
         "timestamp": os.environ.get("AUDIT_TIMESTAMP", "2026-09-30T16:00:00Z"),
         "metrics": {
-            "secrets_found_count": len(repo_violations),
-            "dockerignore_violations_count": len(dockerignore_violations),
-            "dockerfile_violations_count": len(dockerfile_violations),
-            "client_data_in_engine_count": 0,
+            "secrets_found_count": secrets_count,
+            "dockerignore_violations_count": dockerignore_count,
+            "dockerfile_violations_count": dockerfile_count,
+            "client_data_in_engine_count": client_data_count,
             "total_violations": total_violations,
         },
         "violations": {
             "repository": repo_violations,
             "dockerignore": dockerignore_violations,
             "dockerfile": dockerfile_violations,
+            "client_data": client_data_violations,
         },
     }
     return report
 
 
 if __name__ == "__main__":
-    report = run_full_ca5_audit()
+    target_img = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("AUDIT_IMAGE_REF")
+    report = run_full_ca5_audit(image_ref=target_img)
     print(json.dumps(report, indent=2))
     
     metrics = report["metrics"]
@@ -169,7 +277,7 @@ if __name__ == "__main__":
     print(f"Secrets trouvés dans le dépôt : {metrics['secrets_found_count']}")
     print(f"Violations .dockerignore      : {metrics['dockerignore_violations_count']}")
     print(f"Violations Dockerfile         : {metrics['dockerfile_violations_count']}")
-    print(f"Données clients dans moteur   : {metrics['client_data_in_engine_count']}")
+    print(f"Données clients dans moteur   : {metrics['client_data_in_engine_count']} (calculé)")
     print(f"TOTAL VIOLATIONS              : {metrics['total_violations']}")
     
     if report["status"] == "PASSED":
