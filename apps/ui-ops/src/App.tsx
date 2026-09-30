@@ -7,6 +7,7 @@ import { TenantsView } from "./components/TenantsView";
 import { BillingView } from "./components/BillingView";
 import { EnvironmentsView } from "./components/EnvironmentsView";
 import { TenantDetailModal } from "./components/TenantDetailModal";
+import { AccountSecurityModal } from "./components/AccountSecurityModal";
 import { LoginView } from "./components/LoginView";
 import { Tenant, OpsStats, Invoice, AgentId, AdminUser, OVHSizingRecommendation, OVHStatusResponse } from "./types";
 import {
@@ -40,6 +41,7 @@ export const App: React.FC = () => {
   const [selectedOnboardingTenant, setSelectedOnboardingTenant] = useState<Tenant | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [isSecurityModalOpen, setIsSecurityModalOpen] = useState<boolean>(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -190,6 +192,7 @@ export const App: React.FC = () => {
         pendingOnboardingCount={pendingOnboardingCount}
         adminUser={adminUser}
         onLogout={handleLogout}
+        onOpenSecurity={() => setIsSecurityModalOpen(true)}
       />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -267,6 +270,17 @@ export const App: React.FC = () => {
         tenant={selectedOnboardingTenant}
         onClose={() => setSelectedOnboardingTenant(null)}
         onProvision={handleProvisionTenant}
+      />
+
+      {/* Modal Sécurité du Compte & Changement de Mot de Passe (KAN-50) */}
+      <AccountSecurityModal
+        isOpen={isSecurityModalOpen}
+        onClose={() => setIsSecurityModalOpen(false)}
+        adminUser={adminUser}
+        onPasswordChangedSuccessfully={() => {
+          setIsSecurityModalOpen(false);
+          handleLogout();
+        }}
       />
 
       <footer className="border-t border-slate-900 py-6 text-center text-xs text-slate-500">

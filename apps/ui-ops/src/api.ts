@@ -13,6 +13,8 @@ import {
   TelemetryAlert,
   OVHSizingRecommendation,
   OVHStatusResponse,
+  ChangePasswordPayload,
+  AuthAuditEvent,
 } from "./types";
 
 const TOKEN_KEY = "orso_ops_auth_token";
@@ -404,6 +406,34 @@ export async function requestOVHCredential(): Promise<{
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: "Erreur serveur" }));
     throw new Error(err.detail || `Échec de la demande de Consumer Key (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function changeSuperadminPassword(payload: ChangePasswordPayload): Promise<{
+  success: boolean;
+  message: string;
+  invalidated: boolean;
+}> {
+  const res = await fetch(`${getBaseUrl()}/api/olympe/ops/auth/change-password`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Erreur lors du changement de mot de passe" }));
+    throw new Error(err.detail || `Échec du changement de mot de passe (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function fetchAuthAuditLog(): Promise<{ events: AuthAuditEvent[] }> {
+  const res = await fetch(`${getBaseUrl()}/api/olympe/ops/auth/audit-log`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Erreur récupération journal d'audit" }));
+    throw new Error(err.detail || `Échec récupération journal d'audit (${res.status})`);
   }
   return res.json();
 }

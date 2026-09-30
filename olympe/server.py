@@ -10,9 +10,10 @@ import logging
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -25,6 +26,9 @@ from olympe.auth import (
     verify_stripe_signature,
     revoke_token,
     is_mock_auth_enabled,
+    security_bearer,
+    change_superadmin_password,
+    get_auth_audit_events,
 )
 from olympe.lifecycle_manager import DockerLifecycleManager
 from olympe.ops_manager import OpsManager
@@ -86,6 +90,12 @@ class UpdateSubscriptionRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: str = Field(..., description="Adresse email superadmin")
     password: str = Field(..., description="Mot de passe superadmin")
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., description="Ancien mot de passe actuel")
+    new_password: str = Field(..., description="Nouveau mot de passe conforme")
+    confirm_password: str = Field(..., description="Confirmation du nouveau mot de passe")
 
 
 class CreateUserRequest(BaseModel):
@@ -239,10 +249,51 @@ async def ops_me(admin: Dict[str, Any] = Depends(require_superadmin)):
 
 
 @app.post("/api/olympe/ops/auth/logout")
-async def ops_logout():
-    """Déconnexion de session superadmin."""
+async def ops_logout(
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(security_bearer),
+):
+    """Déconnexion de session superadmin avec révocation immédiate du token (CA6)."""
+    if credentials and credentials.credentials:
+        revoke_token(credentials.credentials)
     clear_token_cache()
     return {"success": True, "message": "Déconnexion réussie."}
+
+
+@app.post("/api/olympe/ops/auth/change-password")
+async def ops_change_password(
+    req: ChangePasswordRequest,
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Security(security_bearer),
+    admin: Dict[str, Any] = Depends(require_superadmin),
+):
+    """Permet au superadmin connecté de modifier son mot de passe en libre-service (KAN-50)."""
+    if req.new_password != req.confirm_password:
+        raise HTTPException(
+            status_code=400,
+            detail="Le nouveau mot de passe et sa confirmation ne correspondent pas.",
+        )
+
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        client_ip = forwarded_for.split(",")[0].strip()
+
+    current_token = credentials.credentials if credentials else None
+
+    return change_superadmin_password(
+        user_id=admin.get("id"),
+        email=admin.get("email"),
+        current_password=req.current_password,
+        new_password=req.new_password,
+        current_token=current_token,
+        client_ip=client_ip,
+    )
+
+
+@app.get("/api/olympe/ops/auth/audit-log")
+async def ops_auth_audit_log(admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Consulte le journal d'audit des modifications de mot de passe (KAN-50 - CA9)."""
+    return {"events": get_auth_audit_events(limit=50)}
 
 
 # ── Endpoints Cockpit Orso Ops & Facturation (Protégés Superadmin & Drone RBAC) ─

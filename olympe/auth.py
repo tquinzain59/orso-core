@@ -5,15 +5,18 @@ garantissant que seuls les utilisateurs dotés du rôle 'superadmin' peuvent
 accéder au Cockpit Orso Ops (ops.orso-agents.fr) et à ses APIs.
 """
 
+import datetime
 import hashlib
 import hmac
 import json
 import logging
 import os
+import re
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Dict, Optional, Set
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set, Tuple
 from fastapi import HTTPException, Request, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -23,6 +26,12 @@ security_bearer = HTTPBearer(auto_error=False)
 # Token et mot de passe factices pour les tests locaux automatisés
 MOCK_SUPERADMIN_TOKEN = "mock-superadmin-session-token-9230"
 MOCK_SUPERADMIN_PASSWORD = os.environ.get("ORSO_MOCK_SUPERADMIN_PASSWORD", "OrsoTestSuperadmin2026!")
+
+# Registre dynamique des mots de passe mis à jour en mode test/mock
+_MOCK_PASSWORD_OVERRIDE: Dict[str, str] = {}
+
+# Registre mémoire anti-bruteforce / rate limiting (horodatages des échecs récents)
+_FAILED_ATTEMPTS: Dict[str, List[float]] = {}
 
 # Token dédié et identité machine pour le drone de test (Client-X-Orso)
 MOCK_DRONE_TOKEN = "mock-drone-token-clientx-9230"
@@ -57,6 +66,11 @@ def revoke_token(token: str) -> None:
 def is_token_revoked(token: str) -> bool:
     """Vérifie si un jeton a été révoqué."""
     return token in _REVOKED_TOKENS
+
+
+def clear_revoked_tokens() -> None:
+    """Vide le registre des tokens révoqués (utile lors des tests unitaires)."""
+    _REVOKED_TOKENS.clear()
 
 
 def is_mock_auth_enabled() -> bool:
@@ -114,9 +128,12 @@ def authenticate_superadmin(
     # 0. Habilitation Superadmin directe uniquement si le mode mock est explicitement activé (interdit en prod)
     if is_mock_auth_enabled():
         mock_allowed_emails = {"admin@orso-agents.fr", "tquinzain@gmail.com"}
-        if email in mock_allowed_emails and password == MOCK_SUPERADMIN_PASSWORD:
+        expected_mock_pwd = _MOCK_PASSWORD_OVERRIDE.get(email, MOCK_SUPERADMIN_PASSWORD)
+        if email in mock_allowed_emails and password == expected_mock_pwd:
+            import secrets
+            unique_token = f"{MOCK_SUPERADMIN_TOKEN}-{secrets.token_hex(4)}"
             return {
-                "token": MOCK_SUPERADMIN_TOKEN,
+                "token": unique_token,
                 "refresh_token": "mock-refresh",
                 "expires_in": 3600,
                 "user": {
@@ -194,7 +211,7 @@ def verify_ops_token(
         raise HTTPException(status_code=401, detail="Jeton d'authentification révoqué.")
 
     # En mode réel / production, les jetons mocks statiques sont formellement interdits
-    if token in (MOCK_SUPERADMIN_TOKEN, MOCK_DRONE_TOKEN) and not is_mock_auth_enabled():
+    if (token.startswith(MOCK_SUPERADMIN_TOKEN) or token == MOCK_DRONE_TOKEN) and not is_mock_auth_enabled():
         raise HTTPException(status_code=401, detail="Jeton de session non autorisé.")
 
     now = time.time()
@@ -208,7 +225,7 @@ def verify_ops_token(
 
     # 2. Mode mock autorisé (tests unitaires ou dev local)
     if is_mock_auth_enabled():
-        if token == MOCK_SUPERADMIN_TOKEN:
+        if token.startswith(MOCK_SUPERADMIN_TOKEN):
             admin_mock = {
                 "id": "mock-admin-id-001",
                 "actor": "admin@orso-agents.fr",
@@ -400,3 +417,238 @@ def verify_stripe_signature(payload_bytes: bytes, sig_header: str, secret: str, 
     except Exception as e:
         _log.error("Erreur vérification signature Stripe : %s", e)
         return False
+
+
+# ── Gestion Sécurité Mot de Passe & Audit IAM Superadmin (KAN-50) ────────────
+
+def check_rate_limit(key: str, max_attempts: int = 5, window_seconds: float = 900.0) -> None:
+    """Vérifie le rate-limiting anti-bruteforce (CA7).
+
+    Lève HTTPException(429) si le nombre d'échecs consécutifs atteint max_attempts
+    sur une fenêtre glissante de window_seconds (par défaut 15 minutes).
+    """
+    now = time.time()
+    attempts = _FAILED_ATTEMPTS.get(key, [])
+    recent = [t for t in attempts if now - t < window_seconds]
+    _FAILED_ATTEMPTS[key] = recent
+    if len(recent) >= max_attempts:
+        retry_after = int(window_seconds - (now - recent[0])) if recent else int(window_seconds)
+        mins = max(1, (retry_after + 59) // 60)
+        _log.warning("[SECURITY] Rate limit atteint pour %s (%d tentatives). Verrouillage %d min.", key, len(recent), mins)
+        raise HTTPException(
+            status_code=429,
+            detail=f"Trop de tentatives consécutives échouées. Compte temporairement verrouillé, réessayez dans {mins} minute(s).",
+        )
+
+
+def record_failed_attempt(key: str) -> None:
+    """Enregistre un échec d'authentification pour le rate limiting (CA7)."""
+    now = time.time()
+    if key not in _FAILED_ATTEMPTS:
+        _FAILED_ATTEMPTS[key] = []
+    _FAILED_ATTEMPTS[key].append(now)
+
+
+def clear_failed_attempts(key: str) -> None:
+    """Réinitialise les tentatives échouées après un succès."""
+    _FAILED_ATTEMPTS.pop(key, None)
+
+
+def validate_password_policy(new_password: str, current_password: Optional[str] = None) -> Tuple[bool, str]:
+    """Valide les critères stricts de sécurité du mot de passe (CA4)."""
+    if len(new_password) < 12:
+        return False, "Le nouveau mot de passe doit comporter au moins 12 caractères."
+    if not re.search(r"[A-Z]", new_password):
+        return False, "Le nouveau mot de passe doit contenir au moins une lettre majuscule."
+    if not re.search(r"[a-z]", new_password):
+        return False, "Le nouveau mot de passe doit contenir au moins une lettre minuscule."
+    if not re.search(r"[0-9]", new_password):
+        return False, "Le nouveau mot de passe doit contenir au moins un chiffre."
+    if not re.search(r"[!@#$%^&*()_\-+=\[\]{}<>?,.:;~]", new_password):
+        return False, "Le nouveau mot de passe doit contenir au moins un caractère spécial (!@#$%^&*...)."
+    if current_password and new_password == current_password:
+        return False, "Le nouveau mot de passe doit être différent de l'ancien mot de passe."
+
+    trivial_patterns = [
+        r"^admin",
+        r"^password",
+        r"^azerty",
+        r"^qwerty",
+        r"^orso",
+        r"^olympe",
+        r"123456",
+    ]
+    for pat in trivial_patterns:
+        if re.search(pat, new_password, re.IGNORECASE):
+            return False, "Le mot de passe ne doit pas contenir de termes ou séquences prévisibles (ex: admin, orso, 123456)."
+
+    return True, "OK"
+
+
+def append_auth_audit_event(
+    action: str,
+    account: str,
+    ip: str,
+    result: str,
+    reason: Optional[str] = None,
+) -> None:
+    """Consigne un événement dans le journal d'audit sans aucun secret (CA9)."""
+    try:
+        from hermes_constants import get_hermes_home
+        audit_file = get_hermes_home() / "ops_auth_audit.json"
+    except Exception:
+        home_env = os.environ.get("HERMES_HOME")
+        audit_file = (Path(home_env) if home_env else Path.home() / ".hermes") / "ops_auth_audit.json"
+
+    try:
+        audit_file.parent.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "action": action,
+            "account": account,
+            "ip": ip,
+            "result": result,
+            "reason": reason,
+        }
+        entries = []
+        if audit_file.is_file():
+            try:
+                with open(audit_file, "r", encoding="utf-8") as f:
+                    entries = json.load(f)
+                    if not isinstance(entries, list):
+                        entries = []
+            except Exception:
+                entries = []
+        entries.append(entry)
+        if len(entries) > 200:
+            entries = entries[-200:]
+        with open(audit_file, "w", encoding="utf-8") as f:
+            json.dump(entries, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        _log.warning("Erreur lors de l'écriture du journal d'audit auth : %s", e)
+
+
+def get_auth_audit_events(limit: int = 50) -> List[Dict[str, Any]]:
+    """Retourne la liste des événements d'audit récents sans secrets (CA9)."""
+    try:
+        from hermes_constants import get_hermes_home
+        audit_file = get_hermes_home() / "ops_auth_audit.json"
+    except Exception:
+        home_env = os.environ.get("HERMES_HOME")
+        audit_file = (Path(home_env) if home_env else Path.home() / ".hermes") / "ops_auth_audit.json"
+
+    if not audit_file.is_file():
+        return []
+
+    try:
+        with open(audit_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, list):
+                # Plus récents en premier
+                return list(reversed(data))[:limit]
+    except Exception as e:
+        _log.warning("Erreur lecture journal audit : %s", e)
+    return []
+
+
+def change_superadmin_password(
+    user_id: str,
+    email: str,
+    current_password: str,
+    new_password: str,
+    current_token: Optional[str] = None,
+    client_ip: str = "127.0.0.1",
+    supabase_url: Optional[str] = None,
+    service_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Change le mot de passe du superadmin avec vérification stricte (CA3-CA7, CA9)."""
+    # 1. Vérification anti-bruteforce (CA7)
+    check_rate_limit(client_ip)
+    check_rate_limit(email)
+
+    # 2. Validation de la complexité du nouveau mot de passe (CA4)
+    valid, msg = validate_password_policy(new_password, current_password=current_password)
+    if not valid:
+        append_auth_audit_event("password_change", email, client_ip, "failure", reason=msg)
+        raise HTTPException(status_code=400, detail=msg)
+
+    # 3. Vérification de l'ancien mot de passe (CA3)
+    url, key = _get_supabase_config(supabase_url, service_key)
+
+    if is_mock_auth_enabled():
+        expected_pwd = _MOCK_PASSWORD_OVERRIDE.get(email, MOCK_SUPERADMIN_PASSWORD)
+        if current_password != expected_pwd:
+            record_failed_attempt(client_ip)
+            record_failed_attempt(email)
+            append_auth_audit_event("password_change", email, client_ip, "failure", reason="invalid_current_password")
+            raise HTTPException(status_code=400, detail="L'ancien mot de passe est incorrect.")
+        _MOCK_PASSWORD_OVERRIDE[email] = new_password
+    else:
+        if not url or not key:
+            raise HTTPException(status_code=502, detail="Configuration Supabase Auth manquante.")
+
+        # Vérification auprès de Supabase Auth
+        token_url = f"{url}/auth/v1/token?grant_type=password"
+        auth_req = urllib.request.Request(
+            token_url,
+            data=json.dumps({"email": email, "password": current_password}).encode("utf-8"),
+            headers={"apikey": key, "Content-Type": "application/json", "User-Agent": "OrsoOlympeOps/1.0"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(auth_req, timeout=8.0) as resp:
+                token_data = json.loads(resp.read().decode("utf-8"))
+                if not token_data.get("access_token"):
+                    raise ValueError("Pas de jeton retourné")
+        except urllib.error.HTTPError:
+            record_failed_attempt(client_ip)
+            record_failed_attempt(email)
+            append_auth_audit_event("password_change", email, client_ip, "failure", reason="invalid_current_password")
+            raise HTTPException(status_code=400, detail="L'ancien mot de passe est incorrect.")
+        except Exception as e:
+            _log.error("Erreur validation mot de passe actuel : %s", e)
+            record_failed_attempt(client_ip)
+            record_failed_attempt(email)
+            append_auth_audit_event("password_change", email, client_ip, "failure", reason=f"auth_error: {e}")
+            raise HTTPException(status_code=400, detail="L'ancien mot de passe est incorrect ou rejeté par Supabase.")
+
+        # 4. Mise à jour dans Supabase Auth (CA5 - 100% hashé, 0ms de redémarrage)
+        update_url = f"{url}/auth/v1/admin/users/{user_id}"
+        update_headers = {
+            "apikey": key,
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "User-Agent": "OrsoOlympeOps/1.0",
+        }
+        update_req = urllib.request.Request(
+            update_url,
+            data=json.dumps({"password": new_password}).encode("utf-8"),
+            headers=update_headers,
+            method="PUT",
+        )
+        try:
+            with urllib.request.urlopen(update_req, timeout=8.0) as resp:
+                _ = json.loads(resp.read().decode("utf-8"))
+        except Exception as e:
+            _log.error("Erreur mise à jour mot de passe Supabase : %s", e)
+            append_auth_audit_event("password_change", email, client_ip, "failure", reason=f"update_failed: {e}")
+            raise HTTPException(status_code=500, detail="Erreur lors de la mise à jour du mot de passe dans Supabase.")
+
+    # 5. Invalidation de session (CA6)
+    if current_token:
+        revoke_token(current_token)
+    clear_token_cache()
+
+    # 6. Réinitialisation des compteurs d'échec
+    clear_failed_attempts(client_ip)
+    clear_failed_attempts(email)
+
+    # 7. Audit log succès (CA9)
+    append_auth_audit_event("password_change", email, client_ip, "success")
+
+    return {
+        "success": True,
+        "message": "Mot de passe modifié avec succès. Votre session a été invalidée, veuillez vous reconnecter.",
+        "invalidated": True,
+    }
+

@@ -19,6 +19,9 @@ mkdir -p /app/data/hermes_home \
 if [ "$(id -u)" = "0" ]; then
     chown -R orso:orso /app/data /app/config 2>/dev/null || true
     chmod -R 775 /app/data 2>/dev/null || true
+    if [ -d "/app/profiles" ]; then
+        chmod -R a+rX /app/profiles 2>/dev/null || true
+    fi
 fi
 
 # 2. Vérification et initialisation de la configuration par défaut
@@ -58,8 +61,12 @@ export HERMES_CONFIG_PATH="${HERMES_CONFIG_PATH:-/app/config/hermes.yaml}"
 
 # Liaison des profils pour la découverte multi-profils Hermès
 mkdir -p /home/orso/.hermes /app/data/hermes_home
-if [ ! -d /app/data/hermes_home/profiles ] && [ -d /app/profiles ]; then
-    ln -sfn /app/profiles /app/data/hermes_home/profiles
+if [ -d /app/profiles ]; then
+    # Si /app/data/hermes_home/profiles n'existe pas, n'est pas un symlink, ou est un dossier vide
+    if [ ! -e /app/data/hermes_home/profiles ] || [ ! -L /app/data/hermes_home/profiles -a -z "$(ls -A /app/data/hermes_home/profiles 2>/dev/null)" ]; then
+        rm -rf /app/data/hermes_home/profiles
+        ln -sfn /app/profiles /app/data/hermes_home/profiles
+    fi
 fi
 if [ ! -e /home/orso/.hermes/profiles ]; then
     ln -sfn /app/data/hermes_home/profiles /home/orso/.hermes/profiles 2>/dev/null || ln -sfn /app/profiles /home/orso/.hermes/profiles

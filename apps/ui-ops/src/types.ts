@@ -254,4 +254,19 @@ export interface OVHStatusResponse {
   expiration?: string | null;
 }
 
+export interface ChangePasswordPayload {
+  current_password: string;
+  new_password: string;
+  confirm_password: string;
+}
+
+export interface AuthAuditEvent {
+  timestamp: string;
+  action: string;
+  account: string;
+  ip: string;
+  result: "success" | "failure" | string;
+  reason?: string | null;
+}
+
 

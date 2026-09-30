@@ -1147,7 +1147,9 @@ def _remove_channel_user(
 
 def _find_profile_dir(agent_id: str) -> Optional[Path]:
     """Localise le dossier du profil de l'agent dans les emplacements possibles."""
+    from hermes_constants import get_hermes_home
     candidates = [
+        get_hermes_home() / "profiles" / agent_id,
         PROJECT_ROOT / "profiles" / agent_id,
         Path("/app/profiles") / agent_id,
         Path.home() / ".hermes" / "profiles" / agent_id,

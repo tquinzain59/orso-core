@@ -1,5 +1,5 @@
 import React from "react";
-import { LayoutDashboard, Users, CreditCard, RefreshCw, ShieldCheck, LogOut, User, Activity, Sparkles } from "lucide-react";
+import { LayoutDashboard, Users, CreditCard, RefreshCw, ShieldCheck, LogOut, User, Activity, Sparkles, KeyRound } from "lucide-react";
 import { AdminUser } from "../types";
 
 interface NavbarProps {
@@ -11,6 +11,7 @@ interface NavbarProps {
   pendingOnboardingCount?: number;
   adminUser?: AdminUser | null;
   onLogout?: () => void;
+  onOpenSecurity?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -22,6 +23,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   pendingOnboardingCount = 0,
   adminUser,
   onLogout,
+  onOpenSecurity,
 }) => {
   return (
     <header className="sticky top-0 z-40 bg-slate-900/80 backdrop-blur-md border-b border-slate-800">
@@ -145,6 +147,15 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <div className="w-8 h-8 rounded-full bg-sky-500/20 border border-sky-500/30 flex items-center justify-center text-sky-400 font-bold text-xs">
                   <User className="w-4 h-4" />
                 </div>
+                {onOpenSecurity && (
+                  <button
+                    onClick={onOpenSecurity}
+                    className="p-2 rounded-lg text-slate-400 hover:text-sky-400 hover:bg-sky-500/10 border border-transparent hover:border-sky-500/20 transition-all cursor-pointer"
+                    title="Sécurité du compte & mot de passe"
+                  >
+                    <KeyRound className="w-4 h-4" />
+                  </button>
+                )}
                 {onLogout && (
                   <button
                     onClick={onLogout}
