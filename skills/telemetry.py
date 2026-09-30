@@ -59,6 +59,44 @@ def resoudre_chemin_export(custom_export: Optional[str] = None) -> str:
     return "./data/telemetry_export.json"
 
 
+def _extract_persona_integrity(effective_export: str, now: float) -> Dict[str, Any]:
+    """Extrait les métriques et incidents d'intégrité des personas depuis les journaux JSONL."""
+    persona_integrity_info = {
+        "status": "healthy",
+        "last_verified": now,
+        "events_count": 0,
+        "recent_incidents": [],
+    }
+    jsonl_candidates = [
+        os.path.join(os.path.dirname(effective_export), "telemetry", "personas_integrity.jsonl"),
+        os.path.join(os.path.dirname(effective_export), "personas_integrity.jsonl"),
+        "/app/data/telemetry/personas_integrity.jsonl",
+        "./data/telemetry/personas_integrity.jsonl",
+    ]
+    env_t_dir = os.environ.get("TELEMETRY_DIR")
+    if env_t_dir:
+        jsonl_candidates.insert(0, os.path.join(env_t_dir, "personas_integrity.jsonl"))
+
+    for jf in jsonl_candidates:
+        if os.path.exists(jf):
+            try:
+                with open(jf, "r", encoding="utf-8") as f_j:
+                    lines = [line.strip() for line in f_j if line.strip()]
+                persona_integrity_info["events_count"] = len(lines)
+                incidents = []
+                for line in lines[-20:]:
+                    p_entry = json.loads(line)
+                    if p_entry.get("status") in {"compromised", "failed", "hmac_failed"}:
+                        incidents.append(p_entry)
+                if incidents:
+                    persona_integrity_info["status"] = "compromised"
+                    persona_integrity_info["recent_incidents"] = incidents
+                break
+            except Exception:
+                pass
+    return persona_integrity_info
+
+
 def export_telemetry(
     db_path: Optional[str] = None,
     export_path: Optional[str] = None,
@@ -88,12 +126,7 @@ def export_telemetry(
                 "api_calls": 0,
                 "cost_usd": 0.0,
             },
-            "persona_integrity": {
-                "status": "healthy",
-                "last_verified": now,
-                "events_count": 0,
-                "recent_incidents": [],
-            },
+            "persona_integrity": _extract_persona_integrity(effective_export, now),
             "errors": [],
             "status": "idle",
         }
