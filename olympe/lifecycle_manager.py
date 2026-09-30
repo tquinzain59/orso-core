@@ -241,6 +241,7 @@ class DockerLifecycleManager:
         tenant_id: str,
         tenant_slug: str,
         image_name: str = "orso-backend:latest",
+        image_digest: Optional[str] = None,
         env_vars: Optional[Dict[str, str]] = None,
         quotas: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
@@ -262,6 +263,13 @@ class DockerLifecycleManager:
 
         default_image = os.environ.get("ORSO_BACKEND_IMAGE", "orso-core-orso-backend:latest")
         target_image = default_image if (not image_name or image_name == "orso-backend:latest") else image_name
+
+        # Support de l'épinglage cryptographique par Digest SHA-256 (KAN-63)
+        effective_digest = (image_digest or os.environ.get("ORSO_BACKEND_IMAGE_DIGEST", "")).strip()
+        if effective_digest:
+            if "@sha256:" not in target_image:
+                base_repo = target_image.split(":")[0]
+                target_image = f"{base_repo}@{effective_digest}"
 
         base_envs = {
             "ORSO_CLIENT_ID": tenant_id,
@@ -288,6 +296,8 @@ class DockerLifecycleManager:
                 "container_name": container_name,
                 "status": "ready",
                 "simulated": True,
+                "image": target_image,
+                "digest": effective_digest or None,
                 "quotas": quotas or {},
                 "message": "Provisioning simulé avec succès.",
             }
@@ -306,6 +316,8 @@ class DockerLifecycleManager:
             "--label", f"com.orso.tenant_slug={tenant_slug}",
             "--label", "com.orso.role=client_backend",
             "--label", f"com.orso.created_at={now_iso}",
+            "--label", f"com.orso.engine.image={target_image}",
+            *(["--label", f"com.orso.engine.digest={effective_digest}", "--label", "com.orso.engine.pinned=true"] if effective_digest else []),
             "-v", f"{tenant_data_dir}:/app/data",
         ]
 
@@ -366,6 +378,8 @@ class DockerLifecycleManager:
             "tenant_slug": tenant_slug,
             "container_name": container_name,
             "status": "ready",
+            "image": target_image,
+            "digest": effective_digest or None,
             "quotas": effective_quotas,
             "data_directory": str(tenant_data_dir),
             "message": f"Conteneur {container_name} provisionné et démarré avec succès.",
