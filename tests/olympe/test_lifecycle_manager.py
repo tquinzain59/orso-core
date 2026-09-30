@@ -138,9 +138,19 @@ def test_provision_tenant(tmp_path):
         mock_run_proc = subprocess.CompletedProcess(args=["docker", "run"], returncode=0, stdout="c12345", stderr="")
         with patch.object(manager, "_exec_docker", return_value=mock_run_proc) as mock_exec:
             with patch.object(manager, "_sync_tenant_instance_record"):
+                # 1. Sans digest et sans allow_floating_tag : refus inconditionnel
+                res_refused = manager.provision_tenant(
+                    tenant_id="test-uuid",
+                    tenant_slug="nouveau-client-refuse",
+                )
+                assert res_refused["success"] is False
+                assert res_refused["error"] == "ERR_DIGEST_REQUIRED"
+
+                # 2. Avec digest valide : succès
                 res = manager.provision_tenant(
                     tenant_id="test-uuid",
                     tenant_slug="nouveau-client",
+                    image_digest="sha256:d8a5f82c448bb95b28a9b49b43e8b0b8c6e07eb4838a1f2987a123456789abcd",
                 )
                 assert res["success"] is True
                 assert res["container_name"] == "orso_client_nouveau_client"

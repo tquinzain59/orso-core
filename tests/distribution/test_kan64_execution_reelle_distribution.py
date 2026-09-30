@@ -48,12 +48,11 @@ class TestKAN64ExecutionReelleDistribution:
         status_not_found = {"status": "not_found", "running": False}
 
         with patch.object(mgr, "get_tenant_status", return_value=status_not_found):
-            # 1. Tentative sans aucun digest quand require_digest=True -> Refus ERR_DIGEST_REQUIRED
+            # 1. Tentative sans aucun digest par défaut -> Refus inconditionnel ERR_DIGEST_REQUIRED
             res_no_digest = mgr.provision_tenant(
                 tenant_id="test-client-1",
                 tenant_slug="client-no-digest",
                 image_name="ghcr.io/tquinzain59/orso-engine:latest",
-                require_digest=True,
             )
             assert res_no_digest["success"] is False
             assert res_no_digest["error"] == "ERR_DIGEST_REQUIRED"

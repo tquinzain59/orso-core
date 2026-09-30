@@ -246,6 +246,7 @@ class DockerLifecycleManager:
         env_vars: Optional[Dict[str, str]] = None,
         quotas: Optional[Dict[str, Any]] = None,
         require_digest: Optional[bool] = None,
+        allow_floating_tag: bool = False,
     ) -> Dict[str, Any]:
         """Provisionne un nouvel environnement client hermétique."""
         container_name = normalize_container_name(tenant_slug)
@@ -274,11 +275,12 @@ class DockerLifecycleManager:
             or os.environ.get("ORSO_BACKEND_IMAGE_DIGEST", "")
         ).strip()
 
-        # Détection si require_digest est imposé (paramètre ou variable ORSO_REQUIRE_DIGEST)
-        is_digest_enforced = (
-            require_digest
-            if require_digest is not None
-            else os.environ.get("ORSO_REQUIRE_DIGEST", "false").lower() in ("true", "1", "yes")
+        # Règle d'or KAN-64 : Le refus du provisioning sans digest valide est INCONDITIONNEL par défaut.
+        # Seul un paramètre explicite allow_floating_tag=True peut lever ce refus pour des tests locaux.
+        allow_floating = (
+            allow_floating_tag
+            if allow_floating_tag is not None
+            else os.environ.get("ORSO_ALLOW_FLOATING_TAG", "false").lower() in ("true", "1", "yes")
         )
 
         has_embedded_digest = "@sha256:" in target_image
@@ -296,15 +298,15 @@ class DockerLifecycleManager:
             if not has_embedded_digest:
                 base_repo = target_image.split(":")[0]
                 target_image = f"{base_repo}@{effective_digest}"
-        elif is_digest_enforced:
-            # CA6 : Refus formel si aucun digest valide n'est fourni et que l'obligation est active
+        elif not allow_floating:
+            # CA6 : Refus formel et inconditionnel
             return {
                 "success": False,
                 "error": "ERR_DIGEST_REQUIRED",
                 "tenant_slug": tenant_slug,
                 "message": (
-                    "Provisioning refusé : une image épinglée par un digest SHA-256 valide est requise "
-                    "(tag flottant interdit). Spécifiez 'image_digest' ou 'ORSO_TARGET_ENGINE_DIGEST'."
+                    "Provisioning refusé : une image épinglée par un digest SHA-256 valide est strictement requise "
+                    "(tag flottant interdit). Spécifiez 'image_digest' ou la variable ORSO_TARGET_ENGINE_DIGEST."
                 ),
             }
 
