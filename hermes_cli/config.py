@@ -597,6 +597,11 @@ def _secure_file(path):
 def _ensure_default_soul_md(home: Path) -> None:
     """Seed DEFAULT_SOUL_MD on first run; upgrade a legacy comment-only scaffold in place.
     A SOUL.md the user actually customized is never touched."""
+    if os.environ.get("ORSO_PERSONA_HMAC_KEY") or os.environ.get("ORSO_CLIENT_ID") or Path("/app/profiles").exists():
+        # Orso agents (KAN-33, KAN-54) : Les personas sont souverains et immuables dans profiles/<agent>/SOUL.md.
+        # Interdiction absolue de créer un SOUL.md inscriptible par défaut dans HERMES_HOME.
+        return
+
     soul_path = home / "SOUL.md"
     if soul_path.exists():
         try:

@@ -34,9 +34,13 @@ from skills.telemetry import export_telemetry
 from tools.file_tools_write_guards import _check_sensitive_path
 
 
+TEST_HMAC_KEY = "test_persona_hmac_secret_ephemeral_key_for_unit_tests"
+
+
 @pytest.fixture
-def temp_profiles_env(tmp_path: Path):
-    """Crée un environnement de profils d'agents temporaire isolé."""
+def temp_profiles_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Crée un environnement de profils d'agents temporaire isolé avec clé HMAC injectée."""
+    monkeypatch.setenv("ORSO_PERSONA_HMAC_KEY", TEST_HMAC_KEY)
     profiles_dir = tmp_path / "profiles"
     profiles_dir.mkdir()
     telemetry_dir = tmp_path / "data" / "telemetry"
@@ -56,7 +60,7 @@ def temp_profiles_env(tmp_path: Path):
         soul.write_text(content, encoding="utf-8")
 
     lock_file = profiles_dir / DEFAULT_LOCK_FILENAME
-    manifest = generate_lock_manifest(profiles_dir=profiles_dir, output_file=lock_file, version="1.0.0")
+    manifest = generate_lock_manifest(profiles_dir=profiles_dir, output_file=lock_file, hmac_key=TEST_HMAC_KEY, version="1.0.0")
 
     return {
         "root": tmp_path,
@@ -65,6 +69,7 @@ def temp_profiles_env(tmp_path: Path):
         "telemetry_dir": telemetry_dir,
         "agents": agents,
         "manifest": manifest,
+        "hmac_key": TEST_HMAC_KEY,
     }
 
 
@@ -299,4 +304,24 @@ def test_rogue_soul_in_writable_volume_detected(temp_profiles_env, monkeypatch):
         assert any("Fichier persona illégitime détecté" in e for e in errors)
     finally:
         rogue_soul.unlink(missing_ok=True)
+
+
+def test_missing_hmac_key_fails_closed(temp_profiles_env, monkeypatch):
+    """R3 / Zero Fallback : L'absence de la variable ORSO_PERSONA_HMAC_KEY bloque immédiatement avec code PER-INTEGRITY-003."""
+    monkeypatch.delenv("ORSO_PERSONA_HMAC_KEY", raising=False)
+    p_dir = temp_profiles_env["profiles_dir"]
+    l_file = temp_profiles_env["lock_file"]
+
+    valid, errors, audits = verify_all_personas(
+        profiles_dir=p_dir,
+        lock_file=l_file,
+        hmac_key=None,
+        record_logs=True,
+    )
+
+    assert valid is False
+    assert len(errors) >= 1
+    assert any("Clé secrète HMAC absente" in e for e in errors)
+    assert any("ORSO_PERSONA_HMAC_KEY" in e for e in errors)
+
 

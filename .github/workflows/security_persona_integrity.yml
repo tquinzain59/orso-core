@@ -27,14 +27,17 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: Setup Virtualenv & Dependencies
         run: |
-          pip install --upgrade pip uv
-          uv pip install --system -r requirements-base.txt
+          python3 -m venv .venv
+          .venv/bin/pip install --upgrade pip uv
+          .venv/bin/uv pip install -r requirements-base.txt pytest pytest-asyncio
 
       - name: Contrôle d'Intégrité Statique des Personas (Boot Check)
+        env:
+          ORSO_PERSONA_HMAC_KEY: ${{ secrets.ORSO_PERSONA_HMAC_KEY }}
         run: |
-          python3 scripts/security/persona_integrity.py verify --profiles-dir profiles --fail-fast
+          .venv/bin/python scripts/security/persona_integrity.py verify --profiles-dir profiles --fail-fast
 
       - name: Exécution des Tests d'Intégrité Cryptographique (KAN-33)
         run: |

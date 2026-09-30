@@ -28,7 +28,6 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 logger = logging.getLogger("orso.persona_integrity")
 
 DEFAULT_LOCK_FILENAME = "personas.lock.json"
-DEFAULT_HMAC_KEY = "orso_persona_hmac_secret_gravelines_2026_key"
 EVENT_OK = "PER-INTEGRITY-000"
 EVENT_STARTUP_MISMATCH = "PER-INTEGRITY-001"
 EVENT_RUNTIME_ALTERATION = "PER-INTEGRITY-002"
@@ -197,7 +196,13 @@ def verify_all_personas(
     """
     p_dir = resolve_profiles_dir(profiles_dir)
     l_file = resolve_lock_file(p_dir, lock_file)
-    effective_hmac_key = hmac_key or os.environ.get("ORSO_PERSONA_HMAC_KEY", DEFAULT_HMAC_KEY)
+    effective_hmac_key = hmac_key or os.environ.get("ORSO_PERSONA_HMAC_KEY")
+
+    if not effective_hmac_key:
+        err = "Clé secrète HMAC absente : variable ORSO_PERSONA_HMAC_KEY requise pour la vérification (R3 - Zero Fallback)."
+        if record_logs:
+            log_integrity_event("system", "unknown", "none", "error", EVENT_CONFIG_ERROR, err)
+        return False, [err], []
 
     if not l_file.is_file():
         err = f"Manifeste d'intégrité introuvable : {l_file}"
@@ -317,7 +322,10 @@ def generate_lock_manifest(
     """Génère le manifeste personas.lock.json avec signatures HMAC obligatoires (R3)."""
     p_dir = resolve_profiles_dir(profiles_dir)
     out_file = resolve_lock_file(p_dir, output_file)
-    effective_hmac_key = hmac_key or os.environ.get("ORSO_PERSONA_HMAC_KEY", DEFAULT_HMAC_KEY)
+    effective_hmac_key = hmac_key or os.environ.get("ORSO_PERSONA_HMAC_KEY")
+
+    if not effective_hmac_key:
+        raise ValueError("Clé secrète HMAC absente : variable ORSO_PERSONA_HMAC_KEY requise pour générer les signatures du manifeste (R3 - Zero Fallback).")
 
     roles = {
         "jerome": "Crédit Manager & Recouvrement",
