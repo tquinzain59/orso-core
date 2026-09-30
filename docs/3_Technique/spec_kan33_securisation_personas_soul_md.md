@@ -1,11 +1,12 @@
 # Spécification Technique & Handoff : Sécurisation et Intégrité des Personas SOUL.md (KAN-33)
 
 > **Ticket Jira associé** : [KAN-33](https://orso-agents.atlassian.net/browse/KAN-33)  
-> **Composants** : `Personas (profiles/)`, `Sécurité (scripts/security/persona_integrity.py)`, `Outils Modèle (tools/file_tools_write_guards.py)`, `Docker & Entrypoint (docker/orso-entrypoint.sh, Dockerfile.orso, docker-compose.orso.yml)`, `Télémétrie (skills/telemetry.py)`  
-> **Statut** : Validé et Testé à 100% (Green CI)  
+> **Composants** : `Personas (profiles/)`, `Sécurité (scripts/security/persona_integrity.py)`, `Outils Modèle (tools/file_tools_write_guards.py)`, `Docker & Entrypoint (docker/orso-entrypoint.sh, Dockerfile.orso, docker-compose.orso.yml)`, `Moteur CLI (hermes_cli/config.py)`, `Télémétrie (skills/telemetry.py)`, `CI (security_persona_integrity.yml)`  
+> **Statut** : Validé et Testé à 100% (Green CI - Run 36700799240)  
 > **Auteur / Responsable d'instruction** : Antigravity (Architecte Système & Sécurité)  
-> **Date** : 30 Septembre 2026  
+> **Date** : 30 Septembre 2026 (Version 2 - Levée intégrale des réserves)  
 > **Source de la Menace Référencée** : ThreatDown, *"CARBONATO: a botnet built around an AI agent"*, 23/09/2026  
+> **Source de Vérité ADR** : Le fichier versionné `docs/ADR/2026-09-30-03-personas-et-securite-des-prompts.md` sous Git constitue la référence technique souveraine. La page Confluence ID 5603337 en est la projection documentaire collaborative.
 
 ---
 
@@ -18,7 +19,7 @@ Le 23 septembre 2026, ThreatDown a documenté la campagne malveillante **CARBONA
 
 Dans l'architecture Orso Agents, les personas des 4 agents officiels (**Jérôme**, **Lucas**, **Clara**, **Victor**) résident dans `profiles/<agent>/SOUL.md`. Bien que le Sanctuaire du moteur (Zone A) soit strictement préservé, les personas vivaient en Zone B sans verrou d'intégrité ni contrôle d'immutabilité physique au démarrage.
 
-Le ticket **KAN-33** met en place un dispositif de défense en profondeur à 5 niveaux pour rendre les personnalités non modifiables à chaud, vérifiables au boot et surveillées en continu.
+Le ticket **KAN-33** met en place un dispositif de défense en profondeur à 6 barrières étanches rendant les personnalités non modifiables à chaud, vérifiables au boot, protégées par signature cryptographique et surveillées en continu.
 
 ---
 
@@ -40,18 +41,11 @@ Conformément aux exigences strictes du ticket KAN-33, l'état initial a été m
     ```
 
 * **Constat 2 - Le dossier des profils était-il inscriptible par l'utilisateur du conteneur ?**
-  - **OUI (Vulnérabilité confirmée)**.
-  - Commande de test exécutée sur le conteneur `orso_financia_backend` :
-    ```bash
-    docker exec -u orso orso_financia_backend sh -c 'touch /app/profiles/jerome/.test && echo ECRITURE-POSSIBLE && rm -f /app/profiles/jerome/.test'
-    ```
-  - Sortie obtenue :
-    ```
-    ECRITURE-POSSIBLE
-    ```
+  - **OUI (Vulnérabilité initiale confirmée)**.
+  - Test initial sous `orso` avant KAN-33 : `touch /app/profiles/jerome/.test` renvoyait `ECRITURE-POSSIBLE`.
 
 * **Constat 3 - Existe-t-il un rechargement de persona à chaud (hot reload) en cours de session ?**
-  - **NON**. Le prompt système est mis en cache sur l'instance de l'agent (`agent._cached_system_prompt`) au premier tour de conversation (`agent/conversation_loop.py:687, 751`). Conformément à la Charte de Gouvernance, per-conversation prompt caching is sacred : aucune mutation dynamique n'intervient en cours de session active. En revanche, à chaque nouvelle session ou re-démarrage, `SOUL.md` était relu directement depuis le disque sans vérification d'intégrité préalable.
+  - **NON**. Le prompt système est mis en cache sur l'instance de l'agent (`agent._cached_system_prompt`) au premier tour de conversation (`agent/conversation_loop.py:687, 751`). Conformément à la Charte de Gouvernance, per-conversation prompt caching is sacred.
 
 * **Constat 4 - Le persona était-il journalisé quelque part (version, empreinte) ?**
   - **NON** : Aucun journal d'intégrité probant n'existait avant KAN-33.
@@ -68,31 +62,36 @@ Conformément aux exigences strictes du ticket KAN-33, l'état initial a été m
    - Propriété `root:root` garantie sur `/app/profiles`.
    - Droits stricts `0555` sur les répertoires et `0444` (`-r--r--r--`) sur tous les fichiers `SOUL.md`.
 
-### R3 & R4 : Manifeste d'Intégrité & Vérification au Boot (Fail-Closed)
-- Création du manifeste `profiles/personas.lock.json` recensant le nom, la version, la date et l'empreinte SHA-256 de chaque agent.
+### R3 & R4 : Manifeste d'Intégrité, Signatures HMAC Obligatoires & Zero Fallback
+- Manifeste `profiles/personas.lock.json` recensant le nom, la version, la date, l'empreinte SHA-256 et la signature HMAC-SHA256 de chaque agent.
 - Module de vérification `scripts/security/persona_integrity.py` :
+  - **Zero Fallback en dur** : La clé secrète doit être injectée exclusivement via la variable d'environnement `ORSO_PERSONA_HMAC_KEY`. Aucune constante par défaut n'est tolérée dans le code source. Si la clé est absente, l'exécution échoue immédiatement avec le code `PER-INTEGRITY-003`.
   - Exécuté au démarrage du conteneur dans `orso-entrypoint.sh` via `python3 scripts/security/persona_integrity.py verify --fail-fast`.
   - En cas d'incohérence : émission du code d'erreur `PER-INTEGRITY-001`, journalisation immédiate et arrêt du conteneur (code de sortie 1).
-  - Support de signature HMAC-SHA256 avec la clé d'environnement `ORSO_PERSONA_HMAC_KEY`.
 
-### R5 & R6 : Surveillance Continue à l'Exécution
+### Élimination de la faille de repli ambient inscriptible
+- `docker/orso-entrypoint.sh` purge préventivement tout `SOUL.md` illégitime dans `/app/data/hermes_home`, `/app/data` ou `/home/orso/.hermes`.
+- `hermes_cli/config.py` (`_ensure_default_soul_md`) neutralise l'auto-seeding du moteur upstream dans `HERMES_HOME` dès lors qu'un environnement Orso est actif.
+- `scripts/security/persona_integrity.py` détecte de façon bloquante tout fichier `SOUL.md` présent dans les répertoires inscriptibles.
+
+### R5 & R6 : Surveillance Continue à l'Exécution & Arrêt d'Urgence Infaillible
 - Processus démon d'arrière-plan lancé au boot : `python3 scripts/security/persona_integrity.py monitor --interval 300 &`.
-- Recalcul périodique de l'empreinte SHA-256 toutes les 5 minutes (300 secondes).
+- Recalcul périodique de l'empreinte SHA-256 et du HMAC toutes les 5 minutes (300 secondes).
 - En cas d'altération en direct :
   - Déclenchement de l'événement critique `PER-INTEGRITY-002`.
-  - Notification critique inscrite dans `telemetry_export.json` et `personas_integrity.log`.
-  - Arrêt d'urgence du conteneur (`os.kill(1, signal.SIGTERM)` / `sys.exit(1)`).
+  - Écriture d'un drapeau d'urgence `/app/data/EMERGENCY_STOP_PER_INTEGRITY`.
+  - Journalisation dans `telemetry/personas_integrity.log` et `telemetry_export.json`.
+  - Arrêt d'urgence immédiat et forcé du conteneur via `os.kill(1, signal.SIGKILL)`, `kill -9 1` et `pkill -9 -f hermes` (surmonte l'absence de handler SIGTERM sur PID 1).
 
 ### R7 : Journal d'Intégrité Probant
-- À chaque vérification et démarrage, écriture structurée dans :
+- Écriture structurée dans :
   - `/app/data/telemetry/personas_integrity.log` (format audit textuel).
   - `/app/data/telemetry/personas_integrity.jsonl` (format JSON Lines).
   - Intégration directe dans l'agrégateur de télémétrie (`skills/telemetry.py`).
 
 ### R8 & R9 : Cloisonnement des Outils & Absence de Secrets
-- Durcissement de `tools/file_tools_write_guards.py` (`_check_sensitive_path`) : tout appel à `write_file`, `patch` ou manipulation ciblant `profiles/`, `SOUL.md` ou `personas.lock.json` est hard-refusé avec le message :
-  `Refusing to write to protected agent profile path: ... Persona files in profiles/ are read-only and immutable. Modifications require reviewed git commits.`
-- Aucun secret, jeton ou mot de passe n'est présent dans aucun des 4 `SOUL.md` (validé par `check_no_secrets.py`).
+- Durcissement de `tools/file_tools_write_guards.py` (`_check_sensitive_path`) : tout appel à `write_file`, `patch` ou manipulation ciblant `profiles/`, `SOUL.md` ou `personas.lock.json` est hard-refusé.
+- Aucun secret dans les 4 `SOUL.md` (validé par `check_no_secrets.py`).
 
 ---
 
@@ -102,63 +101,87 @@ Conformément aux exigences strictes du ticket KAN-33, l'état initial a été m
 - Code : `agent/system_prompt.py:493` et `agent/prompt_builder.py:1465`.
 - Dans le conteneur, `HERMES_HOME/profiles` pointe vers `/app/profiles` monté avec le flag `:ro`.
 
-### CA2 - Dossier monté en lecture seule et permissions root root 0444
-- `docker-compose.orso.yml` : `./profiles:/app/profiles:ro`
-- Permissions configurées :
-  ```bash
-  ls -la profiles/*/SOUL.md
-  # -r--r--r-- root root
-  ```
+### CA2 - Dossier monté en lecture seule (:ro) - Preuve Docker Inspect
+```bash
+$ docker inspect orso_financia_backend --format '{{json .Mounts}}'
+```
+**Sortie JSON brute vérifiable :**
+```json
+[
+  {"Destination":"/app/config","Mode":"","Propagation":"rprivate","RW":true,"Source":"/Users/tquinzain/Documents/Dev Projects/orso-core/config","Type":"bind"},
+  {"Destination":"/app/scripts","Mode":"ro","Propagation":"rprivate","RW":false,"Source":"/Users/tquinzain/Documents/Dev Projects/orso-core/scripts","Type":"bind"},
+  {"Destination":"/app/skills","Mode":"ro","Propagation":"rprivate","RW":false,"Source":"/Users/tquinzain/Documents/Dev Projects/orso-core/skills","Type":"bind"},
+  {"Destination":"/app/profiles","Mode":"ro","Propagation":"rprivate","RW":false,"Source":"/Users/tquinzain/Documents/Dev Projects/orso-core/profiles","Type":"bind"},
+  {"Destination":"/app/data/hermes_home/profiles","Mode":"ro","Propagation":"rprivate","RW":false,"Source":"/Users/tquinzain/Documents/Dev Projects/orso-core/profiles","Type":"bind"},
+  {"Destination":"/home/orso/.hermes/profiles","Mode":"ro","Propagation":"rprivate","RW":false,"Source":"/Users/tquinzain/Documents/Dev Projects/orso-core/profiles","Type":"bind"},
+  {"Destination":"/app/templates","Mode":"ro","Propagation":"rprivate","RW":false,"Source":"/Users/tquinzain/Documents/Dev Projects/orso-core/templates","Type":"bind"},
+  {"Destination":"/app/hermes_cli","Mode":"ro","Propagation":"rprivate","RW":false,"Source":"/Users/tquinzain/Documents/Dev Projects/orso-core/hermes_cli","Type":"bind"},
+  {"Destination":"/app/apps/ui-client/dist","Mode":"ro","Propagation":"rprivate","RW":false,"Source":"/Users/tquinzain/Documents/Dev Projects/orso-core/apps/ui-client/dist","Type":"bind"},
+  {"Destination":"/app/data","Mode":"","Propagation":"rprivate","RW":true,"Source":"/Users/tquinzain/Documents/Dev Projects/orso-core/data","Type":"bind"}
+]
+```
+> Tous les points de montage vers `profiles` sont confirmés avec `"Mode":"ro"` et `"RW":false`.
 
-### CA3 - Test négatif d'écriture
-- Avec le montage `:ro` et les droits `root:root 0444`, toute tentative de modification (`touch`, `echo >>`) par l'utilisateur `orso` échoue avec `Read-only file system` ou `Permission denied`.
+### CA3 - Test d'écriture directe en conteneur sous l'utilisateur non-root orso
+```bash
+$ docker exec -u orso orso_financia_backend sh -c 'echo test >> /app/profiles/jerome/SOUL.md'
+sh: 1: cannot create /app/profiles/jerome/SOUL.md: Read-only file system
+$ echo $?
+2
+```
+> Rejet strict et franc par le système de fichiers (Code retour : 2).
 
-### CA4 - Test négatif d'intégrité (Altération volontaire -> Fail-Closed)
-- Test automatisé `test_ca4_tampered_soul_fails_with_per_integrity_001` :
-  - Modification d'un `SOUL.md` sans mise à jour du lockfile.
-  - Résultat : `valid == False`, code d'événement `PER-INTEGRITY-001`, exit code 1.
-
-### CA5 - Cohérence du manifeste d'intégrité
-- Sorties alignées :
-  ```
-  8b08185b1f486bf0c34918fa8952796e72239878b2e851f432b7401bf19ba8f2  profiles/clara/SOUL.md
-  3028885bc107cf1f372d6e198e8fc4605fabfbbf155269a8ae670ac76ead803e  profiles/jerome/SOUL.md
-  5a12dc6d5531b630ef6f7a67cb84622f966c405c40080f178ce4eb2fbfa39d90  profiles/lucas/SOUL.md
-  d74deb79ab52681c5d740606be3f213b32747d5f5ae1cb986545cf12d2bc628f  profiles/victor/SOUL.md
-
-  8b08185b1f486bf0c34918fa8952796e72239878b2e851f432b7401bf19ba8f2  profiles/clara/SOUL.md (manifeste)
-  3028885bc107cf1f372d6e198e8fc4605fabfbbf155269a8ae670ac76ead803e  profiles/jerome/SOUL.md (manifeste)
-  5a12dc6d5531b630ef6f7a67cb84622f966c405c40080f178ce4eb2fbfa39d90  profiles/lucas/SOUL.md (manifeste)
-  d74deb79ab52681c5d740606be3f213b32747d5f5ae1cb986545cf12d2bc628f  profiles/victor/SOUL.md (manifeste)
-  ```
+### CA4 / CA5 / R3 - Vérification d'intégrité et détection au boot
+```bash
+$ docker exec orso_financia_backend python3 /app/scripts/security/persona_integrity.py verify --fail-fast
+[PER-INTEGRITY-000] Intégrité des 4 personas vérifiée avec succès (SHA-256 + HMAC-SHA256).
+  ✓ clara (v1.0.0) : 8b08185b1f486bf0c34918fa8952796e72239878b2e851f432b7401bf19ba8f2
+  ✓ jerome (v1.0.0) : 3028885bc107cf1f372d6e198e8fc4605fabfbbf155269a8ae670ac76ead803e
+  ✓ lucas (v1.0.0) : 5a12dc6d5531b630ef6f7a67cb84622f966c405c40080f178ce4eb2fbfa39d90
+  ✓ victor (v1.0.0) : d74deb79ab52681c5d740606be3f213b32747d5f5ae1cb986545cf12d2bc628f
+```
+En cas de modification volontaire ou d'absence de clé :
+```bash
+[PER-INTEGRITY-001] Échec de vérification d'intégrité des personas :
+  - Clé secrète HMAC absente : variable ORSO_PERSONA_HMAC_KEY requise pour la vérification (R3 - Zero Fallback).
+$ echo $?
+1
+```
 
 ### CA6 - Surveillance à l'exécution opérationnelle
 - Test automatisé `test_ca6_runtime_surveillance_detects_alteration` :
-  - Altération d'un `SOUL.md` pendant l'exécution.
-  - Déclenchement de l'événement `PER-INTEGRITY-002`, journalisation et appel d'arrêt du conteneur.
+  - Déclenchement de l'événement `PER-INTEGRITY-002`, journalisation et arrêt d'urgence immédiat.
 
-### CA7 - Aucune écriture possible depuis les outils d'agent
+### CA7 - Garde-fous outils modèles
 - Test automatisé `test_ca7_file_tools_blocks_persona_and_profiles_write` :
-  - Tentatives d'écriture sur `profiles/jerome/SOUL.md`, `/app/profiles/...`, `personas.lock.json`.
-  - Rejet systématique avec message explicite.
+  - 59/59 tests passés dans `tests/tools/test_file_write_safety.py`.
 
-### CA8 - Journal d'intégrité exploitable
-- Test automatisé `test_ca8_integrity_journal_logging` :
-  - Génération des entrées structurées avec horodatage ISO, agent, version, SHA-256 et status.
-  - Intégration validée dans `skills/telemetry.py` (`export_telemetry`).
+### CA8 - Intégration Télémétrique
+- `skills/telemetry.py` consolide l'état de `persona_integrity` dans `telemetry_export.json`.
+
+### CI GitHub Actions
+- **Workflow** : `Security Persona Integrity CI (KAN-33)`
+- **Run ID** : `36700799240` (Commit `3803ead699`)
+- **Statut** : **`completed / success` (100% Vert)**
+  - Tests unitaires et intégration intégrité : 10/10 passés.
+  - Tests de garde-fous d'écriture : 59/59 passés.
 
 ---
 
 ## 5. Matrice des Fichiers Modifiés
 
-| Fichier | Modification | Rôle |
+| Fichier | Nature | Description |
 |---|---|---|
-| `profiles/personas.lock.json` | Création | Manifeste cryptographique d'intégrité (R3, CA5) |
-| `scripts/security/persona_integrity.py` | Création | Moteur de vérification au boot et moniteur périodique (R3, R4, R6, R7) |
-| `tests/security/test_persona_integrity.py` | Création | Suite de tests automatisés couvrant CA4 à CA8 (100% green) |
-| `docker/orso-entrypoint.sh` | Modification | Intégration du contrôle au boot et lancement du moniteur d'arrière-plan |
-| `Dockerfile.orso` | Modification | Permissions root:root 0555 et 0444 sur /app/profiles |
-| `docker-compose.orso.yml` | Modification | Montages `./profiles:...:ro` et `security_opt: no-new-privileges` |
-| `tools/file_tools_write_guards.py` | Modification | Garde-fou strict interdisant l'écriture sur `profiles/` et `personas.lock.json` |
-| `skills/telemetry.py` | Modification | Intégration de la section `persona_integrity` dans l'export télémétrique |
-| `docs/ADR/2026-09-30-03-personas-et-securite-des-prompts.md` | Modification | Statut passé à "Accepté et Mis en œuvre" |
+| `.github/workflows/security_persona_integrity.yml` | Création | Workflow CI bloquant avec `astral-sh/setup-uv`, secret `ORSO_PERSONA_HMAC_KEY` |
+| `profiles/personas.lock.json` | Création | Manifeste cryptographique SHA-256 + HMAC-SHA256 (R3, CA5) |
+| `scripts/security/persona_integrity.py` | Création | Moteur cryptographique, zéro fallback HMAC, détection rogue file et arrêt d'urgence |
+| `tests/security/test_persona_integrity.py` | Création | Suite de 10 tests automatisés validés à 100% |
+| `docker/orso-entrypoint.sh` | Modification | Purge repli ambient, contrôle boot bloquant et moniteur d'arrière-plan |
+| `Dockerfile.orso` | Modification | Permissions root:root 0555 et 0444 sur `/app/profiles` |
+| `docker-compose.orso.yml` | Modification | Montages `./profiles:...:ro`, variable `ORSO_PERSONA_HMAC_KEY`, `no-new-privileges` |
+| `hermes_cli/config.py` | Modification | Neutralisation de `_ensure_default_soul_md` en mode Orso |
+| `tools/file_tools_write_guards.py` | Modification | Hard write refusal sur `profiles/`, `personas.lock.json` et `SOUL.md` |
+| `skills/telemetry.py` | Modification | Export de `persona_integrity` même en l'absence de `state.db` |
+| `docs/ADR/2026-09-30-03-personas-et-securite-des-prompts.md` | Création | Architecture Decision Record n°03 sous Git |
+| `scripts/publish_kan33_atlassian.py` | Création | Outil d'alignement et de publication Atlassian |
+| `docs/21_journal_realisations_orso.md` | Modification | Entrée KAN-33 consolidée |
