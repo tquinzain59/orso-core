@@ -31,7 +31,7 @@ jobs:
         run: |
           python3 -m venv .venv
           .venv/bin/pip install --upgrade pip uv
-          .venv/bin/uv pip install -r requirements-base.txt pytest pytest-asyncio
+          .venv/bin/uv pip install -r requirements-base.txt pyyaml pytest pytest-asyncio
 
       - name: Contrôle d'Intégrité Statique des Personas (Boot Check)
         env:
