@@ -22,16 +22,20 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Install astral-sh/setup-uv
+        uses: astral-sh/setup-uv@v6
         with:
-          python-version: '3.11'
+          version: "0.9.28"
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
 
-      - name: Setup Virtualenv & Dependencies
-        run: |
-          python3 -m venv .venv
-          .venv/bin/pip install --upgrade pip uv
-          .venv/bin/uv pip install -r requirements-base.txt pyyaml pytest pytest-asyncio
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install dependencies (uv sync)
+        run: uv sync --locked --python 3.11 --extra dev
 
       - name: Contrôle d'Intégrité Statique des Personas (Boot Check)
         env:
