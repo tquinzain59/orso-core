@@ -742,9 +742,6 @@ class OpsManager:
                 result = []
                 for t in sb_tenants:
                     slug = t.get("slug") or ""
-                    # Exclure les comptes de test technique interne
-                    if slug == "aura-sans-env" or t.get("contact_email") == "test.sansenv@orso-agents.fr":
-                        continue
                     tenant_id = t.get("id")
                     cached = self._mock_tenants.get(tenant_id, {})
                     profiles = t.get("profiles", [])
