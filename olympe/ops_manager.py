@@ -165,7 +165,7 @@ class OpsManager:
                 pass
 
         # ── Gestion du mode démonstration et verrouillage en production (KAN-43) ──
-        self.is_production = is_production()
+        self._is_production_override: Optional[bool] = None
         if demo_mode is not None:
             self.demo_mode = demo_mode
         else:
@@ -192,6 +192,16 @@ class OpsManager:
 
         # Table des événements Webhooks déjà traités pour idempotence au rejeu (Décision 3 / KAN-44 CA4)
         self._processed_events: Dict[str, Dict[str, Any]] = {}
+
+    @property
+    def is_production(self) -> bool:
+        if getattr(self, "_is_production_override", None) is not None:
+            return self._is_production_override
+        return is_production()
+
+    @is_production.setter
+    def is_production(self, val: Optional[bool]):
+        self._is_production_override = val
 
     def _init_seed_data(self) -> Dict[str, Dict[str, Any]]:
         """Données d'amorçage réalistes représentant les premiers clients du projet Orso."""
@@ -872,6 +882,7 @@ class OpsManager:
                         "city": t.get("city") or cached.get("city"),
                         "slug": t.get("slug"),
                         "status": t.get("status", "active"),
+                        "is_sandbox": bool(t.get("is_sandbox") or cached.get("is_sandbox", False) or t.get("siret") == "99999999900010"),
                         "created_at": t.get("created_at"),
                         "contact": {
                             "full_name": t.get("contact_name") or primary_contact.get("full_name", "Contact Principal"),
@@ -901,10 +912,15 @@ class OpsManager:
 
                 return result
 
-        # 2. En production sans base ou erreur de base : AUCUN jeu d'amorçage (KAN-43 CA1)
+            # Si la requête Supabase a échoué (sb_tenants is None) en production : Fail-Closed !
+            if self.is_production:
+                _log.critical("[DATABASE] Échec de la requête Supabase pour get_tenants_overview en production.")
+                raise RuntimeError("DATABASE_UNAVAILABLE: Impossible d'interroger la base de données en production.")
+
+        # 2. En production sans base ou erreur de base : AUCUN jeu d'amorçage (KAN-43 CA1 / Fail-Closed)
         if self.is_production:
-            _log.critical("[DATABASE] Impossible de charger les tenants depuis la base en production.")
-            return []
+            _log.critical("[DATABASE] Impossible de charger les tenants depuis la base en production (base inaccessible ou non configurée).")
+            raise RuntimeError("DATABASE_UNAVAILABLE: Base de données non configurée ou inaccessible en production.")
 
         # 3. Hors production : si mode démo explicite, renvoyer les données d'amorçage
         if self.demo_mode:
@@ -1557,9 +1573,13 @@ class OpsManager:
                         "tenant_slug": t_info.get("slug", ""),
                     })
                 return res
+            if self.is_production:
+                _log.critical("[DATABASE] Échec de la requête Supabase pour list_all_invoices en production.")
+                raise RuntimeError("DATABASE_UNAVAILABLE: Impossible d'interroger la table des factures en production.")
 
         if self.is_production:
-            return []
+            _log.critical("[DATABASE] Impossible de charger les factures depuis la base en production (base inaccessible ou non configurée).")
+            raise RuntimeError("DATABASE_UNAVAILABLE: Base de données non configurée ou inaccessible en production.")
 
         if self.demo_mode:
             all_invoices = []

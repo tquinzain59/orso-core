@@ -178,7 +178,14 @@ export const TenantsView: React.FC<TenantsViewProps> = ({
                     <tr key={t.id} className="hover:bg-slate-800/40 transition-colors">
                       {/* Entreprise */}
                       <td className="py-4 px-4 font-medium text-white">
-                        <div className="text-base font-bold">{t.name}</div>
+                        <div className="flex items-center space-x-2">
+                          <span className="text-base font-bold">{t.name}</span>
+                          {t.is_sandbox && (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-amber-500/10 text-amber-400 border border-amber-500/30">
+                              SANDBOX TEST
+                            </span>
+                          )}
+                        </div>
                         <div className="flex items-center space-x-2 text-xs text-slate-400 font-mono mt-0.5">
                           <span>{t.siret || "SIRET non renseigné"}</span>
                           <span>•</span>

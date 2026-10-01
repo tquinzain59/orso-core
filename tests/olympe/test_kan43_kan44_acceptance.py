@@ -232,10 +232,41 @@ def test_kan43_ca4_demo_mode_safety_locks(monkeypatch):
     assert resp_prod_tenants.status_code == 200
     assert resp_prod_tenants.json()["demo_mode"] is False
 
-    # 4. En production, list_all_invoices ne renvoie jamais de factures fictives
+    # 4. En production sans base ou panne de base, list_all_invoices fail-closed (DATABASE_UNAVAILABLE)
     monkeypatch.setenv("ORSO_ENV", "production")
     prod_ops = OpsManager(demo_mode=False)
-    assert prod_ops.list_all_invoices() == []
+    with pytest.raises(RuntimeError, match="DATABASE_UNAVAILABLE"):
+        prod_ops.list_all_invoices()
+
+
+def test_kan43_ca1_db_failure_in_production_fails_closed_503(monkeypatch):
+    """CA1 / Fail-Closed — En production, si Supabase est défaillant ou injoignable, l'API renvoie HTTP 503."""
+    monkeypatch.setenv("ORSO_ENV", "production")
+    client = TestClient(app)
+    admin_headers = {"Authorization": f"Bearer {MOCK_SUPERADMIN_TOKEN}"}
+
+    # Sauvegarder la configuration initiale
+    old_url = ops_manager.supabase_url
+    old_key = ops_manager.supabase_key
+    ops_manager.supabase_url = "https://mock.supabase.co"
+    ops_manager.supabase_key = "mock_key"
+    try:
+        # Simuler une panne de base de données (requête Supabase renvoie None)
+        with patch.object(ops_manager, "_query_supabase", return_value=None):
+            resp_tenants = client.get("/api/olympe/ops/tenants", headers=admin_headers)
+            assert resp_tenants.status_code == 503
+            assert "Service indisponible" in resp_tenants.json()["detail"]
+
+            resp_stats = client.get("/api/olympe/ops/stats", headers=admin_headers)
+            assert resp_stats.status_code == 503
+            assert "Service indisponible" in resp_stats.json()["detail"]
+
+            resp_invoices = client.get("/api/olympe/ops/invoices", headers=admin_headers)
+            assert resp_invoices.status_code == 503
+            assert "Service indisponible" in resp_invoices.json()["detail"]
+    finally:
+        ops_manager.supabase_url = old_url
+        ops_manager.supabase_key = old_key
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -274,28 +305,37 @@ def test_kan44_ca1_and_ca2_webhook_creates_environment_and_logs_delivery():
         },
     }
 
-    # Émission du webhook
-    resp = client.post("/api/olympe/ops/webhooks/stripe", json=webhook_payload)
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "processed"
-    assert data["tenant_slug"] == slug
-    assert data["environment_status"] == "active"
-    assert "orso_client_nexis_logistics" in data["container_name"]
+    mock_status = {
+        "tenant_slug": slug,
+        "container_name": f"orso_client_{slug}",
+        "status": "ready",
+        "running": True,
+    }
+    with patch.object(manager, "provision_tenant", return_value={"status": "created", "container_name": f"orso_client_{slug}"}), \
+         patch.object(manager, "wake_tenant", return_value={"status": "ready", "running": True}), \
+         patch.object(manager, "get_tenant_status", return_value=mock_status):
+        # Émission du webhook
+        resp = client.post("/api/olympe/ops/webhooks/stripe", json=webhook_payload)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "processed"
+        assert data["tenant_slug"] == slug
+        assert data["environment_status"] == "active"
+        assert "orso_client_nexis_logistics" in data["container_name"]
 
-    # CA1 Preuve : Consultation du journal des livraisons
-    resp_journal = client.get("/api/olympe/ops/webhooks/deliveries", headers=admin_headers)
-    assert resp_journal.status_code == 200
-    deliveries = resp_journal.json()["deliveries"]
-    matched_delivery = next((d for d in deliveries if d["id"] == event_id), None)
-    assert matched_delivery is not None
-    assert matched_delivery["tenant_slug"] == slug
-    assert matched_delivery["status"] == "processed"
+        # CA1 Preuve : Consultation du journal des livraisons
+        resp_journal = client.get("/api/olympe/ops/webhooks/deliveries", headers=admin_headers)
+        assert resp_journal.status_code == 200
+        deliveries = resp_journal.json()["deliveries"]
+        matched_delivery = next((d for d in deliveries if d["id"] == event_id), None)
+        assert matched_delivery is not None
+        assert matched_delivery["tenant_slug"] == slug
+        assert matched_delivery["status"] == "processed"
 
-    # CA2 Preuve : L'environnement du tenant existe et est opérationnel
-    status_info = manager.get_tenant_status(slug)
-    assert status_info["tenant_slug"] == slug
-    assert status_info["status"] in ("ready", "starting")
+        # CA2 Preuve : L'environnement du tenant existe et est opérationnel
+        status_info = manager.get_tenant_status(slug)
+        assert status_info["tenant_slug"] == slug
+        assert status_info["status"] in ("ready", "starting")
 
 
 def test_kan44_ca3_unknown_client_rejected_with_reason_and_no_side_effects():

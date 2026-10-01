@@ -56,6 +56,16 @@ app.add_middleware(
 manager = DockerLifecycleManager()
 ops_manager = OpsManager()
 
+@app.exception_handler(RuntimeError)
+async def runtime_error_handler(request: Request, exc: RuntimeError):
+    if "DATABASE_UNAVAILABLE" in str(exc):
+        _log.critical("[FAIL-CLOSED] Base de données indisponible : %s", exc)
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Service indisponible : la base de données de production est injoignable ou non configurée."},
+        )
+    raise exc
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 UI_OPS_DIST = PROJECT_ROOT / "apps" / "ui-ops" / "dist"
 
