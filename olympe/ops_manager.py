@@ -129,7 +129,13 @@ def _format_timestamp(ts: Optional[float] = None) -> str:
 
 def is_production() -> bool:
     """Détecte si l'environnement d'exécution courant est la production."""
-    env = os.environ.get("ORSO_ENV", os.environ.get("ENV", os.environ.get("ENVIRONMENT", ""))).lower().strip()
+    env = (
+        os.environ.get("ORSO_ENV")
+        or os.environ.get("APP_ENV")
+        or os.environ.get("ENVIRONMENT")
+        or os.environ.get("ENV")
+        or ""
+    ).lower().strip()
     return env in ("production", "prod")
 
 
@@ -164,12 +170,7 @@ class OpsManager:
             self.demo_mode = demo_mode
         else:
             demo_env = os.environ.get("ORSO_DEMO_MODE", "").lower().strip()
-            if demo_env:
-                self.demo_mode = demo_env in ("1", "true", "yes", "on")
-            else:
-                # En production : désactivé par défaut (et interdit)
-                # Hors production : actif uniquement si Supabase n'est pas configuré
-                self.demo_mode = not self.is_production and not bool(self.supabase_url and self.supabase_key)
+            self.demo_mode = demo_env in ("1", "true", "yes", "on")
 
         if self.is_production and self.demo_mode:
             raise RuntimeError(
@@ -1557,16 +1558,22 @@ class OpsManager:
                     })
                 return res
 
-        all_invoices = []
-        for t in self.get_tenants_overview():
-            for inv in t.get("invoices", []):
-                item = dict(inv)
-                item["tenant_id"] = t["id"]
-                item["tenant_name"] = t["name"]
-                item["tenant_slug"] = t["slug"]
-                all_invoices.append(item)
-        all_invoices.sort(key=lambda x: x.get("date", ""), reverse=True)
-        return all_invoices
+        if self.is_production:
+            return []
+
+        if self.demo_mode:
+            all_invoices = []
+            for t in self.get_tenants_overview():
+                for inv in t.get("invoices", []):
+                    item = dict(inv)
+                    item["tenant_id"] = t["id"]
+                    item["tenant_name"] = t["name"]
+                    item["tenant_slug"] = t["slug"]
+                    all_invoices.append(item)
+            all_invoices.sort(key=lambda x: x.get("date", ""), reverse=True)
+            return all_invoices
+
+        return []
 
     def create_sandbox_tenant(
         self,

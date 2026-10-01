@@ -193,7 +193,16 @@ export const App: React.FC = () => {
         adminUser={adminUser}
         onLogout={handleLogout}
         onOpenSecurity={() => setIsSecurityModalOpen(true)}
+        demoMode={Boolean(stats?.demo_mode)}
       />
+
+      {Boolean(stats?.demo_mode) && (
+        <div className="bg-amber-500/15 border-b border-amber-500/30 text-amber-200 px-4 py-2.5 text-center text-xs sm:text-sm font-medium flex items-center justify-center space-x-2 shadow-sm">
+          <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping mr-1"></span>
+          <span className="font-bold uppercase tracking-wider text-amber-300">Mode Démonstration Actif</span>
+          <span className="text-amber-200/90 hidden sm:inline">— Les données affichées (flotte, indicateurs, factures) proviennent d'un jeu d'amorçage simulé en mémoire et non de la base de production.</span>
+        </div>
+      )}
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {error && (

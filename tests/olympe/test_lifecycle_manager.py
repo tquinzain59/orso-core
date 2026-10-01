@@ -12,7 +12,14 @@ from fastapi.testclient import TestClient
 
 from olympe.auth import MOCK_SUPERADMIN_TOKEN
 from olympe.lifecycle_manager import DockerLifecycleManager, normalize_container_name
-from olympe.server import app
+from olympe.server import app, ops_manager
+
+
+@pytest.fixture(autouse=True)
+def setup_demo_mode_lifecycle(monkeypatch):
+    monkeypatch.setenv("ORSO_DEMO_MODE", "1")
+    ops_manager.demo_mode = True
+    ops_manager._mock_tenants = ops_manager._init_seed_data()
 
 
 @pytest.fixture

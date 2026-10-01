@@ -42,6 +42,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <p className="text-sm text-slate-400 mt-1">
             Supervision commerciale, revenus récurrents et pilotage de la flotte multi-agents.
           </p>
+          {stats.demo_mode && (
+            <div className="mt-3 flex items-center space-x-2 text-xs text-amber-400 bg-amber-500/10 px-3 py-1.5 rounded-lg border border-amber-500/20 w-fit">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+              <span>Indicateurs calculés en mode démonstration (données simulées en mémoire)</span>
+            </div>
+          )}
         </div>
         <div className="flex items-center space-x-3">
           {onGoToOnboarding && pendingCount > 0 && (

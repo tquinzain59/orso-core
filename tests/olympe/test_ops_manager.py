@@ -4,7 +4,13 @@ from fastapi.testclient import TestClient
 
 from olympe.auth import MOCK_SUPERADMIN_TOKEN
 from olympe.ops_manager import OpsManager, TIER_PRICING
-from olympe.server import app
+from olympe.server import app, ops_manager
+
+@pytest.fixture(autouse=True)
+def enable_demo_mode_for_seed_tests(monkeypatch):
+    monkeypatch.setenv("ORSO_DEMO_MODE", "1")
+    ops_manager.demo_mode = True
+    ops_manager._mock_tenants = ops_manager._init_seed_data()
 
 @pytest.fixture
 def api_client():

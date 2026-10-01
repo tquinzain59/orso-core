@@ -152,6 +152,7 @@ export interface OpsStats {
   agent_utilization: Record<string, number>;
   pricing_catalog: Record<string, { price_ht: number; max_agents: number; label: string }>;
   timestamp: string;
+  demo_mode?: boolean;
 }
 
 export interface AdminUser {
