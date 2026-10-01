@@ -126,11 +126,23 @@ class EngineDistributionManager:
             containers = h.get("running_containers", [])
             is_reachable = h.get("is_reachable", True)
             prev_digest = h.get("previous_digest")
+            label_mismatch = h.get("label_mismatch", False)
+            label_mismatch_detail = h.get("label_mismatch_detail")
 
             if not is_reachable:
                 status = "UNREACHABLE"
                 drift_details = "Hôte inaccessible ou démon Docker muet"
                 unreachable_count += 1
+            elif not containers or not active_digest:
+                # Règle d'or KAN-64 : un hôte sans conteneur client en service n'est JAMAIS déclaré IN_SYNC
+                status = "DRIFT_DETECTED"
+                drift_details = "Aucun conteneur client actif en service sur cet hôte"
+                drifted_count += 1
+            elif label_mismatch:
+                # Alerte immédiate sur divergence critique étiquette vs image réelle
+                status = "DRIFT_DETECTED"
+                drift_details = label_mismatch_detail or "Divergence entre l'étiquette et l'image réellement chargée"
+                drifted_count += 1
             elif not validate_digest(active_digest):
                 status = "ERROR"
                 drift_details = f"Digest invalide sur l'hôte : {active_digest}"
@@ -296,21 +308,33 @@ class EngineDistributionManager:
         run_remote_or_local_cmd(rm_cmd, ssh_target)
 
         # 4. Relance du conteneur avec l'image épinglée et clé d'intégrité personas (KAN-33 / KAN-64)
-        hmac_key = os.environ.get("ORSO_PERSONA_HMAC_KEY", "")
-        hmac_flag = f"-e ORSO_PERSONA_HMAC_KEY='{hmac_key}' " if hmac_key else "-e ORSO_PERSONA_HMAC_KEY=\"$ORSO_PERSONA_HMAC_KEY\" "
+        # Règle absolue de sécurité : le secret ORSO_PERSONA_HMAC_KEY ne figure JAMAIS dans la ligne de commande.
+        # Il est transmis par l'environnement du processus appelant via le flag Docker -e sans valeur.
+        hmac_key = os.environ.get("ORSO_PERSONA_HMAC_KEY")
+        if not hmac_key:
+            raise ValueError(
+                "Opération refusée (Fail-Closed) : variable ORSO_PERSONA_HMAC_KEY requise "
+                "dans l'environnement du plan de gestion pour sécuriser le démarrage du conteneur."
+            )
+
         run_cmd = (
             f"docker run -d --name {container_name} "
-            f"-p {health_check_port}:9119 "
+            f"-p 127.0.0.1:{health_check_port}:9119 "
             f"--label com.orso.managed=true "
             f"--label com.orso.engine.digest={new_digest} "
             f"--label com.orso.engine.pinned=true "
-            f"{hmac_flag}"
+            f"-e ORSO_PERSONA_HMAC_KEY "
             f"{target_image}"
         )
-        rc_run, stdout_run, stderr_run = run_remote_or_local_cmd(run_cmd, ssh_target, timeout=30)
+        rc_run, stdout_run, stderr_run = run_remote_or_local_cmd(
+            run_cmd,
+            ssh_target,
+            timeout=30,
+            extra_env={"ORSO_PERSONA_HMAC_KEY": hmac_key},
+        )
 
-        # 5. Sonde de santé
-        health_cmd = f"curl -s -o /dev/null -w '%{{http_code}}' http://localhost:{health_check_port}/api/client/status || echo '000'"
+        # 5. Sonde de santé sur la boucle locale
+        health_cmd = f"curl -s -o /dev/null -w '%{{http_code}}' http://127.0.0.1:{health_check_port}/api/client/status || echo '000'"
         health_code = "000"
         for _ in range(6):
             time.sleep(2)
@@ -358,21 +382,31 @@ class EngineDistributionManager:
         stop_cmd = f"docker stop -t 5 {container_name} 2>/dev/null && docker rm -f {container_name} 2>/dev/null || true"
         run_remote_or_local_cmd(stop_cmd, ssh_target)
 
-        hmac_key = os.environ.get("ORSO_PERSONA_HMAC_KEY", "")
-        hmac_flag = f"-e ORSO_PERSONA_HMAC_KEY='{hmac_key}' " if hmac_key else "-e ORSO_PERSONA_HMAC_KEY=\"$ORSO_PERSONA_HMAC_KEY\" "
+        hmac_key = os.environ.get("ORSO_PERSONA_HMAC_KEY")
+        if not hmac_key:
+            raise ValueError(
+                "Opération refusée (Fail-Closed) : variable ORSO_PERSONA_HMAC_KEY requise "
+                "dans l'environnement du plan de gestion pour sécuriser le démarrage du conteneur."
+            )
+
         run_cmd = (
             f"docker run -d --name {container_name} "
-            f"-p {health_check_port}:9119 "
+            f"-p 127.0.0.1:{health_check_port}:9119 "
             f"--label com.orso.managed=true "
             f"--label com.orso.engine.digest={rollback_digest} "
             f"--label com.orso.engine.pinned=true "
-            f"{hmac_flag}"
+            f"-e ORSO_PERSONA_HMAC_KEY "
             f"{target_image}"
         )
-        rc_run, stdout_run, _ = run_remote_or_local_cmd(run_cmd, ssh_target, timeout=20)
+        rc_run, stdout_run, _ = run_remote_or_local_cmd(
+            run_cmd,
+            ssh_target,
+            timeout=20,
+            extra_env={"ORSO_PERSONA_HMAC_KEY": hmac_key},
+        )
 
-        # Sonde de santé
-        health_cmd = f"curl -s -o /dev/null -w '%{{http_code}}' http://localhost:{health_check_port}/api/client/status || echo '000'"
+        # Sonde de santé sur la boucle locale
+        health_cmd = f"curl -s -o /dev/null -w '%{{http_code}}' http://127.0.0.1:{health_check_port}/api/client/status || echo '000'"
         health_code = "000"
         for _ in range(6):
             time.sleep(2)
@@ -428,15 +462,32 @@ DEFAULT_HOSTS = [
 ]
 
 
-def run_remote_or_local_cmd(cmd: str, ssh_target: Optional[str] = None, timeout: int = 25) -> Tuple[int, str, str]:
-    """Exécute une commande localement ou à distance via SSH."""
+def run_remote_or_local_cmd(
+    cmd: str,
+    ssh_target: Optional[str] = None,
+    timeout: int = 25,
+    extra_env: Optional[Dict[str, str]] = None,
+) -> Tuple[int, str, str]:
+    """Exécute une commande localement ou à distance via SSH avec encodage explicite UTF-8."""
     if ssh_target:
         full_cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", ssh_target, cmd]
     else:
         full_cmd = shlex.split(cmd)
 
+    proc_env = dict(os.environ)
+    if extra_env:
+        proc_env.update(extra_env)
+
     try:
-        proc = subprocess.run(full_cmd, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(
+            full_cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=proc_env,
+            encoding="utf-8",
+            errors="replace",
+        )
         return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
     except subprocess.TimeoutExpired:
         return 124, "", "Commande expirée (Timeout)"
@@ -446,7 +497,11 @@ def run_remote_or_local_cmd(cmd: str, ssh_target: Optional[str] = None, timeout:
 
 def probe_docker_host(host_spec: Dict[str, Any]) -> Dict[str, Any]:
     """
-    CA3 : Sonde le démon Docker d'un hôte distant pour en extraire l'empreinte active réelle.
+    CA3 : Sonde le démon Docker d'un hôte pour en extraire l'empreinte active réelle.
+    Règles de gouvernance (Arbitrage PO / KAN-64) :
+    - La SOURCE DE VÉRITÉ est l'image réellement chargée par le conteneur en service (.Image / RepoDigests).
+    - L'étiquette 'com.orso.engine.digest' est un CONTRÔLE CROISÉ : toute divergence avec l'image réelle alerte.
+    - Un hôte sans conteneur client actif n'est JAMAIS déclaré IN_SYNC.
     """
     host_id = host_spec.get("host_id", "unknown")
     host_name = host_spec.get("host_name", host_id)
@@ -461,55 +516,94 @@ def probe_docker_host(host_spec: Dict[str, Any]) -> Dict[str, Any]:
             "active_digest": "",
             "running_containers": [],
             "is_reachable": False,
+            "label_mismatch": False,
+            "label_mismatch_detail": None,
             "error": stderr or "Démon Docker inaccessible",
         }
 
     running_containers = [c.strip() for c in stdout.splitlines() if c.strip()]
     matching_containers = [c for c in running_containers if container_filter in c]
 
-    active_digest = ""
-    pinned_image = ""
+    if not matching_containers:
+        # Règle d'or KAN-64 : Aucun conteneur client actif en service.
+        # Interdiction absolue d'aller sonder les images résiduelles en cache pour déclarer l'hôte IN_SYNC.
+        return {
+            "host_id": host_id,
+            "host_name": host_name,
+            "active_digest": "",
+            "pinned_image": "",
+            "running_containers": [],
+            "is_reachable": True,
+            "label_mismatch": False,
+            "label_mismatch_detail": None,
+            "error": "Aucun conteneur client actif en service",
+        }
 
-    if matching_containers:
-        target_c = matching_containers[0]
-        inspect_cmd = (
-            f"docker inspect --format '{{{{.Image}}}} | {{{{.Config.Image}}}} | "
-            f"{{{{index .Config.Labels \"com.orso.engine.digest\"}}}}' {target_c}"
+    target_c = matching_containers[0]
+    inspect_cmd = (
+        f"docker inspect --format '{{{{.Config.Image}}}} | "
+        f"{{{{index .Config.Labels \"com.orso.engine.digest\"}}}} | "
+        f"{{{{.Image}}}}' {target_c}"
+    )
+    rc_i, stdout_i, _ = run_remote_or_local_cmd(inspect_cmd, ssh_target)
+
+    cfg_img = ""
+    lbl_digest = ""
+    img_id = ""
+    if rc_i == 0 and stdout_i:
+        parts = [p.strip() for p in stdout_i.split("|")]
+        cfg_img = parts[0] if len(parts) > 0 else ""
+        lbl_digest = parts[1] if len(parts) > 1 else ""
+        img_id = parts[2] if len(parts) > 2 else ""
+
+    # Extraction du RepoDigest de l'image Docker sous-jacente réellement chargée
+    real_digest = ""
+    real_image_repo = ""
+    if img_id:
+        rc_img, stdout_img, _ = run_remote_or_local_cmd(
+            f"docker inspect --format '{{{{json .RepoDigests}}}}' {img_id}",
+            ssh_target,
         )
-        rc_i, stdout_i, _ = run_remote_or_local_cmd(inspect_cmd, ssh_target)
-        if rc_i == 0 and stdout_i:
-            parts = [p.strip() for p in stdout_i.split("|")]
-            img_id = parts[0] if len(parts) > 0 else ""
-            cfg_img = parts[1] if len(parts) > 1 else ""
-            lbl_digest = parts[2] if len(parts) > 2 else ""
-
-            if lbl_digest and validate_digest(lbl_digest):
-                active_digest = lbl_digest
-            elif "@sha256:" in cfg_img:
-                active_digest = "sha256:" + cfg_img.split("@sha256:")[1].strip()
-            elif validate_digest(img_id):
-                active_digest = img_id
-
-            pinned_image = cfg_img or img_id
-    else:
-        # Aucun conteneur client actif, inspecte les images orso locales avec digest
-        img_cmd = "docker images --digests --format '{{.Repository}}:{{.Tag}}@{{.Digest}} | {{.ID}}'"
-        rc_img, stdout_img, _ = run_remote_or_local_cmd(img_cmd, ssh_target)
         if rc_img == 0 and stdout_img:
-            for line in stdout_img.splitlines():
-                if "orso" in line.lower() and "@sha256:" in line:
-                    ref, _, _ = line.partition(" | ")
-                    active_digest = "sha256:" + ref.split("@sha256:")[1].strip()
-                    pinned_image = ref.strip()
-                    break
+            try:
+                digests_list = json.loads(stdout_img)
+                if isinstance(digests_list, list) and digests_list:
+                    first_ref = digests_list[0]
+                    if "@sha256:" in first_ref:
+                        real_image_repo, real_digest = first_ref.split("@", 1)
+            except Exception:
+                pass
+
+    if not real_digest:
+        if "@sha256:" in cfg_img:
+            real_image_repo, real_digest = cfg_img.split("@", 1)
+        elif validate_digest(img_id):
+            real_digest = img_id
+
+    # La source de vérité absolue est l'image réelle
+    active_digest = real_digest.strip()
+    pinned_image = cfg_img or (f"{real_image_repo}@{real_digest}" if real_digest else img_id)
+
+    # Contrôle croisé : vérification de concordance de l'étiquette
+    label_mismatch = False
+    label_mismatch_detail = None
+    if lbl_digest and validate_digest(lbl_digest) and active_digest:
+        if lbl_digest.strip().lower() != active_digest.strip().lower():
+            label_mismatch = True
+            label_mismatch_detail = (
+                f"Divergence critique détectée sur {target_c} : "
+                f"l'étiquette déclare '{lbl_digest}' mais l'image réellement chargée est '{pinned_image}' (digest: {active_digest})"
+            )
 
     return {
         "host_id": host_id,
         "host_name": host_name,
         "active_digest": active_digest,
         "pinned_image": pinned_image,
-        "running_containers": running_containers,
+        "running_containers": matching_containers,
         "is_reachable": True,
+        "label_mismatch": label_mismatch,
+        "label_mismatch_detail": label_mismatch_detail,
     }
 
 
@@ -531,11 +625,13 @@ def main():
     up_parser.add_argument("--host-id", required=True)
     up_parser.add_argument("--new-digest", required=True)
     up_parser.add_argument("--container", default="orso_client_demo")
+    up_parser.add_argument("--local", action="store_true", help="Exécute la mise à jour directement en local sans SSH")
 
     rb_parser = sub.add_parser("rollback", help="Exécute un rollback sur un hôte")
     rb_parser.add_argument("--host-id", required=True)
     rb_parser.add_argument("--rollback-digest", required=True)
     rb_parser.add_argument("--container", default="orso_client_demo")
+    rb_parser.add_argument("--local", action="store_true", help="Exécute le rollback directement en local sans SSH")
 
     args = parser.parse_args()
 
@@ -576,19 +672,35 @@ def main():
         sys.exit(1 if report.is_drift_detected else 0)
 
     elif args.command == "update":
-        target_host = next((h for h in DEFAULT_HOSTS if h["host_id"] == args.host_id), None)
-        if not target_host:
-            print(f"Hôte inconnu : {args.host_id}")
-            sys.exit(1)
+        if getattr(args, "local", False):
+            target_host = {
+                "host_id": args.host_id,
+                "host_name": f"Hôte Local ({args.host_id})",
+                "ssh_target": None,
+                "container_filter": "orso_client",
+            }
+        else:
+            target_host = next((h for h in DEFAULT_HOSTS if h["host_id"] == args.host_id), None)
+            if not target_host:
+                print(f"Hôte inconnu : {args.host_id}")
+                sys.exit(1)
         res = mgr.execute_live_host_update(target_host, new_digest=args.new_digest, container_name=args.container)
         print(json.dumps(res, indent=2))
         sys.exit(0 if res.get("success") else 1)
 
     elif args.command == "rollback":
-        target_host = next((h for h in DEFAULT_HOSTS if h["host_id"] == args.host_id), None)
-        if not target_host:
-            print(f"Hôte inconnu : {args.host_id}")
-            sys.exit(1)
+        if getattr(args, "local", False):
+            target_host = {
+                "host_id": args.host_id,
+                "host_name": f"Hôte Local ({args.host_id})",
+                "ssh_target": None,
+                "container_filter": "orso_client",
+            }
+        else:
+            target_host = next((h for h in DEFAULT_HOSTS if h["host_id"] == args.host_id), None)
+            if not target_host:
+                print(f"Hôte inconnu : {args.host_id}")
+                sys.exit(1)
         res = mgr.execute_live_host_rollback(target_host, rollback_digest=args.rollback_digest, container_name=args.container)
         print(json.dumps(res, indent=2))
         sys.exit(0 if res.get("success") else 1)

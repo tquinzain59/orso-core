@@ -195,10 +195,16 @@ class TestKAN64ExecutionReelleDistribution:
             assert violations[0]["type"] == "CLIENT_DATA_LEAK"
 
     def test_ca3_probed_drift_detection(self):
-        """CA3 : Détection de dérive multi-hôtes avec sonde automatisée."""
+        """
+        CA3 : Détection de dérive multi-hôtes avec sonde automatisée.
+        Vérifie les exigences de gouvernance (Commentaires 15 & 16) :
+        - Un hôte sans conteneur client actif n'est JAMAIS déclaré IN_SYNC.
+        - Un conteneur dont l'étiquette diverge de l'image réelle déclenche une alerte DRIFT_DETECTED.
+        - Un conteneur en phase avec le digest cible est IN_SYNC.
+        """
         mgr = EngineDistributionManager(target_digest=REF_DIGEST_V1)
 
-        # Simulation de la réponse de deux sondes d'hôtes réelles
+        # 1. Hôte synchronisé (conteneur client actif portant l'image réelle cible)
         fake_host_synced = {
             "host_id": "prod-fr-002",
             "host_name": "Serveur Olympe",
@@ -206,7 +212,9 @@ class TestKAN64ExecutionReelleDistribution:
             "pinned_image": f"ghcr.io/tquinzain59/orso-engine@{REF_DIGEST_V1}",
             "running_containers": ["orso_client_prod"],
             "is_reachable": True,
+            "label_mismatch": False,
         }
+        # 2. Hôte en dérive de version (image différente)
         fake_host_drifted = {
             "host_id": "prod-fr-003",
             "host_name": "Serveur Clients",
@@ -214,21 +222,63 @@ class TestKAN64ExecutionReelleDistribution:
             "pinned_image": f"ghcr.io/tquinzain59/orso-engine@{DRIFTED_DIGEST}",
             "running_containers": ["orso_client_test"],
             "is_reachable": True,
+            "label_mismatch": False,
+        }
+        # 3. Hôte vide (aucun conteneur en service) -> doit être DRIFT_DETECTED, jamais IN_SYNC
+        fake_host_empty = {
+            "host_id": "prod-fr-004",
+            "host_name": "Hôte Sans Conteneur",
+            "active_digest": "",
+            "pinned_image": "",
+            "running_containers": [],
+            "is_reachable": True,
+            "label_mismatch": False,
+        }
+        # 4. Hôte avec étiquette falsifiée (ex: alpine avec label du digest cible)
+        fake_host_falsified = {
+            "host_id": "prod-fr-005",
+            "host_name": "Hôte Falsifié",
+            "active_digest": DRIFTED_DIGEST,
+            "pinned_image": "alpine:3.20",
+            "running_containers": ["orso_client_fake"],
+            "is_reachable": True,
+            "label_mismatch": True,
+            "label_mismatch_detail": "Divergence critique détectée : étiquette falsifiée",
         }
 
-        with patch("scripts.distribution.engine_image_manager.probe_docker_host", side_effect=[fake_host_synced, fake_host_drifted]):
-            report = mgr.audit_hosts_drift_live(host_specs=[{"host_id": "h1"}, {"host_id": "h2"}])
+        with patch("scripts.distribution.engine_image_manager.probe_docker_host", side_effect=[
+            fake_host_synced, fake_host_drifted, fake_host_empty, fake_host_falsified
+        ]):
+            report = mgr.audit_hosts_drift_live(host_specs=[
+                {"host_id": "h1"}, {"host_id": "h2"}, {"host_id": "h3"}, {"host_id": "h4"}
+            ])
             assert report.is_drift_detected is True
-            assert report.drifted_count == 1
             assert report.in_sync_count == 1
-            drifted_item = next(h for h in report.hosts if h.host_id == "prod-fr-003")
-            assert drifted_item.status == "DRIFT_DETECTED"
+            assert report.drifted_count == 3
+
+            empty_item = next(h for h in report.hosts if h.host_id == "prod-fr-004")
+            assert empty_item.status == "DRIFT_DETECTED"
+            assert "Aucun conteneur client" in empty_item.drift_details
+
+            falsified_item = next(h for h in report.hosts if h.host_id == "prod-fr-005")
+            assert falsified_item.status == "DRIFT_DETECTED"
+            assert "Divergence" in falsified_item.drift_details
 
     def test_ca4_live_update_and_rollback_flow(self):
-        """CA4 : Exécution de la mise à jour et du rollback avec validation d'états."""
+        """
+        CA4 : Exécution de la mise à jour et du rollback.
+        Garanties vérifiées :
+        - Port binding restreint strictement à 127.0.0.1 (jamais 0.0.0.0).
+        - Clé HMAC transmise via l'environnement du processus, JAMAIS sur la ligne de commande.
+        - Refus Fail-Closed si la clé HMAC est absente de l'environnement appelant.
+        """
         mgr = EngineDistributionManager(target_digest=REF_DIGEST_V2)
-
         host_spec = {"host_id": "prod-fr-003", "ssh_target": "ubuntu@mock"}
+
+        # Refus si ORSO_PERSONA_HMAC_KEY absente
+        with patch.dict(os.environ, {}, clear=True):
+            with pytest.raises(ValueError, match="ORSO_PERSONA_HMAC_KEY requise"):
+                mgr.execute_live_host_update(host_spec, new_digest=REF_DIGEST_V2)
 
         state_initial = {
             "host_id": "prod-fr-003",
@@ -249,21 +299,40 @@ class TestKAN64ExecutionReelleDistribution:
             "is_reachable": True,
         }
 
-        # 1. Test mise à jour
-        with patch("scripts.distribution.engine_image_manager.run_remote_or_local_cmd") as mock_run:
-            mock_run.return_value = (0, "200", "")
-            with patch("scripts.distribution.engine_image_manager.probe_docker_host", side_effect=[state_initial, state_updated]):
-                res_update = mgr.execute_live_host_update(host_spec, new_digest=REF_DIGEST_V2, container_name="orso_client_demo")
-                assert res_update["success"] is True
-                assert res_update["state_before"]["active_digest"] == REF_DIGEST_V1
-                assert res_update["state_after"]["active_digest"] == REF_DIGEST_V2
-                assert res_update["health_http_code"] == "200"
+        with patch.dict(os.environ, {"ORSO_PERSONA_HMAC_KEY": "fleet-secret-key"}):
+            # 1. Test mise à jour
+            with patch("scripts.distribution.engine_image_manager.run_remote_or_local_cmd") as mock_run:
+                mock_run.return_value = (0, "200", "")
+                with patch("scripts.distribution.engine_image_manager.probe_docker_host", side_effect=[state_initial, state_updated]):
+                    res_update = mgr.execute_live_host_update(host_spec, new_digest=REF_DIGEST_V2, container_name="orso_client_demo")
+                    assert res_update["success"] is True
+                    assert res_update["state_before"]["active_digest"] == REF_DIGEST_V1
+                    assert res_update["state_after"]["active_digest"] == REF_DIGEST_V2
+                    assert res_update["health_http_code"] == "200"
 
-        # 2. Test rollback
-        with patch("scripts.distribution.engine_image_manager.run_remote_or_local_cmd") as mock_run:
-            mock_run.return_value = (0, "200", "")
-            with patch("scripts.distribution.engine_image_manager.probe_docker_host", side_effect=[state_updated, state_rolledback]):
-                res_rollback = mgr.execute_live_host_rollback(host_spec, rollback_digest=REF_DIGEST_V1, container_name="orso_client_demo")
-                assert res_rollback["success"] is True
-                assert res_rollback["state_before"]["active_digest"] == REF_DIGEST_V2
-                assert res_rollback["state_after"]["active_digest"] == REF_DIGEST_V1
+                    # Vérification des arguments de commande exécutés
+                    calls = mock_run.call_args_list
+                    run_call = next(c for c in calls if "docker run" in c[0][0])
+                    run_cmd_str = run_call[0][0]
+                    # Port restreint à la boucle locale
+                    assert "-p 127.0.0.1:9119:9119" in run_cmd_str
+                    assert "-p 9119:9119" not in run_cmd_str
+                    # Secret absent de la ligne de commande
+                    assert "fleet-secret-key" not in run_cmd_str
+                    assert "-e ORSO_PERSONA_HMAC_KEY " in run_cmd_str
+                    # Clé transmise dans l'environnement du processus
+                    assert run_call[1].get("extra_env") == {"ORSO_PERSONA_HMAC_KEY": "fleet-secret-key"}
+
+            # 2. Test rollback
+            with patch("scripts.distribution.engine_image_manager.run_remote_or_local_cmd") as mock_run:
+                mock_run.return_value = (0, "200", "")
+                with patch("scripts.distribution.engine_image_manager.probe_docker_host", side_effect=[state_updated, state_rolledback]):
+                    res_rollback = mgr.execute_live_host_rollback(host_spec, rollback_digest=REF_DIGEST_V1, container_name="orso_client_demo")
+                    assert res_rollback["success"] is True
+                    assert res_rollback["state_before"]["active_digest"] == REF_DIGEST_V2
+                    assert res_rollback["state_after"]["active_digest"] == REF_DIGEST_V1
+
+                    calls_rb = mock_run.call_args_list
+                    run_call_rb = next(c for c in calls_rb if "docker run" in c[0][0])
+                    assert "-p 127.0.0.1:9119:9119" in run_call_rb[0][0]
+                    assert "fleet-secret-key" not in run_call_rb[0][0]

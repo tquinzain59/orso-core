@@ -92,10 +92,10 @@ def build_and_publish_engine(
     build_cmd.append(str(PROJECT_ROOT))
 
     print(f"[>] Exécution : {' '.join(build_cmd)}")
-    build_proc = subprocess.run(build_cmd, capture_output=True, text=True)
+    build_proc = subprocess.run(build_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
     if build_proc.returncode != 0:
-        print(f"[!] Erreur de build/push :")
+        print("[!] Erreur de build/push :")
         print(build_proc.stderr)
         return {
             "success": False,
@@ -108,7 +108,7 @@ def build_and_publish_engine(
     # Extraction du digest immuable
     digest = ""
     manifest_cmd = ["docker", "buildx", "imagetools", "inspect", tag_version]
-    manifest_proc = subprocess.run(manifest_cmd, capture_output=True, text=True)
+    manifest_proc = subprocess.run(manifest_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if manifest_proc.returncode == 0:
         for line in manifest_proc.stdout.splitlines():
             if "digest:" in line.lower() or "sha256:" in line.lower():
@@ -121,7 +121,13 @@ def build_and_publish_engine(
 
     if not digest:
         # Fallback inspection docker inspect
-        inspect_proc = subprocess.run(["docker", "inspect", "--format='{{index .RepoDigests 0}}'", tag_version], capture_output=True, text=True)
+        inspect_proc = subprocess.run(
+            ["docker", "inspect", "--format='{{index .RepoDigests 0}}'", tag_version],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
         if inspect_proc.returncode == 0 and "@sha256:" in inspect_proc.stdout:
             digest = "sha256:" + inspect_proc.stdout.split("@sha256:")[1].strip().strip("'\"")
 
@@ -137,7 +143,7 @@ def build_and_publish_engine(
         "build_output": build_proc.stdout[:500],
     }
 
-    print(f"\n[✓] RÉSULTAT FORMEL PUBLICATION :")
+    print("\n[✓] RÉSULTAT FORMEL PUBLICATION :")
     print(f"Image épinglée : {result['target_image']}")
     print(f"Digest SHA-256 : {result['digest']}")
 
@@ -158,7 +164,7 @@ def main():
     if not args.no_push:
         token = args.gh_token
         if not token and os.path.exists(".env"):
-            with open(".env") as f:
+            with open(".env", "r", encoding="utf-8") as f:
                 for line in f:
                     if "GHCR_PAT=" in line or "GITHUB_PACKAGES_TOKEN=" in line:
                         token = line.split("=", 1)[1].strip().strip("\"'")

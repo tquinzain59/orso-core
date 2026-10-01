@@ -418,7 +418,7 @@ def monitor_loop(
                 pass
 
             try:
-                os.kill(1, signal.SIGKILL)
+                os.kill(1, getattr(signal, "SIGKILL", signal.SIGTERM))
             except Exception:
                 pass
             try:
