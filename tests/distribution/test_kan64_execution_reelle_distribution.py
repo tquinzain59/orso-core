@@ -30,6 +30,11 @@ from scripts.security.audit_zero_secrets_and_client_data import (
     audit_client_data_in_repository,
     audit_docker_image_for_secrets_and_client_data,
 )
+from scripts.security.persona_integrity import (
+    verify_all_personas,
+    EVENT_OK,
+    EVENT_CONFIG_ERROR,
+)
 from olympe.lifecycle_manager import DockerLifecycleManager
 
 
@@ -53,6 +58,7 @@ class TestKAN64ExecutionReelleDistribution:
                 tenant_id="test-client-1",
                 tenant_slug="client-no-digest",
                 image_name="ghcr.io/tquinzain59/orso-engine:latest",
+                persona_hmac_key="mock-key",
             )
             assert res_no_digest["success"] is False
             assert res_no_digest["error"] == "ERR_DIGEST_REQUIRED"
@@ -64,12 +70,13 @@ class TestKAN64ExecutionReelleDistribution:
                 tenant_slug="client-invalid-digest",
                 image_digest="invalid-sha256-string",
                 require_digest=True,
+                persona_hmac_key="mock-key",
             )
             assert res_invalid["success"] is False
             assert res_invalid["error"] == "ERR_INVALID_DIGEST"
 
             # 3. Tentative avec variable d'environnement ORSO_TARGET_ENGINE_DIGEST (alignement spécification)
-            with patch.dict(os.environ, {"ORSO_TARGET_ENGINE_DIGEST": REF_DIGEST_V1}):
+            with patch.dict(os.environ, {"ORSO_TARGET_ENGINE_DIGEST": REF_DIGEST_V1, "ORSO_PERSONA_HMAC_KEY": "mock-fleet-key"}):
                 mock_proc = subprocess.CompletedProcess(args=["docker", "run"], returncode=0, stdout="c999", stderr="")
                 with patch.object(mgr, "_exec_docker", return_value=mock_proc):
                     with patch.object(mgr, "_sync_tenant_instance_record"):
@@ -81,6 +88,95 @@ class TestKAN64ExecutionReelleDistribution:
                         assert res_ok["success"] is True
                         assert res_ok["digest"] == REF_DIGEST_V1
                         assert f"@{REF_DIGEST_V1}" in res_ok["image"]
+
+    def test_persona_hmac_key_fleet_enforcement_and_container_launch(self, tmp_path):
+        """
+        Arbitrage Thibaut / Commentaire 13 KAN-64 :
+        Validation stricte de la clé HMAC de flotte partagée (ORSO_PERSONA_HMAC_KEY) :
+        1. Preuve 1 : Contrôle persona integrity avec clé HMAC -> succès (code 0 / PER-INTEGRITY-000).
+        2. Preuve 2 : Contrôle persona integrity sans clé HMAC -> échec explicite Fail-Closed (code 1 / PER-INTEGRITY-003).
+        3. Preuve 3 : Provisioning Olympe sans clé HMAC -> refus ERR_HMAC_KEY_REQUIRED (aucun conteneur créé).
+        4. Preuve 4 : Provisioning Olympe avec clé HMAC -> succès et injection stricte dans base_envs conteneur.
+        """
+        # 1. Preuve 1 : Contrôle d'intégrité avec clé valide
+        # Création de faux profils et lockfile temporaires valides
+        profiles_dir = tmp_path / "profiles"
+        profiles_dir.mkdir()
+        agent_dir = profiles_dir / "jerome"
+        agent_dir.mkdir()
+        soul_file = agent_dir / "SOUL.md"
+        soul_file.write_text("# Jerome\nContenu de test pour intégrité.\n", encoding="utf-8")
+
+        from scripts.security.persona_integrity import compute_persona_hmac, compute_file_sha256
+        import json
+        sha256_hash = compute_file_sha256(soul_file)
+        hmac_sig = compute_persona_hmac("secret-fleet-key", "jerome", sha256_hash)
+
+        lock_file = profiles_dir / "personas.lock.json"
+        lock_file.write_text(
+            json.dumps({
+                "version": "1.0",
+                "personas": {
+                    "jerome": {
+                        "path": "jerome/SOUL.md",
+                        "sha256": sha256_hash,
+                        "hmac_signature": hmac_sig,
+                    }
+                }
+            }),
+            encoding="utf-8",
+        )
+
+        valid_with_key, errors_with_key, _ = verify_all_personas(
+            profiles_dir=profiles_dir,
+            lock_file=lock_file,
+            hmac_key="secret-fleet-key",
+            record_logs=False,
+        )
+        assert valid_with_key is True
+        assert len(errors_with_key) == 0
+
+        # 2. Preuve 2 : Contrôle d'intégrité sans clé -> échec Fail-Closed
+        with patch.dict(os.environ, {}, clear=True):
+            valid_no_key, errors_no_key, _ = verify_all_personas(
+                profiles_dir=profiles_dir,
+                lock_file=lock_file,
+                hmac_key=None,
+                record_logs=False,
+            )
+            assert valid_no_key is False
+            assert len(errors_no_key) >= 1
+            assert any("ORSO_PERSONA_HMAC_KEY" in e for e in errors_no_key)
+
+        # 3. Preuve 3 : Provisioning Olympe sans clé -> refus ERR_HMAC_KEY_REQUIRED
+        mgr = DockerLifecycleManager(data_root=Path(tempfile.mkdtemp()))
+        mgr.has_docker = True
+        status_not_found = {"status": "not_found", "running": False}
+
+        with patch.object(mgr, "get_tenant_status", return_value=status_not_found):
+            with patch.dict(os.environ, {"ORSO_TARGET_ENGINE_DIGEST": REF_DIGEST_V1}, clear=True):
+                res_refused_no_hmac = mgr.provision_tenant(
+                    tenant_id="client-demo-no-key",
+                    tenant_slug="demo-no-key",
+                )
+                assert res_refused_no_hmac["success"] is False
+                assert res_refused_no_hmac["error"] == "ERR_HMAC_KEY_REQUIRED"
+                assert "ORSO_PERSONA_HMAC_KEY est strictement requise" in res_refused_no_hmac["message"]
+
+        # 4. Preuve 4 : Provisioning Olympe avec clé -> succès et transmission dans base_envs
+        with patch.object(mgr, "get_tenant_status", return_value=status_not_found):
+            with patch.dict(os.environ, {"ORSO_TARGET_ENGINE_DIGEST": REF_DIGEST_V1, "ORSO_PERSONA_HMAC_KEY": "secret-fleet-key"}):
+                mock_proc = subprocess.CompletedProcess(args=["docker", "run"], returncode=0, stdout="c1000", stderr="")
+                with patch.object(mgr, "_exec_docker", return_value=mock_proc) as mock_exec:
+                    with patch.object(mgr, "_sync_tenant_instance_record"):
+                        res_success = mgr.provision_tenant(
+                            tenant_id="client-demo-with-key",
+                            tenant_slug="demo-with-key",
+                        )
+                        assert res_success["success"] is True
+                        assert mock_exec.called
+                        run_cmd_args = mock_exec.call_args[0][0]
+                        assert "ORSO_PERSONA_HMAC_KEY=secret-fleet-key" in run_cmd_args
 
     def test_ca5_calculated_client_data_counter(self, tmp_path):
         """CA5 : Le compteur de données client est calculé dynamiquement, jamais codé en dur."""

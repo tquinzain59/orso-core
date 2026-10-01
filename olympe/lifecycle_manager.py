@@ -247,6 +247,7 @@ class DockerLifecycleManager:
         quotas: Optional[Dict[str, Any]] = None,
         require_digest: Optional[bool] = None,
         allow_floating_tag: bool = False,
+        persona_hmac_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Provisionne un nouvel environnement client hermétique."""
         container_name = normalize_container_name(tenant_slug)
@@ -310,11 +311,33 @@ class DockerLifecycleManager:
                 ),
             }
 
+        # Règle d'or KAN-33 / KAN-64 (Arbitrage Thibaut - Commentaire 13) :
+        # Le plan de gestion lit ORSO_PERSONA_HMAC_KEY dans son propre environnement
+        # et la transmet au conteneur client lors du docker run (base_envs).
+        # Si la variable est absente de l'environnement de gestion lors de la création,
+        # le provisioning échoue explicitement (ERR_HMAC_KEY_REQUIRED), sans créer de conteneur zombi.
+        effective_hmac_key = (
+            persona_hmac_key
+            or (env_vars or {}).get("ORSO_PERSONA_HMAC_KEY")
+            or os.environ.get("ORSO_PERSONA_HMAC_KEY")
+        )
+        if not effective_hmac_key:
+            return {
+                "success": False,
+                "error": "ERR_HMAC_KEY_REQUIRED",
+                "tenant_slug": tenant_slug,
+                "message": (
+                    "Provisioning refusé : ORSO_PERSONA_HMAC_KEY est strictement requise "
+                    "dans l'environnement de gestion pour garantir l'intégrité cryptographique des personas."
+                ),
+            }
+
         base_envs = {
             "ORSO_CLIENT_ID": tenant_id,
             "ORSO_CLIENT_SLUG": tenant_slug,
             "HERMES_CONFIG_PATH": "/app/config/hermes.yaml",
             "HERMES_HOME": "/app/data/hermes_home",
+            "ORSO_PERSONA_HMAC_KEY": effective_hmac_key,
         }
         for key in ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY"]:
             val = os.environ.get(key)

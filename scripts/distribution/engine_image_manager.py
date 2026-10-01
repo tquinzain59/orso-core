@@ -295,13 +295,16 @@ class EngineDistributionManager:
         rm_cmd = f"docker rm -f {container_name} 2>/dev/null || true"
         run_remote_or_local_cmd(rm_cmd, ssh_target)
 
-        # 4. Relance du conteneur avec l'image épinglée
+        # 4. Relance du conteneur avec l'image épinglée et clé d'intégrité personas (KAN-33 / KAN-64)
+        hmac_key = os.environ.get("ORSO_PERSONA_HMAC_KEY", "")
+        hmac_flag = f"-e ORSO_PERSONA_HMAC_KEY='{hmac_key}' " if hmac_key else "-e ORSO_PERSONA_HMAC_KEY=\"$ORSO_PERSONA_HMAC_KEY\" "
         run_cmd = (
             f"docker run -d --name {container_name} "
             f"-p {health_check_port}:9119 "
             f"--label com.orso.managed=true "
             f"--label com.orso.engine.digest={new_digest} "
             f"--label com.orso.engine.pinned=true "
+            f"{hmac_flag}"
             f"{target_image}"
         )
         rc_run, stdout_run, stderr_run = run_remote_or_local_cmd(run_cmd, ssh_target, timeout=30)
@@ -355,12 +358,15 @@ class EngineDistributionManager:
         stop_cmd = f"docker stop -t 5 {container_name} 2>/dev/null && docker rm -f {container_name} 2>/dev/null || true"
         run_remote_or_local_cmd(stop_cmd, ssh_target)
 
+        hmac_key = os.environ.get("ORSO_PERSONA_HMAC_KEY", "")
+        hmac_flag = f"-e ORSO_PERSONA_HMAC_KEY='{hmac_key}' " if hmac_key else "-e ORSO_PERSONA_HMAC_KEY=\"$ORSO_PERSONA_HMAC_KEY\" "
         run_cmd = (
             f"docker run -d --name {container_name} "
             f"-p {health_check_port}:9119 "
             f"--label com.orso.managed=true "
             f"--label com.orso.engine.digest={rollback_digest} "
             f"--label com.orso.engine.pinned=true "
+            f"{hmac_flag}"
             f"{target_image}"
         )
         rc_run, stdout_run, _ = run_remote_or_local_cmd(run_cmd, ssh_target, timeout=20)
@@ -513,8 +519,13 @@ def main():
     parser.add_argument("--registry-base", default="ghcr.io/tquinzain59/orso-engine")
 
     sub = parser.add_subparsers(dest="command")
-    sub.add_parser("probe", help="Sonde l'état réel des démons Docker de tous les hôtes")
-    sub.add_parser("audit", help="Exécute un audit de dérive en direct")
+    probe_parser = sub.add_parser("probe", help="Sonde l'état réel des démons Docker de tous les hôtes")
+    probe_parser.add_argument("--local", action="store_true", help="Sonde le démon Docker local sans passer par SSH")
+    probe_parser.add_argument("--host-id", help="Identifiant de l'hôte (ex: prod-fr-003)")
+
+    audit_parser = sub.add_parser("audit", help="Exécute un audit de dérive en direct")
+    audit_parser.add_argument("--local", action="store_true", help="Audit local uniquement sans passer par SSH")
+    audit_parser.add_argument("--host-id", help="Identifiant de l'hôte (ex: prod-fr-003)")
 
     up_parser = sub.add_parser("update", help="Exécute une mise à jour sur un hôte")
     up_parser.add_argument("--host-id", required=True)
@@ -532,7 +543,16 @@ def main():
 
     if args.command == "probe":
         print("\n=== Sonde en Direct des Hôtes de Déploiement ===")
-        for h in DEFAULT_HOSTS:
+        hosts = DEFAULT_HOSTS
+        if getattr(args, "local", False):
+            hid = getattr(args, "host_id", None) or "local"
+            hosts = [{
+                "host_id": hid,
+                "host_name": f"Hôte Local ({hid})",
+                "ssh_target": None,
+                "container_filter": "orso_client",
+            }]
+        for h in hosts:
             state = probe_docker_host(h)
             print(f"[{state['host_id']}] {state['host_name']}")
             print(f"  Accessible        : {state['is_reachable']}")
@@ -542,7 +562,16 @@ def main():
         print("================================================\n")
 
     elif args.command == "audit":
-        report = mgr.audit_hosts_drift_live()
+        host_specs = None
+        if getattr(args, "local", False):
+            hid = getattr(args, "host_id", None) or "local"
+            host_specs = [{
+                "host_id": hid,
+                "host_name": f"Hôte Local ({hid})",
+                "ssh_target": None,
+                "container_filter": "orso_client",
+            }]
+        report = mgr.audit_hosts_drift_live(host_specs=host_specs)
         print(json.dumps(asdict(report), indent=2))
         sys.exit(1 if report.is_drift_detected else 0)
 

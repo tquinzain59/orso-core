@@ -82,6 +82,7 @@ class TestKAN63CriteriaAcceptance:
                         tenant_slug="client-ca2",
                         image_name="ghcr.io/tquinzain59/orso-engine:latest",
                         image_digest=REF_DIGEST_V1,
+                        persona_hmac_key="mock-fleet-hmac-key",
                     )
                     assert res["success"] is True
                     assert res["digest"] == REF_DIGEST_V1
