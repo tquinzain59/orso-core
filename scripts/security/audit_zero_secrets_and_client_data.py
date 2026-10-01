@@ -15,6 +15,7 @@ import re
 import sys
 import json
 import subprocess
+import tarfile
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
@@ -173,79 +174,223 @@ def audit_client_data_in_repository(root_dir: Path) -> List[Dict[str, Any]]:
     return violations
 
 
-def audit_docker_image_for_secrets_and_client_data(image_ref: str) -> Dict[str, List[Dict[str, Any]]]:
-    """Inspecte une image Docker construite pour vérifier l'absence de secrets et de données clients."""
-    result = {"secrets": [], "client_data": []}
-    try:
-        inspect_proc = subprocess.run(
-            ["docker", "inspect", image_ref],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if inspect_proc.returncode != 0:
-            return result
+def audit_docker_image_for_secrets_and_client_data(image_ref: str) -> Dict[str, Any]:
+    """
+    CA5 : Inspecte une image Docker construite de façon falsifiable :
+    1. Contrôle des variables d'environnement et labels via docker inspect (sans exception pass).
+    2. Extraction réelle et scan de l'arborescence des fichiers via conteneur éphémère (docker create + docker export).
+    3. Échec strict (code 1 / FAILED) si Docker est inaccessible ou si l'image ne peut être ouverte.
+    """
+    result: Dict[str, Any] = {
+        "secrets": [],
+        "client_data": [],
+        "errors": [],
+        "scanned_files_count": 0,
+    }
 
+    if not image_ref:
+        result["errors"].append({
+            "type": "EMPTY_IMAGE_REF",
+            "file": "cli_or_env",
+            "label": "Référence d'image Docker vide ou non renseignée.",
+        })
+        return result
+
+    # 1. Inspection Docker (Environnement et Labels)
+    inspect_proc = subprocess.run(
+        ["docker", "inspect", image_ref],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if inspect_proc.returncode != 0:
+        result["errors"].append({
+            "type": "IMAGE_INSPECT_FAILED",
+            "file": f"docker://{image_ref}",
+            "label": f"Échec docker inspect ({inspect_proc.returncode}) : {inspect_proc.stderr.strip() or 'Image introuvable ou démon Docker inaccessible'}",
+        })
+        return result
+
+    try:
         data = json.loads(inspect_proc.stdout)
         if not data:
+            result["errors"].append({
+                "type": "IMAGE_INSPECT_EMPTY",
+                "file": f"docker://{image_ref}",
+                "label": "Sortie docker inspect vide.",
+            })
             return result
-
         img_data = data[0]
-        config = img_data.get("Config", {})
-        envs = config.get("Env", [])
-        labels = config.get("Labels", {}) or {}
+    except Exception as e:
+        result["errors"].append({
+            "type": "IMAGE_INSPECT_PARSE_ERROR",
+            "file": f"docker://{image_ref}",
+            "label": f"Impossible de parser la sortie docker inspect : {e}",
+        })
+        return result
 
-        # 1. Contrôle des variables d'environnement dans l'image
-        for env in envs:
-            k, _, v = env.partition("=")
-            for pattern, label in SECRET_PATTERNS:
-                if pattern.search(v):
-                    result["secrets"].append({
-                        "file": f"docker://{image_ref}/env:{k}",
-                        "type": "IMAGE_ENV_SECRET",
-                        "label": label,
-                    })
-            if k in ("ORSO_CLIENT_ID", "ORSO_CLIENT_SLUG") and v:
-                result["client_data"].append({
+    config = img_data.get("Config", {})
+    envs = config.get("Env", []) or []
+    labels = config.get("Labels", {}) or {}
+
+    for env in envs:
+        k, _, v = env.partition("=")
+        for pattern, label in SECRET_PATTERNS:
+            if pattern.search(v):
+                result["secrets"].append({
                     "file": f"docker://{image_ref}/env:{k}",
-                    "type": "IMAGE_CLIENT_DATA",
-                    "label": f"Variable spécifique client figée dans l'image : {k}={v}",
+                    "type": "IMAGE_ENV_SECRET",
+                    "label": label,
                 })
+        if k in ("ORSO_CLIENT_ID", "ORSO_CLIENT_SLUG") and v:
+            result["client_data"].append({
+                "file": f"docker://{image_ref}/env:{k}",
+                "type": "IMAGE_CLIENT_DATA",
+                "label": f"Variable spécifique client figée dans l'image : {k}={v}",
+            })
 
-        # 2. Contrôle des labels d'image
-        for lk, lv in labels.items():
-            if lk in ("com.orso.tenant_id", "com.orso.tenant_slug") and lv:
-                result["client_data"].append({
-                    "file": f"docker://{image_ref}/label:{lk}",
-                    "type": "IMAGE_CLIENT_LABEL",
-                    "label": f"Label spécifique client dans l'image : {lk}={lv}",
+    for lk, lv in labels.items():
+        if lk in ("com.orso.tenant_id", "com.orso.tenant_slug") and lv:
+            result["client_data"].append({
+                "file": f"docker://{image_ref}/label:{lk}",
+                "type": "IMAGE_CLIENT_LABEL",
+                "label": f"Label spécifique client dans l'image : {lk}={lv}",
+            })
+
+    # 2. Scan physique de l'arborescence de l'image (docker create + docker export)
+    create_proc = subprocess.run(
+        ["docker", "create", image_ref],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if create_proc.returncode != 0:
+        result["errors"].append({
+            "type": "CONTAINER_CREATE_FAILED",
+            "file": f"docker://{image_ref}",
+            "label": f"Impossible de créer le conteneur éphémère pour inspection : {create_proc.stderr.strip()}",
+        })
+        return result
+
+    cid = create_proc.stdout.strip()
+    try:
+        export_proc = subprocess.Popen(
+            ["docker", "export", cid],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if export_proc.stdout:
+            try:
+                with tarfile.open(mode="r|*", fileobj=export_proc.stdout) as tar:
+                    files_scanned = 0
+                    for member in tar:
+                        files_scanned += 1
+                        name = member.name.lstrip("./")
+
+                        # Contrôle : Fichiers sensibles interdits (en excluant les certificats CA publics de l'OS système)
+                        is_system_ca = name.startswith(("etc/ssl", "usr/share/ca-certificates/", "etc/pki/"))
+                        for rule in MANDATORY_DOCKERIGNORE_RULES:
+                            clean_rule = rule.replace("*", "")
+                            if (name == clean_rule or name.endswith(clean_rule)) and not member.isdir():
+                                if is_system_ca and clean_rule == ".pem":
+                                    continue
+                                result["secrets"].append({
+                                    "file": f"docker://{image_ref}/{name}",
+                                    "type": "IMAGE_FORBIDDEN_FILE",
+                                    "label": f"Fichier sensible interdit trouvé dans l'arborescence : {name}",
+                                })
+
+                        # Contrôle : Données clients et DBs
+                        if any(b in name for b in ["consignes_olympe.jsonl", "tenant_secrets.json"]):
+                            result["client_data"].append({
+                                "file": f"docker://{image_ref}/{name}",
+                                "type": "IMAGE_CLIENT_DATA_FILE",
+                                "label": f"Fichier de données client interdit dans l'image : {name}",
+                            })
+
+                        if name.endswith((".db", ".sqlite", ".sqlite3")) and "data/" in name:
+                            result["client_data"].append({
+                                "file": f"docker://{image_ref}/{name}",
+                                "type": "IMAGE_CLIENT_DATABASE",
+                                "label": f"Base de données client détectée dans l'image : {name}",
+                            })
+
+                        # Contrôle : Scan de secrets dans les fichiers texte applicatifs
+                        if member.isfile() and member.size < 200_000:
+                            if name.endswith((".py", ".json", ".yaml", ".yml", ".sh", ".toml", ".env")):
+                                f_obj = tar.extractfile(member)
+                                if f_obj:
+                                    try:
+                                        content = f_obj.read().decode("utf-8", errors="ignore")
+                                        for pattern, label in SECRET_PATTERNS:
+                                            if pattern.search(content):
+                                                result["secrets"].append({
+                                                    "file": f"docker://{image_ref}/{name}",
+                                                    "type": "IMAGE_FILE_SECRET_LEAK",
+                                                    "label": f"{label} trouvé dans {name}",
+                                                })
+                                    except Exception:
+                                        pass
+                    result["scanned_files_count"] = files_scanned
+            except Exception as tar_err:
+                result["errors"].append({
+                    "type": "IMAGE_TAR_SCAN_ERROR",
+                    "file": f"docker://{image_ref}",
+                    "label": f"Erreur lors du scan du flux tar de l'image : {tar_err}",
                 })
-
-    except Exception:
-        pass
+        export_proc.wait()
+        if export_proc.returncode != 0:
+            err_msg = export_proc.stderr.read().decode("utf-8", errors="ignore") if export_proc.stderr else ""
+            result["errors"].append({
+                "type": "IMAGE_EXPORT_FAILED",
+                "file": f"docker://{image_ref}",
+                "label": f"Échec de l'export du conteneur ({export_proc.returncode}) : {err_msg.strip()}",
+            })
+    finally:
+        subprocess.run(["docker", "rm", "-f", cid], capture_output=True, check=False)
 
     return result
 
 
-def run_full_ca5_audit(image_ref: Optional[str] = None) -> Dict[str, Any]:
+def run_full_ca5_audit(
+    image_ref: Optional[str] = None,
+    require_image: bool = False,
+) -> Dict[str, Any]:
     """Exécute l'audit complet du critère CA5 de KAN-63 / KAN-64."""
     repo_violations = audit_repository_for_secrets(PROJECT_ROOT)
     dockerignore_violations = audit_dockerignore(PROJECT_ROOT / ".dockerignore")
     dockerfile_violations = audit_dockerfile_for_client_data(PROJECT_ROOT / "Dockerfile.orso")
     client_data_violations = audit_client_data_in_repository(PROJECT_ROOT)
+    image_scan_errors = []
+    scanned_image_files = 0
 
-    # Si une image est spécifiée ou présente, on l'inspecte également
-    if image_ref:
-        img_results = audit_docker_image_for_secrets_and_client_data(image_ref)
-        repo_violations.extend(img_results["secrets"])
-        client_data_violations.extend(img_results["client_data"])
+    target_image = image_ref or os.environ.get("AUDIT_IMAGE_REF")
+    if not target_image:
+        target_digest = os.environ.get("ORSO_TARGET_ENGINE_DIGEST")
+        if target_digest:
+            target_image = f"ghcr.io/tquinzain59/orso-engine@{target_digest}"
+
+    if require_image and not target_image:
+        image_scan_errors.append({
+            "type": "MISSING_REQUIRED_IMAGE",
+            "file": "cli_or_env",
+            "label": "Référence d'image Docker strictement obligatoire pour l'audit CA5.",
+        })
+
+    if target_image:
+        img_results = audit_docker_image_for_secrets_and_client_data(target_image)
+        repo_violations.extend(img_results.get("secrets", []))
+        client_data_violations.extend(img_results.get("client_data", []))
+        image_scan_errors.extend(img_results.get("errors", []))
+        scanned_image_files = img_results.get("scanned_files_count", 0)
 
     # Compteurs calculés dynamiquement (CA5)
     secrets_count = len(repo_violations)
     dockerignore_count = len(dockerignore_violations)
     dockerfile_count = len(dockerfile_violations)
     client_data_count = len(client_data_violations)
-    total_violations = secrets_count + dockerignore_count + dockerfile_count + client_data_count
+    errors_count = len(image_scan_errors)
+    total_violations = secrets_count + dockerignore_count + dockerfile_count + client_data_count + errors_count
 
     report = {
         "status": "PASSED" if total_violations == 0 else "FAILED",
@@ -255,6 +400,8 @@ def run_full_ca5_audit(image_ref: Optional[str] = None) -> Dict[str, Any]:
             "dockerignore_violations_count": dockerignore_count,
             "dockerfile_violations_count": dockerfile_count,
             "client_data_in_engine_count": client_data_count,
+            "image_scan_errors_count": errors_count,
+            "image_scanned_files_count": scanned_image_files,
             "total_violations": total_violations,
         },
         "violations": {
@@ -262,6 +409,7 @@ def run_full_ca5_audit(image_ref: Optional[str] = None) -> Dict[str, Any]:
             "dockerignore": dockerignore_violations,
             "dockerfile": dockerfile_violations,
             "client_data": client_data_violations,
+            "image_scan_errors": image_scan_errors,
         },
     }
     return report
@@ -269,17 +417,29 @@ def run_full_ca5_audit(image_ref: Optional[str] = None) -> Dict[str, Any]:
 
 if __name__ == "__main__":
     target_img = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("AUDIT_IMAGE_REF")
-    report = run_full_ca5_audit(image_ref=target_img)
+    if not target_img:
+        target_digest = os.environ.get("ORSO_TARGET_ENGINE_DIGEST")
+        if target_digest:
+            target_img = f"ghcr.io/tquinzain59/orso-engine@{target_digest}"
+
+    if not target_img:
+        print("✗ Erreur CA5 : Référence d'image Docker obligatoire en paramètre (ex: ghcr.io/tquinzain59/orso-engine@sha256:... ou via ORSO_TARGET_ENGINE_DIGEST).")
+        sys.exit(1)
+
+    report = run_full_ca5_audit(image_ref=target_img, require_image=True)
     print(json.dumps(report, indent=2))
-    
+
     metrics = report["metrics"]
     print(f"\n--- SYNTHÈSE AUDIT CA5 ---")
+    print(f"Image inspectée               : {target_img}")
+    print(f"Fichiers scannés dans l'image : {metrics['image_scanned_files_count']}")
     print(f"Secrets trouvés dans le dépôt : {metrics['secrets_found_count']}")
     print(f"Violations .dockerignore      : {metrics['dockerignore_violations_count']}")
     print(f"Violations Dockerfile         : {metrics['dockerfile_violations_count']}")
     print(f"Données clients dans moteur   : {metrics['client_data_in_engine_count']} (calculé)")
+    print(f"Erreurs d'inspection Docker   : {metrics['image_scan_errors_count']}")
     print(f"TOTAL VIOLATIONS              : {metrics['total_violations']}")
-    
+
     if report["status"] == "PASSED":
         print("✓ Critère CA5 VALIDÉ : Compteurs nuls et conformité stricte.")
         sys.exit(0)

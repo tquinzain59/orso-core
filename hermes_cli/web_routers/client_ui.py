@@ -28,6 +28,16 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 CLIENT_DIST = PROJECT_ROOT / "apps" / "ui-client" / "dist"
 
 
+def _sync_http_request(req: urllib.request.Request, timeout: float = 3.0) -> bytes:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+
+def _sync_http_request_json(req: urllib.request.Request, timeout: float = 3.0) -> Any:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
 # ── Modèles Pydantic ─────────────────────────────────────────────────────────
 
 class ClientLoginRequest(BaseModel):
@@ -1427,8 +1437,7 @@ async def client_auth_login(req: ClientLoginRequest, request: Request):
     )
 
     try:
-        with urllib.request.urlopen(auth_req, timeout=5.0) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+        data = await asyncio.to_thread(_sync_http_request_json, auth_req, 5.0)
     except urllib.error.HTTPError as e:
         err_msg = "Identifiants invalides ou mot de passe incorrect."
         try:
@@ -1523,9 +1532,8 @@ async def client_auth_login(req: ClientLoginRequest, request: Request):
                 f"{supabase_url}/rest/v1/profiles?id=eq.{user_id}&select=*",
                 headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"},
             )
-            with urllib.request.urlopen(p_req, timeout=3.0) as resp:
-                p_rows = json.loads(resp.read().decode("utf-8"))
-                if p_rows and len(p_rows) > 0:
+            p_rows = await asyncio.to_thread(_sync_http_request_json, p_req, 3.0)
+            if p_rows and len(p_rows) > 0:
                     profile_data = p_rows[0]
         except Exception as e:
             _log.debug("Notice lecture Supabase profile login: %s", e)
@@ -1594,9 +1602,8 @@ async def client_auth_me(auth: Dict[str, Any] = Depends(verify_client_access)):
                 f"{supabase_url}/rest/v1/profiles?id=eq.{user_id}&select=*",
                 headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"},
             )
-            with urllib.request.urlopen(p_req, timeout=3.0) as resp:
-                p_rows = json.loads(resp.read().decode("utf-8"))
-                if p_rows and len(p_rows) > 0:
+            p_rows = await asyncio.to_thread(_sync_http_request_json, p_req, 3.0)
+            if p_rows and len(p_rows) > 0:
                     profile_data = p_rows[0]
         except Exception as e:
             _log.debug("Notice lecture Supabase profile me: %s", e)
@@ -2301,20 +2308,19 @@ async def get_client_settings_profile(auth: Dict[str, Any] = Depends(verify_clie
                 f"{supabase_url}/rest/v1/tenants?id=eq.{tenant_id}&select=*",
                 headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"},
             )
-            with urllib.request.urlopen(t_req, timeout=3.0) as resp:
-                t_rows = json.loads(resp.read().decode("utf-8"))
-                if t_rows and len(t_rows) > 0:
-                    tr = t_rows[0]
-                    company_data["name"] = tr.get("name") or company_data["name"]
-                    company_data["siret"] = tr.get("siret") or company_data["siret"]
-                    company_data["siren"] = tr.get("siren") or (company_data["siret"][:9] if company_data["siret"] else "")
-                    company_data["sector"] = tr.get("sector") or company_data["sector"]
-                    company_data["legal_form"] = tr.get("legal_form") or company_data["legal_form"]
-                    company_data["address_line1"] = tr.get("address_line1") or company_data["address_line1"]
-                    company_data["postal_code"] = tr.get("postal_code") or company_data["postal_code"]
-                    company_data["city"] = tr.get("city") or company_data["city"]
-                    company_data["country"] = tr.get("country") or company_data["country"]
-                    company_data["created_at"] = tr.get("created_at") or company_data["created_at"]
+            t_rows = await asyncio.to_thread(_sync_http_request_json, t_req, 3.0)
+            if t_rows and len(t_rows) > 0:
+                tr = t_rows[0]
+                company_data["name"] = tr.get("name") or company_data["name"]
+                company_data["siret"] = tr.get("siret") or company_data["siret"]
+                company_data["siren"] = tr.get("siren") or (company_data["siret"][:9] if company_data["siret"] else "")
+                company_data["sector"] = tr.get("sector") or company_data["sector"]
+                company_data["legal_form"] = tr.get("legal_form") or company_data["legal_form"]
+                company_data["address_line1"] = tr.get("address_line1") or company_data["address_line1"]
+                company_data["postal_code"] = tr.get("postal_code") or company_data["postal_code"]
+                company_data["city"] = tr.get("city") or company_data["city"]
+                company_data["country"] = tr.get("country") or company_data["country"]
+                company_data["created_at"] = tr.get("created_at") or company_data["created_at"]
         except Exception as e:
             _log.debug("Notice lecture Supabase tenants: %s", e)
 
@@ -2324,14 +2330,13 @@ async def get_client_settings_profile(auth: Dict[str, Any] = Depends(verify_clie
                 f"{supabase_url}/rest/v1/tenant_instances?tenant_id=eq.{tenant_id}&select=*",
                 headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"},
             )
-            with urllib.request.urlopen(i_req, timeout=3.0) as resp:
-                i_rows = json.loads(resp.read().decode("utf-8"))
-                if i_rows and len(i_rows) > 0:
-                    ir = i_rows[0]
-                    company_data["environment"]["container_name"] = ir.get("docker_container_name") or "orso_client_backend"
-                    company_data["environment"]["status"] = "En ligne • Prêt" if ir.get("status") == "ready" else "Actif"
-                    if ir.get("instance_url"):
-                        company_data["environment"]["dedicated_url"] = ir["instance_url"]
+            i_rows = await asyncio.to_thread(_sync_http_request_json, i_req, 3.0)
+            if i_rows and len(i_rows) > 0:
+                ir = i_rows[0]
+                company_data["environment"]["container_name"] = ir.get("docker_container_name") or "orso_client_backend"
+                company_data["environment"]["status"] = "En ligne • Prêt" if ir.get("status") == "ready" else "Actif"
+                if ir.get("instance_url"):
+                    company_data["environment"]["dedicated_url"] = ir["instance_url"]
         except Exception as e:
             _log.debug("Notice lecture Supabase tenant_instances: %s", e)
 
@@ -2347,10 +2352,9 @@ async def get_client_settings_profile(auth: Dict[str, Any] = Depends(verify_clie
                 f"{supabase_url}/rest/v1/profiles?id=eq.{user_id}&select=*",
                 headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"},
             )
-            with urllib.request.urlopen(p_req, timeout=3.0) as resp:
-                p_rows = json.loads(resp.read().decode("utf-8"))
-                if p_rows and len(p_rows) > 0:
-                    profile_data = p_rows[0]
+            p_rows = await asyncio.to_thread(_sync_http_request_json, p_req, 3.0)
+            if p_rows and len(p_rows) > 0:
+                profile_data = p_rows[0]
         except Exception as e:
             _log.debug("Notice lecture Supabase profiles: %s", e)
 
@@ -2409,8 +2413,7 @@ async def update_client_password(
                     data=check_payload,
                     headers={"apikey": service_key, "Content-Type": "application/json"},
                 )
-                with urllib.request.urlopen(chk_req, timeout=4.0):
-                    pass
+                await asyncio.to_thread(_sync_http_request, chk_req, 4.0)
             except urllib.error.HTTPError:
                 raise HTTPException(status_code=400, detail="Le mot de passe actuel saisi est incorrect.")
             except Exception as e:
@@ -2429,9 +2432,9 @@ async def update_client_password(
                 },
                 method="PUT",
             )
-            with urllib.request.urlopen(upd_req, timeout=5.0) as resp:
-                _log.info("Mot de passe mis à jour avec succès pour l'utilisateur %s (%s)", user_email, user_id)
-                return {"success": True, "message": "Votre mot de passe a été mis à jour avec succès."}
+            await asyncio.to_thread(_sync_http_request, upd_req, 5.0)
+            _log.info("Mot de passe mis à jour avec succès pour l'utilisateur %s (%s)", user_email, user_id)
+            return {"success": True, "message": "Votre mot de passe a été mis à jour avec succès."}
         except urllib.error.HTTPError as e:
             err_msg = e.read().decode("utf-8")
             _log.error("Erreur HTTP Supabase password update: %s", err_msg)
@@ -2570,9 +2573,8 @@ async def get_client_billing(auth: Dict[str, Any] = Depends(verify_client_access
                 f"{supabase_url}/rest/v1/subscriptions?tenant_id=eq.{tenant_id}&select=*",
                 headers={"apikey": service_key, "Authorization": f"Bearer {service_key}"},
             )
-            with urllib.request.urlopen(s_req, timeout=3.0) as resp:
-                s_rows = json.loads(resp.read().decode("utf-8"))
-                if s_rows and len(s_rows) > 0:
+            s_rows = await asyncio.to_thread(_sync_http_request_json, s_req, 3.0)
+            if s_rows and len(s_rows) > 0:
                     sr = s_rows[0]
                     tier_id = sr.get("tier_id") or tier_id
                     subscription_status = (sr.get("status") or subscription_status).lower()
@@ -2703,8 +2705,7 @@ async def update_client_subscription(
                 },
                 method="POST",
             )
-            with urllib.request.urlopen(sub_req, timeout=3.0):
-                pass
+            await asyncio.to_thread(_sync_http_request, sub_req, 3.0)
         except Exception as e:
             _log.debug("Notice enregistrement Supabase subscription: %s", e)
 
@@ -2726,8 +2727,8 @@ async def update_client_subscription(
                 },
                 method="PATCH",
             )
-            with urllib.request.urlopen(inst_req, timeout=3.0):
-                _log.info("Agents autorisés mis à jour pour le tenant %s : %s", tenant_id, target_active_agents)
+            await asyncio.to_thread(_sync_http_request, inst_req, 3.0)
+            _log.info("Agents autorisés mis à jour pour le tenant %s : %s", tenant_id, target_active_agents)
         except Exception as e:
             _log.debug("Notice mise à jour agents tenant_instances: %s", e)
 
@@ -2818,9 +2819,8 @@ async def download_client_invoice(
             pdf_url = inv.get("invoice_pdf") or inv.get("hosted_invoice_url")
             if pdf_url:
                 req = urllib.request.Request(pdf_url, headers={"User-Agent": "Mozilla/5.0"})
-                with urllib.request.urlopen(req, timeout=10.0) as resp:
-                    pdf_bytes = resp.read()
-                    return Response(
+                pdf_bytes = await asyncio.to_thread(_sync_http_request, req, 10.0)
+                return Response(
                         content=pdf_bytes,
                         media_type="application/pdf",
                         headers={"Content-Disposition": f'attachment; filename="facture-{invoice_id}.pdf"'},

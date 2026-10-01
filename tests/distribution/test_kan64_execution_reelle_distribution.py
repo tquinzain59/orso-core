@@ -194,6 +194,49 @@ class TestKAN64ExecutionReelleDistribution:
             assert len(violations) > 0
             assert violations[0]["type"] == "CLIENT_DATA_LEAK"
 
+    def test_ca5_falsifiability_and_failure_on_uninspectable_or_leaked_image(self):
+        """
+        CA5 : Preuve de falsifiabilité (Refus 4 / Commentaire 18).
+        L'audit doit échouer avec code FAILED / violations dans les cas suivants :
+        - Démon Docker absent ou image ininspectable (aucun pass silencieux)
+        - Échec de création du conteneur éphémère d'inspection
+        - Image contenant une variable client ou un fichier interdit
+        - Absence de référence d'image en mode strict (require_image=True)
+        """
+        # 1. Absence d'image requise
+        report_no_img = run_full_ca5_audit(image_ref=None, require_image=True)
+        assert report_no_img["status"] == "FAILED"
+        assert report_no_img["metrics"]["image_scan_errors_count"] >= 1
+        assert any(e["type"] == "MISSING_REQUIRED_IMAGE" for e in report_no_img["violations"]["image_scan_errors"])
+
+        # 2. Image ininspectable (docker inspect échoue avec code != 0)
+        orig_run = subprocess.run
+
+        def mock_run_inspect_fail(cmd, *args, **kwargs):
+            if isinstance(cmd, list) and len(cmd) >= 2 and cmd[:2] == ["docker", "inspect"]:
+                return MagicMock(returncode=1, stdout="", stderr="Error: No such object")
+            return orig_run(cmd, *args, **kwargs)
+
+        with patch("subprocess.run", side_effect=mock_run_inspect_fail):
+            report_inspect_fail = run_full_ca5_audit(image_ref="ghcr.io/tquinzain59/orso-engine@sha256:0000000000000000000000000000000000000000000000000000000000000000")
+            assert report_inspect_fail["status"] == "FAILED"
+            assert report_inspect_fail["metrics"]["image_scan_errors_count"] >= 1
+            assert any(e["type"] == "IMAGE_INSPECT_FAILED" for e in report_inspect_fail["violations"]["image_scan_errors"])
+
+        # 3. Échec de création du conteneur éphémère d'inspection
+        def mock_run_create_fail(cmd, *args, **kwargs):
+            if isinstance(cmd, list) and len(cmd) >= 2 and cmd[:2] == ["docker", "inspect"]:
+                return MagicMock(returncode=0, stdout='[{"Config": {"Env": [], "Labels": {}}}]', stderr="")
+            if isinstance(cmd, list) and len(cmd) >= 2 and cmd[:2] == ["docker", "create"]:
+                return MagicMock(returncode=125, stdout="", stderr="docker: daemon not running")
+            return orig_run(cmd, *args, **kwargs)
+
+        with patch("subprocess.run", side_effect=mock_run_create_fail):
+            report_create_fail = run_full_ca5_audit(image_ref="ghcr.io/tquinzain59/orso-engine@sha256:1111111111111111111111111111111111111111111111111111111111111111")
+            assert report_create_fail["status"] == "FAILED"
+            assert report_create_fail["metrics"]["image_scan_errors_count"] >= 1
+            assert any(e["type"] == "CONTAINER_CREATE_FAILED" for e in report_create_fail["violations"]["image_scan_errors"])
+
     def test_ca3_probed_drift_detection(self):
         """
         CA3 : Détection de dérive multi-hôtes avec sonde automatisée.
@@ -317,11 +360,11 @@ class TestKAN64ExecutionReelleDistribution:
                     # Port restreint à la boucle locale
                     assert "-p 127.0.0.1:9119:9119" in run_cmd_str
                     assert "-p 9119:9119" not in run_cmd_str
-                    # Secret absent de la ligne de commande
+                    # Secret absent de la ligne de commande (argv) et transporté via stdin
                     assert "fleet-secret-key" not in run_cmd_str
-                    assert "-e ORSO_PERSONA_HMAC_KEY " in run_cmd_str
-                    # Clé transmise dans l'environnement du processus
-                    assert run_call[1].get("extra_env") == {"ORSO_PERSONA_HMAC_KEY": "fleet-secret-key"}
+                    assert "--env-file /dev/stdin" in run_cmd_str
+                    # Clé transmise de manière sécurisée via stdin (input_data)
+                    assert run_call[1].get("input_data") == "ORSO_PERSONA_HMAC_KEY=fleet-secret-key\n"
 
             # 2. Test rollback
             with patch("scripts.distribution.engine_image_manager.run_remote_or_local_cmd") as mock_run:
@@ -336,3 +379,5 @@ class TestKAN64ExecutionReelleDistribution:
                     run_call_rb = next(c for c in calls_rb if "docker run" in c[0][0])
                     assert "-p 127.0.0.1:9119:9119" in run_call_rb[0][0]
                     assert "fleet-secret-key" not in run_call_rb[0][0]
+                    assert "--env-file /dev/stdin" in run_call_rb[0][0]
+                    assert run_call_rb[1].get("input_data") == "ORSO_PERSONA_HMAC_KEY=fleet-secret-key\n"

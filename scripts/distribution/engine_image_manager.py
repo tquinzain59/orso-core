@@ -308,8 +308,11 @@ class EngineDistributionManager:
         run_remote_or_local_cmd(rm_cmd, ssh_target)
 
         # 4. Relance du conteneur avec l'image épinglée et clé d'intégrité personas (KAN-33 / KAN-64)
-        # Règle absolue de sécurité : le secret ORSO_PERSONA_HMAC_KEY ne figure JAMAIS dans la ligne de commande.
-        # Il est transmis par l'environnement du processus appelant via le flag Docker -e sans valeur.
+        # Règle absolue de sécurité (Arbitrage PO / Commentaire 18) :
+        # Le secret ORSO_PERSONA_HMAC_KEY ne figure JAMAIS dans la ligne de commande (argv) ni dans les traces.
+        # Sur SSH, comme l'environnement n'est pas transmis par défaut par sshd, le secret est transporté
+        # via l'entrée standard chiffrée (stdin) et lu par Docker avec `--env-file /dev/stdin`.
+        # Sur l'hôte client pour un lancement local/manuel, il peut également résider dans /etc/orso/engine.env (0600 root:root).
         hmac_key = os.environ.get("ORSO_PERSONA_HMAC_KEY")
         if not hmac_key:
             raise ValueError(
@@ -323,14 +326,14 @@ class EngineDistributionManager:
             f"--label com.orso.managed=true "
             f"--label com.orso.engine.digest={new_digest} "
             f"--label com.orso.engine.pinned=true "
-            f"-e ORSO_PERSONA_HMAC_KEY "
+            f"--env-file /dev/stdin "
             f"{target_image}"
         )
         rc_run, stdout_run, stderr_run = run_remote_or_local_cmd(
             run_cmd,
             ssh_target,
             timeout=30,
-            extra_env={"ORSO_PERSONA_HMAC_KEY": hmac_key},
+            input_data=f"ORSO_PERSONA_HMAC_KEY={hmac_key}\n",
         )
 
         # 5. Sonde de santé sur la boucle locale
@@ -395,14 +398,14 @@ class EngineDistributionManager:
             f"--label com.orso.managed=true "
             f"--label com.orso.engine.digest={rollback_digest} "
             f"--label com.orso.engine.pinned=true "
-            f"-e ORSO_PERSONA_HMAC_KEY "
+            f"--env-file /dev/stdin "
             f"{target_image}"
         )
         rc_run, stdout_run, _ = run_remote_or_local_cmd(
             run_cmd,
             ssh_target,
             timeout=20,
-            extra_env={"ORSO_PERSONA_HMAC_KEY": hmac_key},
+            input_data=f"ORSO_PERSONA_HMAC_KEY={hmac_key}\n",
         )
 
         # Sonde de santé sur la boucle locale
@@ -467,6 +470,7 @@ def run_remote_or_local_cmd(
     ssh_target: Optional[str] = None,
     timeout: int = 25,
     extra_env: Optional[Dict[str, str]] = None,
+    input_data: Optional[str] = None,
 ) -> Tuple[int, str, str]:
     """Exécute une commande localement ou à distance via SSH avec encodage explicite UTF-8."""
     if ssh_target:
@@ -481,6 +485,7 @@ def run_remote_or_local_cmd(
     try:
         proc = subprocess.run(
             full_cmd,
+            input=input_data,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -608,26 +613,39 @@ def probe_docker_host(host_spec: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Orso Engine Image Distribution Manager")
-    parser.add_argument("--target-digest", default=os.environ.get("ORSO_TARGET_ENGINE_DIGEST", "sha256:d8a5f82c448bb95b28a9b49b43e8b0b8c6e07eb4838a1f2987a123456789abcd"))
-    parser.add_argument("--registry-base", default="ghcr.io/tquinzain59/orso-engine")
+    common_parser = argparse.ArgumentParser(add_help=False)
+    common_parser.add_argument(
+        "--target-digest",
+        default=os.environ.get("ORSO_TARGET_ENGINE_DIGEST", "sha256:d8a5f82c448bb95b28a9b49b43e8b0b8c6e07eb4838a1f2987a123456789abcd"),
+        help="Empreinte cryptographique cible attendue",
+    )
+    common_parser.add_argument(
+        "--registry-base",
+        default="ghcr.io/tquinzain59/orso-engine",
+        help="Base du registre Docker GHCR",
+    )
+
+    parser = argparse.ArgumentParser(
+        description="Orso Engine Image Distribution Manager",
+        parents=[common_parser],
+    )
 
     sub = parser.add_subparsers(dest="command")
-    probe_parser = sub.add_parser("probe", help="Sonde l'état réel des démons Docker de tous les hôtes")
+    probe_parser = sub.add_parser("probe", parents=[common_parser], help="Sonde l'état réel des démons Docker de tous les hôtes")
     probe_parser.add_argument("--local", action="store_true", help="Sonde le démon Docker local sans passer par SSH")
     probe_parser.add_argument("--host-id", help="Identifiant de l'hôte (ex: prod-fr-003)")
 
-    audit_parser = sub.add_parser("audit", help="Exécute un audit de dérive en direct")
+    audit_parser = sub.add_parser("audit", parents=[common_parser], help="Exécute un audit de dérive en direct")
     audit_parser.add_argument("--local", action="store_true", help="Audit local uniquement sans passer par SSH")
     audit_parser.add_argument("--host-id", help="Identifiant de l'hôte (ex: prod-fr-003)")
 
-    up_parser = sub.add_parser("update", help="Exécute une mise à jour sur un hôte")
+    up_parser = sub.add_parser("update", parents=[common_parser], help="Exécute une mise à jour sur un hôte")
     up_parser.add_argument("--host-id", required=True)
     up_parser.add_argument("--new-digest", required=True)
     up_parser.add_argument("--container", default="orso_client_demo")
     up_parser.add_argument("--local", action="store_true", help="Exécute la mise à jour directement en local sans SSH")
 
-    rb_parser = sub.add_parser("rollback", help="Exécute un rollback sur un hôte")
+    rb_parser = sub.add_parser("rollback", parents=[common_parser], help="Exécute un rollback sur un hôte")
     rb_parser.add_argument("--host-id", required=True)
     rb_parser.add_argument("--rollback-digest", required=True)
     rb_parser.add_argument("--container", default="orso_client_demo")
