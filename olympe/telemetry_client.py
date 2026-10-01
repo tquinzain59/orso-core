@@ -254,14 +254,7 @@ class TelemetryClient:
                         "tier_label": default_provisioned_tenant.get("subscription", {}).get("tier_label", "Starter (1 agent)"),
                     }
                 else:
-                    associated_tenant = {
-                        "id": "f3e25379-6531-479e-b276-3b3185e7421b",
-                        "name": "Financia Solutions",
-                        "slug": "financia-solutions",
-                        "sector": "Finance & Recouvrement",
-                        "is_system": False,
-                        "status": "active",
-                    }
+                    associated_tenant = None
             else:
                 # Tentative de matching par slug dans le nom de conteneur
                 for slug, t in tenants_by_slug.items():

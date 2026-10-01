@@ -32,12 +32,16 @@ from olympe.server import app, ops_manager, manager
 
 
 @pytest.fixture(autouse=True)
-def reset_drone_state():
+def reset_drone_state(monkeypatch):
     """Réinitialise les caches, révocations et états de test avant chaque test."""
     clear_token_cache()
     _REVOKED_TOKENS.clear()
     ops_manager._webhook_deliveries.clear()
     ops_manager._audit_log.clear()
+    monkeypatch.setenv("ORSO_DEMO_MODE", "1")
+    ops_manager.demo_mode = True
+    ops_manager._mock_tenants = ops_manager._init_seed_data()
+    ops_manager.create_sandbox_tenant("clientx-orso", "CLIENTX-ORSO (TEST)")
     yield
     clear_token_cache()
     _REVOKED_TOKENS.clear()

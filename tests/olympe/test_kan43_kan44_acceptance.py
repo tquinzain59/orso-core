@@ -192,12 +192,19 @@ def test_kan43_ca3_metrics_and_billing_recalculated_from_db(monkeypatch):
 
 def test_kan43_ca4_demo_mode_safety_locks(monkeypatch):
     """CA4 — Le mode démo est formellement interdit en prod et signalé sur les routes API."""
-    # 1. En production, ORSO_DEMO_MODE=1 lève une exception bloquante
+    # 1. En production (ORSO_ENV ou APP_ENV), ORSO_DEMO_MODE=1 lève une exception bloquante
     monkeypatch.setenv("ORSO_ENV", "production")
     monkeypatch.setenv("ORSO_DEMO_MODE", "1")
 
     with pytest.raises(RuntimeError, match="formellement interdit en environnement de production"):
         OpsManager(demo_mode=True)
+
+    # Vérification avec APP_ENV=production
+    monkeypatch.delenv("ORSO_ENV", raising=False)
+    monkeypatch.setenv("APP_ENV", "production")
+    with pytest.raises(RuntimeError, match="formellement interdit en environnement de production"):
+        OpsManager(demo_mode=True)
+    monkeypatch.delenv("APP_ENV", raising=False)
 
     # 2. Hors production, le mode démo est signalé dans la réponse API
     monkeypatch.delenv("ORSO_ENV", raising=False)
@@ -215,11 +222,20 @@ def test_kan43_ca4_demo_mode_safety_locks(monkeypatch):
     assert resp_tenants.status_code == 200
     assert resp_tenants.json()["demo_mode"] is True
 
+    resp_invoices = client.get("/api/olympe/ops/invoices", headers=admin_headers)
+    assert resp_invoices.status_code == 200
+    assert resp_invoices.json()["demo_mode"] is True
+
     # 3. Mode démo désactivé -> demo_mode: False
     ops_manager.demo_mode = False
     resp_prod_tenants = client.get("/api/olympe/ops/tenants", headers=admin_headers)
     assert resp_prod_tenants.status_code == 200
     assert resp_prod_tenants.json()["demo_mode"] is False
+
+    # 4. En production, list_all_invoices ne renvoie jamais de factures fictives
+    monkeypatch.setenv("ORSO_ENV", "production")
+    prod_ops = OpsManager(demo_mode=False)
+    assert prod_ops.list_all_invoices() == []
 
 
 # ══════════════════════════════════════════════════════════════════════════════

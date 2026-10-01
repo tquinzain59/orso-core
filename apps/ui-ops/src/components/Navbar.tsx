@@ -12,6 +12,7 @@ interface NavbarProps {
   adminUser?: AdminUser | null;
   onLogout?: () => void;
   onOpenSecurity?: () => void;
+  demoMode?: boolean;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -24,6 +25,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   adminUser,
   onLogout,
   onOpenSecurity,
+  demoMode = false,
 }) => {
   return (
     <header className="sticky top-0 z-40 bg-slate-900/80 backdrop-blur-md border-b border-slate-800">
@@ -40,6 +42,15 @@ export const Navbar: React.FC<NavbarProps> = ({
                 <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-sky-500/10 text-sky-400 border border-sky-500/20">
                   Cockpit
                 </span>
+                {demoMode ? (
+                  <span className="text-xs px-2 py-0.5 rounded-full font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse">
+                    MODE DÉMO
+                  </span>
+                ) : (
+                  <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                    Live DB
+                  </span>
+                )}
               </div>
               <p className="text-xs text-slate-400">Orchestrateur Olympe & Flotte Multi-Tenant</p>
             </div>
