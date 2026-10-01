@@ -919,6 +919,11 @@ class OpsManager:
         for t in tenants:
             if t["id"] == tenant_id or t.get("slug") == tenant_id:
                 return t
+        if tenant_id in self._mock_tenants:
+            return self._mock_tenants[tenant_id]
+        for t in self._mock_tenants.values():
+            if t.get("slug") == tenant_id:
+                return t
         return None
 
     def get_tenant_users(self, tenant_id: str) -> List[Dict[str, Any]]:
@@ -1924,24 +1929,48 @@ class OpsManager:
             except Exception as e:
                 _log.info("Relecture Stripe ignorée/échouée pour %s: %s (utilisation payload)", sub_id, e)
 
-        # ── 5. Cycle de vie de l'environnement conteneurisé (Décision 5 / KAN-44 CA2) ───
+        # ── 5. Cycle de vie de l'environnement conteneurisé (Décision 5 / KAN-44) ───
         container_name = f"orso_client_{matched_slug.replace('-', '_')}"
         env_result = None
+
+        auto_provision = os.environ.get("ORSO_AUTO_PROVISION_ON_WEBHOOK") == "1"
 
         if effective_status in ("active", "trialing"):
             try:
                 from olympe.server import manager as docker_mgr
-                status_info = docker_mgr.get_tenant_status(matched_slug)
-                if status_info.get("status") in ("not_found", "unknown"):
-                    _log.info("Provisioning automatique conteneur pour %s suite à abonnement", matched_slug)
-                    docker_mgr.provision_tenant(
+                if auto_provision:
+                    _log.info("Tentative de provisioning automatique conteneur pour %s (auto_provision=1)", matched_slug)
+                    prov_res = docker_mgr.provision_tenant(
                         tenant_id=matched_tenant_id or f"tenant_{matched_slug}",
                         tenant_slug=matched_slug,
                     )
-                if not status_info.get("running"):
-                    _log.info("Réveil automatique conteneur pour %s", matched_slug)
-                    docker_mgr.wake_tenant(matched_slug, wait_healthy=False)
-                env_result = "active"
+                    # Lecture stricte du retour du provisioning avant toute déclaration d'état
+                    if not prov_res.get("success"):
+                        err_code = prov_res.get("error", "ERR_PROVISION_FAILED")
+                        err_msg = prov_res.get("message", "Échec du provisioning conteneur")
+                        _log.error("Provisioning conteneur refusé/échoué pour %s: %s - %s", matched_slug, err_code, err_msg)
+                        self.record_audit_event(
+                            actor={"actor": "stripe-webhook", "role": "system"},
+                            action="provision:failed",
+                            target=matched_slug,
+                            details={"tenant_id": matched_tenant_id, "error": err_code, "reason": err_msg},
+                        )
+                        env_result = "error"
+                    else:
+                        # Lecture de l'état APRÈS provisioning effectif
+                        status_after = docker_mgr.get_tenant_status(matched_slug)
+                        if not status_after.get("running"):
+                            _log.info("Réveil conteneur pour %s", matched_slug)
+                            docker_mgr.wake_tenant(matched_slug, wait_healthy=False)
+                        env_result = "active"
+                else:
+                    # En phase POC : l'activation d'environnement est redevenue une action humaine explicite
+                    _log.info(
+                        "Abonnement %s pour %s validé ; activation conteneur différée (action explicite requise en POC via /provision)",
+                        effective_status,
+                        matched_slug,
+                    )
+                    env_result = "pending_validation"
             except Exception as e:
                 _log.warning("Erreur cycle de vie conteneur pour %s: %s", matched_slug, e)
                 env_result = "error"
@@ -1969,7 +1998,7 @@ class OpsManager:
                     sub_patch["monthly_price_ht"] = TIER_PRICING.get(effective_tier_id, {}).get("price_ht", 99.00)
                 self._query_supabase(f"subscriptions?tenant_id=eq.{matched_tenant_id}", method="PATCH", payload=sub_patch)
 
-                if env_result:
+                if env_result in ("active", "suspended"):
                     inst_patch = {
                         "environment_status": "active" if env_result == "active" else "inactive",
                         "status": "ready" if env_result == "active" else "sleeping",
@@ -2137,13 +2166,27 @@ class OpsManager:
         """Retourne le détail exhaustif d'une commande d'onboarding."""
         return self.get_tenant_detail(tenant_id)
 
-    def provision_onboarding_order(self, tenant_id: str) -> Dict[str, Any]:
+    def provision_onboarding_order(self, tenant_id: str, provisioning_result: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Active le déploiement d'un client et bascule ses agents en production (ACTIVE)."""
         tenant = self.get_tenant_detail(tenant_id)
         if not tenant:
             raise ValueError(f"Client {tenant_id} introuvable.")
 
         actual_tenant_id = tenant["id"]
+
+        if provisioning_result and not provisioning_result.get("success"):
+            err_code = provisioning_result.get("error", "ERR_PROVISION_FAILED")
+            err_msg = provisioning_result.get("message", "Échec du provisioning conteneur")
+            self.record_audit_event(
+                actor={"actor": "ops_manager", "role": "system"},
+                action="provision:failed",
+                target=actual_tenant_id,
+                details={"error": err_code, "reason": err_msg, "tenant_slug": tenant.get("slug")},
+            )
+            raise ValueError(f"Provisioning refusé : {err_msg} [{err_code}]")
+
+        is_simulated = bool(provisioning_result and provisioning_result.get("simulated"))
+        execution_mode = "simulated" if is_simulated else "containerized"
 
         # 1. Traitement via le worker souverain si Supabase est configuré
         if self.supabase_url and self.supabase_key:
@@ -2190,11 +2233,24 @@ class OpsManager:
             for ai in t.get("agent_instances", []):
                 ai["provisioning_status"] = "ACTIVE"
 
+        self.record_audit_event(
+            actor={"actor": "ops_manager", "role": "system"},
+            action="onboarding:provisioned",
+            target=actual_tenant_id,
+            details={
+                "tenant_slug": tenant.get("slug"),
+                "simulated": is_simulated,
+                "execution_mode": execution_mode,
+            },
+        )
+
         return {
             "success": True,
             "tenant_id": actual_tenant_id,
             "status": "ACTIVE",
-            "message": f"Organisation {tenant.get('name')} et agents activés avec succès.",
+            "simulated": is_simulated,
+            "execution_mode": execution_mode,
+            "message": f"Organisation {tenant.get('name')} et agents activés avec succès ({'mode simulé' if is_simulated else 'mode conteneurisé réel'}).",
             "timestamp": _format_timestamp(),
         }
 

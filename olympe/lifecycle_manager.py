@@ -440,6 +440,7 @@ class DockerLifecycleManager:
             "tenant_slug": tenant_slug,
             "container_name": container_name,
             "status": "ready",
+            "simulated": False,
             "image": target_image,
             "digest": effective_digest or None,
             "quotas": effective_quotas,

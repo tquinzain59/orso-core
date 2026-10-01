@@ -242,15 +242,16 @@ def test_kan43_ca4_demo_mode_safety_locks(monkeypatch):
 # KAN-44 — Chaîne d'abonnement & Provisioning conteneurisé
 # ══════════════════════════════════════════════════════════════════════════════
 
-def test_kan44_ca1_and_ca2_webhook_creates_environment_and_logs_delivery():
-    """CA1 & CA2 — L'événement Stripe provisionne et active l'environnement conteneurisé."""
+def test_kan44_ca1_webhook_subscription_creates_logged_delivery_with_identified_tenant():
+    """CA1 — Un abonnement Stripe produit une livraison journalisée avec tenant identifié et activation conditionnée."""
     client = TestClient(app)
     admin_headers = {"Authorization": f"Bearer {MOCK_SUPERADMIN_TOKEN}"}
 
     # Initialisation d'un client dans le référentiel pour réconciliation par slug
     slug = "nexis-logistics"
-    ops_manager._mock_tenants[f"test-{slug}"] = {
-        "id": f"test-{slug}",
+    tenant_id = f"test-{slug}"
+    ops_manager._mock_tenants[tenant_id] = {
+        "id": tenant_id,
         "name": "Nexis Logistics",
         "slug": slug,
         "subscription": {
@@ -280,7 +281,7 @@ def test_kan44_ca1_and_ca2_webhook_creates_environment_and_logs_delivery():
     data = resp.json()
     assert data["status"] == "processed"
     assert data["tenant_slug"] == slug
-    assert data["environment_status"] == "active"
+    assert data["environment_status"] == "pending_validation"
     assert "orso_client_nexis_logistics" in data["container_name"]
 
     # CA1 Preuve : Consultation du journal des livraisons
@@ -291,11 +292,147 @@ def test_kan44_ca1_and_ca2_webhook_creates_environment_and_logs_delivery():
     assert matched_delivery is not None
     assert matched_delivery["tenant_slug"] == slug
     assert matched_delivery["status"] == "processed"
+    assert matched_delivery["customer_id"] == "cus_nexis_123"
 
-    # CA2 Preuve : L'environnement du tenant existe et est opérationnel
-    status_info = manager.get_tenant_status(slug)
-    assert status_info["tenant_slug"] == slug
-    assert status_info["status"] in ("ready", "starting")
+    # L'abonnement est mis à jour mais l'environnement n'est pas activé aveuglément (décision POC)
+    t_data = ops_manager._mock_tenants[tenant_id]
+    assert t_data["subscription"]["status"] == "active"
+    assert t_data["instance"]["status"] == "not_provisioned"
+    assert t_data["instance"]["environment_status"] == "inactive"
+
+
+def test_kan44_ca2_explicit_provisioning_verifies_return_and_reports_execution_mode(monkeypatch):
+    """CA2 — L'activation d'environnement vérifie le retour du provisioning, refuse avec motif si échec et rapporte le mode d'exécution."""
+    client = TestClient(app)
+    admin_headers = {"Authorization": f"Bearer {MOCK_SUPERADMIN_TOKEN}"}
+
+    slug = "acme-corp"
+    tenant_id = f"test-{slug}"
+    ops_manager._mock_tenants[tenant_id] = {
+        "id": tenant_id,
+        "name": "ACME Corp",
+        "slug": slug,
+        "subscription": {"status": "active", "stripe_customer_id": "cus_acme_123"},
+        "instance": {"status": "not_provisioned", "environment_status": "inactive"},
+        "agent_instances": [{"id": "agent-1", "provisioning_status": "PENDING_SETUP"}],
+    }
+
+    # ── Cas A : Refus explicite et journalisé si le provisioning échoue (digest ou clé HMAC manquante) ──
+    monkeypatch.delenv("ORSO_PERSONA_HMAC_KEY", raising=False)
+    monkeypatch.delenv("ORSO_TARGET_ENGINE_DIGEST", raising=False)
+
+    resp_fail = client.post(f"/api/olympe/ops/onboarding/{tenant_id}/provision", headers=admin_headers)
+    assert resp_fail.status_code == 400
+    fail_data = resp_fail.json()
+    assert any(code in fail_data["detail"] for code in ("ERR_DIGEST_REQUIRED", "ERR_HMAC_KEY_REQUIRED"))
+
+    # Preuve : Événement d'audit consigné pour le refus explicite
+    audit_events = ops_manager._audit_log
+    failed_audit = next((ev for ev in audit_events if ev.get("action") == "provision:failed" and ev.get("target") == tenant_id), None)
+    assert failed_audit is not None
+    assert failed_audit["details"]["error"] in ("ERR_DIGEST_REQUIRED", "ERR_HMAC_KEY_REQUIRED")
+
+    # L'environnement n'est JAMAIS passé à active suite au refus
+    t_after_fail = ops_manager._mock_tenants[tenant_id]
+    assert t_after_fail["instance"]["status"] == "not_provisioned"
+    assert t_after_fail["instance"]["environment_status"] == "inactive"
+
+    # ── Cas B1 : Succès du provisioning sur chemin simulé explicite ──
+    monkeypatch.setenv("ORSO_TARGET_ENGINE_DIGEST", "sha256:" + "f" * 64)
+    monkeypatch.setenv("ORSO_PERSONA_HMAC_KEY", "test_secret_hmac_key_for_acceptance_0123456789")
+    monkeypatch.setattr(manager, "has_docker", False)
+
+    resp_sim = client.post(f"/api/olympe/ops/onboarding/{tenant_id}/provision", headers=admin_headers)
+    assert resp_sim.status_code == 200
+    sim_data = resp_sim.json()
+    assert sim_data["success"] is True
+    assert sim_data["status"] == "ACTIVE"
+    assert sim_data["simulated"] is True
+    assert sim_data["execution_mode"] == "simulated"
+
+    # Affichage explicite du mode retenu (exigence de transparence du PO Jarvis)
+    print(f"\n[PROVISIONING EXECUTION MODE] mode={sim_data['execution_mode']} simulated={sim_data['simulated']} tenant={slug}")
+
+    # L'instance et les agents sont désormais actifs
+    t_after_sim = ops_manager._mock_tenants[tenant_id]
+    assert t_after_sim["instance"]["status"] == "ready"
+    assert t_after_sim["instance"]["environment_status"] == "active"
+    assert t_after_sim["agent_instances"][0]["provisioning_status"] == "ACTIVE"
+
+    # ── Cas B2 : Succès du provisioning sur chemin conteneurisé réel / émulé ──
+    slug2 = "acme-docker"
+    tenant_id2 = f"test-{slug2}"
+    ops_manager._mock_tenants[tenant_id2] = {
+        "id": tenant_id2,
+        "name": "ACME Docker",
+        "slug": slug2,
+        "subscription": {"status": "active", "stripe_customer_id": "cus_acme_456"},
+        "instance": {"status": "not_provisioned", "environment_status": "inactive"},
+        "agent_instances": [{"id": "agent-2", "provisioning_status": "PENDING_SETUP"}],
+    }
+    monkeypatch.setattr(manager, "has_docker", True)
+    monkeypatch.setattr(manager, "_exec_docker", lambda *args, **kwargs: MagicMock(returncode=0, stdout="", stderr=""))
+
+    resp_docker = client.post(f"/api/olympe/ops/onboarding/{tenant_id2}/provision", headers=admin_headers)
+    assert resp_docker.status_code == 200
+    docker_data = resp_docker.json()
+    assert docker_data["success"] is True
+    assert docker_data["status"] == "ACTIVE"
+    assert docker_data["simulated"] is False
+    assert docker_data["execution_mode"] == "containerized"
+
+    print(f"\n[PROVISIONING EXECUTION MODE] mode={docker_data['execution_mode']} simulated={docker_data['simulated']} tenant={slug2}")
+
+    t_after_docker = ops_manager._mock_tenants[tenant_id2]
+    assert t_after_docker["instance"]["status"] == "ready"
+    assert t_after_docker["instance"]["environment_status"] == "active"
+
+
+def test_kan44_auto_provision_when_enabled_verifies_return_and_logs_failure_if_error(monkeypatch):
+    """Vérifie que lorsque l'auto-provisioning est activé, le retour est strictement vérifié et consigné."""
+    client = TestClient(app)
+    monkeypatch.setenv("ORSO_AUTO_PROVISION_ON_WEBHOOK", "1")
+
+    # 1. Cas échec (clé HMAC manquante) -> env_result = error, journalisation provision:failed
+    monkeypatch.delenv("ORSO_PERSONA_HMAC_KEY", raising=False)
+    slug = "auto-prov-fail"
+    tenant_id = f"test-{slug}"
+    ops_manager._mock_tenants[tenant_id] = {
+        "id": tenant_id,
+        "name": "Auto Prov Fail",
+        "slug": slug,
+        "subscription": {"status": "trialing", "stripe_customer_id": "cus_fail_111"},
+        "instance": {"status": "not_provisioned", "environment_status": "inactive"},
+    }
+
+    event_id = f"evt_auto_fail_{int(time.time()*1000)}"
+    payload = {
+        "id": event_id,
+        "type": "customer.subscription.created",
+        "data": {
+            "object": {
+                "id": "sub_auto_fail_111",
+                "customer": "cus_fail_111",
+                "status": "active",
+                "metadata": {"tenant_slug": slug},
+            }
+        },
+    }
+
+    resp = client.post("/api/olympe/ops/webhooks/stripe", json=payload)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "processed"
+    assert data["environment_status"] == "error"
+
+    # Vérification audit log
+    audit_events = ops_manager._audit_log
+    failed_audit = next((ev for ev in audit_events if ev.get("action") == "provision:failed" and ev.get("target") == slug), None)
+    assert failed_audit is not None
+    assert failed_audit["details"]["error"] in ("ERR_HMAC_KEY_REQUIRED", "ERR_DIGEST_REQUIRED")
+
+    # L'instance n'est PAS passée à active
+    assert ops_manager._mock_tenants[tenant_id]["instance"]["environment_status"] == "inactive"
 
 
 def test_kan44_ca3_unknown_client_rejected_with_reason_and_no_side_effects():
