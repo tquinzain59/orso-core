@@ -142,6 +142,16 @@ class DockerLifecycleManager:
             }
 
         if not self.has_docker:
+            from olympe.ops_manager import is_production
+            if is_production():
+                return {
+                    "success": False,
+                    "error": "ERR_NO_LOCAL_DOCKER_DELEGATED_HOST_REQUIRED",
+                    "tenant_slug": tenant_slug,
+                    "status": "error",
+                    "simulated": False,
+                    "message": "Réveil in-process refusé : aucun démon Docker local sur l'hôte de gestion.",
+                }
             return {
                 "success": True,
                 "tenant_slug": tenant_slug,
@@ -352,6 +362,21 @@ class DockerLifecycleManager:
             base_envs.update(env_vars)
 
         if not self.has_docker:
+            # En production, le provisioning in-process local sur l'Hôte 1 est strictement proscrit (Option B KAN-74)
+            from olympe.ops_manager import is_production
+            if is_production():
+                return {
+                    "success": False,
+                    "error": "ERR_NO_LOCAL_DOCKER_DELEGATED_HOST_REQUIRED",
+                    "tenant_slug": tenant_slug,
+                    "container_name": container_name,
+                    "simulated": False,
+                    "message": (
+                        "Provisioning in-process refusé : aucun démon Docker local sur l'hôte de gestion. "
+                        "Le déploiement des conteneurs clients en production est exclusivement délégué aux hôtes d'exécution dédiés (PROD-FR-003)."
+                    ),
+                }
+
             return {
                 "success": True,
                 "tenant_slug": tenant_slug,

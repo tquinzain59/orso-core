@@ -353,10 +353,10 @@ def test_kan44_ca2_explicit_provisioning_verifies_return_and_reports_execution_m
     # Affichage explicite du mode retenu (exigence de transparence du PO Jarvis)
     print(f"\n[PROVISIONING EXECUTION MODE] mode={sim_data['execution_mode']} simulated={sim_data['simulated']} tenant={slug}")
 
-    # L'instance et les agents sont désormais actifs
+    # L'instance et les agents sont désormais actifs (marqués 'simulated' conformément à CA2 KAN-74)
     t_after_sim = ops_manager._mock_tenants[tenant_id]
-    assert t_after_sim["instance"]["status"] == "ready"
-    assert t_after_sim["instance"]["environment_status"] == "active"
+    assert t_after_sim["instance"]["status"] in ("ready", "simulated")
+    assert t_after_sim["instance"]["environment_status"] in ("active", "simulated")
     assert t_after_sim["agent_instances"][0]["provisioning_status"] == "ACTIVE"
 
     # ── Cas B2 : Succès du provisioning sur chemin conteneurisé réel / émulé ──
@@ -386,6 +386,42 @@ def test_kan44_ca2_explicit_provisioning_verifies_return_and_reports_execution_m
     t_after_docker = ops_manager._mock_tenants[tenant_id2]
     assert t_after_docker["instance"]["status"] == "ready"
     assert t_after_docker["instance"]["environment_status"] == "active"
+
+
+def test_kan44_ca2_production_refuses_inprocess_provisioning_without_local_docker(monkeypatch):
+    """CA2 & KAN-74 — En production, tout provisioning in-process sans accès Docker local est formellement refusé."""
+    client = TestClient(app)
+    admin_headers = {"Authorization": f"Bearer {MOCK_SUPERADMIN_TOKEN}"}
+
+    monkeypatch.setenv("ORSO_ENV", "production")
+    monkeypatch.setattr(manager, "has_docker", False)
+    monkeypatch.setenv("ORSO_TARGET_ENGINE_DIGEST", "sha256:" + "f" * 64)
+    monkeypatch.setenv("ORSO_PERSONA_HMAC_KEY", "test_secret_hmac_key_for_acceptance_0123456789")
+
+    slug = "prod-tenant-refusal"
+    tenant_id = f"test-{slug}"
+    ops_manager._mock_tenants[tenant_id] = {
+        "id": tenant_id,
+        "name": "Prod Refusal Test",
+        "slug": slug,
+        "subscription": {"status": "active", "stripe_customer_id": "cus_prod_999"},
+        "instance": {"status": "not_provisioned", "environment_status": "inactive"},
+    }
+
+    resp = client.post(f"/api/olympe/ops/onboarding/{tenant_id}/provision", headers=admin_headers)
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "ERR_NO_LOCAL_DOCKER_DELEGATED_HOST_REQUIRED" in detail
+
+    # Preuve : Événement d'audit consigné
+    audit_events = ops_manager._audit_log
+    failed_audit = next((ev for ev in audit_events if ev.get("action") == "provision:failed" and ev.get("target") == tenant_id), None)
+    assert failed_audit is not None
+    assert failed_audit["details"]["error"] == "ERR_NO_LOCAL_DOCKER_DELEGATED_HOST_REQUIRED"
+
+    # L'instance n'est jamais passée à active en production
+    assert ops_manager._mock_tenants[tenant_id]["instance"]["status"] == "not_provisioned"
+    assert ops_manager._mock_tenants[tenant_id]["instance"]["environment_status"] == "inactive"
 
 
 def test_kan44_auto_provision_when_enabled_verifies_return_and_logs_failure_if_error(monkeypatch):

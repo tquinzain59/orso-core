@@ -2190,6 +2190,10 @@ class OpsManager:
 
         # 1. Traitement via le worker souverain si Supabase est configuré
         if self.supabase_url and self.supabase_key:
+            # CA2 KAN-74 : Interdiction d'écrire un statut actif ou prêt en production suite à un mode simulé
+            if is_simulated and is_production():
+                raise ValueError("Interdiction formelle d'écrire un statut actif ou prêt en base de production suite à un provisioning simulé (CA2 KAN-74).")
+
             worker_res = onboarding_worker.provision_tenant_agents(actual_tenant_id)
             _log.info("Provisioning Supabase exécuté pour %s : %s", actual_tenant_id, worker_res)
 
@@ -2200,8 +2204,8 @@ class OpsManager:
                     f"tenant_instances?tenant_id=eq.{actual_tenant_id}",
                     method="PATCH",
                     payload={
-                        "status": "ready",
-                        "environment_status": "active",
+                        "status": "ready" if not is_simulated else "simulated",
+                        "environment_status": "active" if not is_simulated else "simulated",
                         "docker_container_name": container_name,
                         "instance_url": f"https://app.orso-agents.fr/t/{tenant_slug}" if tenant_slug else "https://app.orso-agents.fr",
                     },
@@ -2228,8 +2232,8 @@ class OpsManager:
         if actual_tenant_id in self._mock_tenants:
             t = self._mock_tenants[actual_tenant_id]
             t["status"] = "active"
-            t["instance"]["status"] = "ready"
-            t["instance"]["environment_status"] = "active"
+            t["instance"]["status"] = "ready" if not is_simulated else "simulated"
+            t["instance"]["environment_status"] = "active" if not is_simulated else "simulated"
             for ai in t.get("agent_instances", []):
                 ai["provisioning_status"] = "ACTIVE"
 

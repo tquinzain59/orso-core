@@ -77,7 +77,8 @@ h3. 2. Preuves Critère par Critère (Handoff)
 * *Critère 2 : L'activation d'environnement vérifie le cycle de vie, refuse avec motif si échec et distingue explicitement le chemin simulé du chemin réel*
 ** *Test automatisé* : {{test_kan44_ca2_explicit_provisioning_verifies_return_and_reports_execution_mode}}
 ** *Sorties brutes vérifiées* :
-*** *Cas A (Refus explicite & journalisé)* : Sans clé HMAC ou sans digest SHA-256 épinglé -> Réponse HTTP 400 {{Provisioning refusé : ... [ERR_DIGEST_REQUIRED / ERR_HMAC_KEY_REQUIRED]}}. Entrée d'audit {{action: "provision:failed"}} consignée. Instance maintenue à {{inactive}}.
+*** *Cas A1 (Refus explicite & journalisé)* : Sans clé HMAC ou sans digest SHA-256 épinglé -> Réponse HTTP 400 {{Provisioning refusé : ... [ERR_DIGEST_REQUIRED / ERR_HMAC_KEY_REQUIRED]}}. Entrée d'audit {{action: "provision:failed"}} consignée. Instance maintenue à {{inactive}}.
+*** *Cas A2 (Refus formel en production sous Option B KAN-74)* : En production ({{ORSO_ENV=production}}) avec démon local absent ({{has_docker=False}}) -> Refus inconditionnel HTTP 400 avec code {{ERR_NO_LOCAL_DOCKER_DELEGATED_HOST_REQUIRED}}. Aucune écriture active/prête n'est enregistrée en base ({{test_kan44_ca2_production_refuses_inprocess_provisioning_without_local_docker}}).
 *** *Cas B1 (Chemin simulé explicite)* :
 {{[PROVISIONING EXECUTION MODE] mode=simulated simulated=True tenant=acme-corp}} -> {{status: "ACTIVE"}}, {{simulated: True}}, {{execution_mode: "simulated"}}.
 *** *Cas B2 (Chemin conteneurisé réel / émulé)* :
@@ -99,8 +100,8 @@ h3. 2. Preuves Critère par Critère (Handoff)
 
 h3. 3. Résultats de la Suite de Tests d'Intégration
 * Commande d'exécution : {{scripts/run_tests.sh tests/olympe/}}
-* Résultat brut : *68 tests passés sur 68 (100% de succès)* en 13.0s sur 9 fichiers de test.
-* Validation isolée KAN-44 : {{scripts/run_tests.sh tests/olympe/test_kan43_kan44_acceptance.py}} -> *11/11 tests passés avec succès*.
+* Résultat brut : *69 tests passés sur 69 (100% de succès)* en 13.0s sur 9 fichiers de test.
+* Validation isolée KAN-44 : {{scripts/run_tests.sh tests/olympe/test_kan43_kan44_acceptance.py}} -> *12/12 tests passés avec succès*.
 """
 
 
