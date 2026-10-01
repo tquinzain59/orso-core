@@ -58,16 +58,3 @@ SET
 FROM public.tenants t
 WHERE ti.tenant_id = t.id AND t.slug = 'financia-solutions';
 
--- 5. Création d'un compte de test "Client Sans Environnement" (pour validation de l'alerte support)
-DO $$
-DECLARE
-  v_tenant_id UUID;
-BEGIN
-  INSERT INTO public.tenants (name, siret, slug, sector, status)
-  VALUES ('Aura Sans Environnement', '99988877700011', 'aura-sans-env', 'Audit & Conseil', 'active')
-  ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
-  RETURNING id INTO v_tenant_id;
-
-  -- Ne crée AUCUNE instance dans tenant_instances pour ce tenant,
-  -- simulant un client dont l'infrastructure n'a pas encore été déployée.
-END $$;

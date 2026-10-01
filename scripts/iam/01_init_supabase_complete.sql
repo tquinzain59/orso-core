@@ -113,13 +113,15 @@ GRANT EXECUTE ON FUNCTION public.custom_access_token_hook TO supabase_auth_admin
 REVOKE EXECUTE ON FUNCTION public.custom_access_token_hook FROM authenticated, anon, public;
 
 -- ============================================================================
--- 8. Amorçage des 5 Tenants & Instances du POC Orso Agents
+-- 8. Amorçage Initial du Tenant Réel (Financia Solutions - PROD-FR-002)
+-- NOTE KAN-71 : Les 4 organisations d'amorçage POC (CommerciaLink, HelpDesk360,
+-- BatiPro Services, EuroTech Conseil) ont été définitivement purgées.
 -- ============================================================================
 DO $$
 DECLARE
   v_tenant_id UUID;
 BEGIN
-  -- 1. Financia Solutions (Agent: Jérôme - Recouvrement)
+  -- 1. Financia Solutions (Agent: Jérôme - Recouvrement - Déployé sur PROD-FR-002)
   INSERT INTO public.tenants (name, siret, slug, sector, status)
   VALUES ('Financia Solutions', '83214567800012', 'financia-solutions', 'Finance & Recouvrement', 'active')
   ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
@@ -129,44 +131,5 @@ BEGIN
   VALUES (v_tenant_id, 'orso_backend_financia', 'ready', '["jerome"]'::jsonb)
   ON CONFLICT (internal_route_key) DO UPDATE SET agents_enabled = EXCLUDED.agents_enabled;
 
-  -- 2. CommerciaLink (Agent: Lucas - Commercial)
-  INSERT INTO public.tenants (name, siret, slug, sector, status)
-  VALUES ('CommerciaLink', '78451236900021', 'commercialink', 'Commerce & Vente', 'active')
-  ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
-  RETURNING id INTO v_tenant_id;
-
-  INSERT INTO public.tenant_instances (tenant_id, internal_route_key, status, agents_enabled)
-  VALUES (v_tenant_id, 'orso_backend_commercialink', 'ready', '["lucas"]'::jsonb)
-  ON CONFLICT (internal_route_key) DO UPDATE SET agents_enabled = EXCLUDED.agents_enabled;
-
-  -- 3. HelpDesk360 (Agent: Clara - Support & Litiges)
-  INSERT INTO public.tenants (name, siret, slug, sector, status)
-  VALUES ('HelpDesk360', '88997766500033', 'helpdesk360', 'Service Client', 'active')
-  ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
-  RETURNING id INTO v_tenant_id;
-
-  INSERT INTO public.tenant_instances (tenant_id, internal_route_key, status, agents_enabled)
-  VALUES (v_tenant_id, 'orso_backend_helpdesk360', 'ready', '["clara"]'::jsonb)
-  ON CONFLICT (internal_route_key) DO UPDATE SET agents_enabled = EXCLUDED.agents_enabled;
-
-  -- 4. BatiPro Services (Agent: Victor - Marchés Publics)
-  INSERT INTO public.tenants (name, siret, slug, sector, status)
-  VALUES ('BatiPro Services', '90123456700038', 'batipro-services', 'BTP & Marchés publics', 'active')
-  ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
-  RETURNING id INTO v_tenant_id;
-
-  INSERT INTO public.tenant_instances (tenant_id, internal_route_key, status, agents_enabled)
-  VALUES (v_tenant_id, 'orso_backend_batipro', 'ready', '["victor"]'::jsonb)
-  ON CONFLICT (internal_route_key) DO UPDATE SET agents_enabled = EXCLUDED.agents_enabled;
-
-  -- 5. EuroTech Conseil (Suite Complète : 4 agents)
-  INSERT INTO public.tenants (name, siret, slug, sector, status)
-  VALUES ('EuroTech Conseil', '55566677700044', 'eurotech-conseil', 'Conseil & Ingénierie', 'active')
-  ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
-  RETURNING id INTO v_tenant_id;
-
-  INSERT INTO public.tenant_instances (tenant_id, internal_route_key, status, agents_enabled)
-  VALUES (v_tenant_id, 'orso_backend_eurotech', 'ready', '["jerome", "lucas", "clara", "victor"]'::jsonb)
-  ON CONFLICT (internal_route_key) DO UPDATE SET agents_enabled = EXCLUDED.agents_enabled;
-
 END $$;
+

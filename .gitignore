@@ -259,3 +259,10 @@ profiles/*/skills/.curator_state
 install_id
 *.lock
 
+# Database dumps & backups (KAN-71)
+scripts/iam/backups/
+*.dump
+*.backup
+scripts/publish_*.py
+
+
