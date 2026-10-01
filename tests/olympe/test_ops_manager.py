@@ -103,42 +103,111 @@ def test_3_agents_tier_and_quota():
         ops.update_tenant_agents(tenant_id, ["jerome", "lucas", "clara", "victor"])
 
 
-def test_telemetry_endpoints(api_client):
-    # 1. Summary
-    resp_summary = api_client.get("/api/olympe/ops/telemetry/summary")
-    assert resp_summary.status_code == 200
-    summary = resp_summary.json()
-    assert "total_tokens" in summary
-    assert "total_cost_usd" in summary
+from olympe.telemetry_client import telemetry_client
 
-    # 2. Environments
-    resp_envs = api_client.get("/api/olympe/ops/telemetry/environments")
-    assert resp_envs.status_code == 200
-    envs_data = resp_envs.json()
-    assert "environments" in envs_data
-    assert len(envs_data["environments"]) == 2
-    env_names = [e["display_name"] for e in envs_data["environments"]]
-    assert "Recouvrement" not in env_names
-    assert "PROD-FR-002" in env_names
-    assert "Olympe" in env_names
-    container_ids = [e["container_id"] for e in envs_data["environments"]]
-    assert "recouvrement_default" not in container_ids
-    first_env = envs_data["environments"][0]
-    assert "display_name" in first_env
-    assert "vitals" in first_env
-    assert "tenant" in first_env
 
-    # 3. History
-    resp_hist = api_client.get("/api/olympe/ops/telemetry/history/1?limit=5")
-    assert resp_hist.status_code == 200
-    hist_data = resp_hist.json()
-    assert "snapshots" in hist_data
+def test_telemetry_endpoints_offline(api_client):
+    """Vérifie que lorsque l'API télémétrie est hors ligne, les métriques renvoient zéro sans simulation fictive."""
+    with patch.object(telemetry_client, "_fetch_api", return_value=None), \
+         patch.object(telemetry_client, "_get_docker_live_vitals", return_value={}):
+        resp_summary = api_client.get("/api/olympe/ops/telemetry/summary")
+        assert resp_summary.status_code == 200
+        summary = resp_summary.json()
+        assert summary["total_tokens"] == 0
+        assert summary["total_cost_usd"] == 0.0
+        assert summary["connected"] is False
+        assert summary["status"] == "unavailable"
+        assert summary["simulated"] is False
 
-    # 4. Alerts
-    resp_alerts = api_client.get("/api/olympe/ops/telemetry/alerts")
-    assert resp_alerts.status_code == 200
-    alerts_data = resp_alerts.json()
-    assert "alerts" in alerts_data
+        resp_envs = api_client.get("/api/olympe/ops/telemetry/environments")
+        assert resp_envs.status_code == 200
+        envs_data = resp_envs.json()
+        assert envs_data["environments"] == []
+
+        resp_hist = api_client.get("/api/olympe/ops/telemetry/history/1?limit=5")
+        assert resp_hist.status_code == 200
+        hist_data = resp_hist.json()
+        assert hist_data["snapshots"] == []
+        assert hist_data["count"] == 0
+        assert hist_data["connected"] is False
+
+
+def test_telemetry_endpoints_connected(api_client):
+    """Vérifie l'enrichissement réel lorsque l'API télémétrie renvoie des données."""
+    mock_summary = {
+        "summary": {
+            "agents_count": 1,
+            "snapshots_count": 10,
+            "total_tokens": 12500,
+            "total_input_tokens": 10000,
+            "total_output_tokens": 2500,
+            "total_api_calls": 5,
+            "total_cost_usd": 0.025,
+            "last_snapshot_at": "2026-10-01 10:00:00",
+            "agents_registered": 1,
+            "alerts_active": 0,
+        }
+    }
+    mock_latest = {
+        "agents": [
+            {
+                "agent_id": 1,
+                "display_name": "Agent Réel",
+                "module": "recouvrement",
+                "dashboard_url": "https://client.orso-agents.fr",
+                "total_tokens": 12500,
+                "input_tokens": 10000,
+                "output_tokens": 2500,
+                "api_calls": 5,
+                "cost_usd": 0.025,
+                "status": "active",
+                "container_id": "orso_client_financia_solutions",
+                "server_ip": "92.222.68.80",
+            }
+        ]
+    }
+    mock_history = {
+        "agent_id": 1,
+        "agent_name": "Agent Réel",
+        "snapshots": [{"id": 1, "total_tokens": 12500, "snapshot_at": "2026-10-01 10:00:00"}],
+        "count": 1,
+    }
+
+    def mock_fetch(endpoint, **kw):
+        if "/summary" in endpoint:
+            return mock_summary
+        if "/latest" in endpoint:
+            return mock_latest
+        if "/history" in endpoint:
+            return mock_history
+        if "/alerts" in endpoint:
+            return {"alerts": []}
+        return None
+
+    with patch.object(telemetry_client, "_fetch_api", side_effect=mock_fetch):
+        resp_summary = api_client.get("/api/olympe/ops/telemetry/summary")
+        assert resp_summary.status_code == 200
+        summary = resp_summary.json()
+        assert summary["total_tokens"] == 12500
+        assert summary["total_cost_usd"] == 0.025
+
+        resp_envs = api_client.get("/api/olympe/ops/telemetry/environments")
+        assert resp_envs.status_code == 200
+        envs_data = resp_envs.json()
+        assert len(envs_data["environments"]) == 1
+        env = envs_data["environments"][0]
+        assert env["display_name"] == "Agent Réel"
+        assert env["total_tokens"] == 12500
+        assert "vitals" in env
+        assert "tenant" in env
+
+        resp_hist = api_client.get("/api/olympe/ops/telemetry/history/1?limit=5")
+        assert resp_hist.status_code == 200
+        assert len(resp_hist.json()["snapshots"]) == 1
+
+        resp_alerts = api_client.get("/api/olympe/ops/telemetry/alerts")
+        assert resp_alerts.status_code == 200
+        assert resp_alerts.json()["alerts"] == []
 
 
 def test_onboarding_pending_and_orders():

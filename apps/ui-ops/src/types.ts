@@ -123,6 +123,7 @@ export interface Tenant {
   address_line1?: string;
   postal_code?: string;
   city?: string;
+  is_sandbox?: boolean;
   status: "active" | "trial" | "suspended" | "churn" | string;
   created_at: string;
   contact: TenantContact;

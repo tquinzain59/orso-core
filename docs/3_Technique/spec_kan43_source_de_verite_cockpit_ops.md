@@ -30,7 +30,7 @@ Conformément aux directives du PO et à la **Charte de Gouvernance du Fork Orso
 
 ### Règle 1 — Source de Vérité Unique en Base de Données
 * En production, la flotte, les profils, les abonnements, les indicateurs et les factures proviennent **strictement de PostgreSQL (Supabase)**.
-* Zéro client d'amorçage, zéro fallback de données fictives, zéro jeu résiduel en mémoire. Si la base est inaccessible ou vide, la réponse est vide (`[]`), jamais simulée.
+* Zéro client d'amorçage, zéro fallback de données fictives, zéro jeu résiduel en mémoire. Si la base est saine mais vide, la réponse est une liste vide (`[]`). Si la base est inaccessible, défaillante ou non configurée en production, l'API applique un **Fail-Closed strict** et retourne un statut **HTTP 503 (Service Unavailable)**, interdisant tout affichage silencieux trompeur de 0€ MRR.
 
 ### Règle 2 — Activation Explicite et Refus Inconditionnel du Mode Démo en Prod
 * Le mode démonstration ne s'active **JAMAIS par défaut**. Il requiert impérativement la configuration explicite `ORSO_DEMO_MODE=1` (ou `demo_mode=True`).

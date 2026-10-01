@@ -15,6 +15,7 @@ import {
   Trash2,
   RefreshCw,
   AlertCircle,
+  AlertTriangle,
   Eye,
   EyeOff,
 } from "lucide-react";
@@ -294,6 +295,11 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
               <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/30">
                 {tenant.slug}
               </span>
+              {tenant.is_sandbox && (
+                <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wider bg-amber-500/10 text-amber-400 border border-amber-500/30">
+                  SANDBOX TEST
+                </span>
+              )}
             </div>
             <p className="text-xs text-slate-400 mt-1">
               SIRET : {tenant.siret || "Non renseigné"} • Secteur : {tenant.sector || "Services"} • Inscrit le{" "}
@@ -311,6 +317,19 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
 
         {/* Modal Body */}
         <div className="p-6 space-y-8 max-h-[75vh] overflow-y-auto">
+          {/* Alerte Sandbox */}
+          {tenant.is_sandbox && (
+            <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex items-start space-x-3">
+              <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <h4 className="text-sm font-bold text-amber-400">Environnement Sandbox Test</h4>
+                <p className="text-xs text-amber-300/80 mt-0.5 leading-relaxed">
+                  Ce client est une organisation de test automatisée (SIRET technique 99999999900010). Les opérations de modification, d'activation d'agents et de cycle de vie sont isolées et ne reflètent pas un contrat de production réel.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Toast de succès */}
           {toastMessage && (
             <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 rounded-xl text-sm font-medium flex items-center space-x-2">

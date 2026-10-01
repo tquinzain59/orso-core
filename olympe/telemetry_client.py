@@ -146,19 +146,21 @@ class TelemetryClient:
         if raw:
             return raw
 
-        # Fallback simulation
+        # Télémétrie indisponible / hors ligne : métriques réelles à zéro
         return {
-            "agents_count": 2,
-            "snapshots_count": 2253,
-            "total_tokens": 823052,
-            "total_input_tokens": 756390,
-            "total_output_tokens": 66662,
-            "total_api_calls": 139,
-            "total_cost_usd": 0.1143,
-            "last_snapshot_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-            "agents_registered": 2,
+            "agents_count": 0,
+            "snapshots_count": 0,
+            "total_tokens": 0,
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_api_calls": 0,
+            "total_cost_usd": 0.0,
+            "last_snapshot_at": None,
+            "agents_registered": 0,
             "alerts_active": 0,
-            "simulated": True,
+            "connected": False,
+            "status": "unavailable",
+            "simulated": False,
         }
 
     def get_environments(self, tenants: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -184,42 +186,26 @@ class TelemetryClient:
         # Le client provisionné par défaut (Financia Solutions)
         default_provisioned_tenant = next((t for t in tenants if t.get("slug") == "financia-solutions"), None)
 
-        # Si l'API télémétrie n'est pas joignable (mode local/test), on utilise le jeu de données par défaut
-        if not raw_agents:
-            raw_agents = [
-                {
-                    "agent_id": 2,
-                    "display_name": "Olympe",
-                    "module": "supervision",
-                    "dashboard_url": "https://ops.orso-agents.fr/login",
-                    "last_seen_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-                    "total_tokens": 2593,
-                    "input_tokens": 2490,
-                    "output_tokens": 103,
-                    "api_calls": 1,
-                    "cost_usd": 0.0001,
-                    "status": "active",
-                    "error_count": 0,
-                    "container_id": "olympe_core",
-                    "server_ip": "92.222.68.80",
-                },
-                {
-                    "agent_id": 1,
-                    "display_name": "PROD-FR-002",
-                    "module": "recouvrement",
-                    "dashboard_url": "https://admin.prod-fr-002.orso-agents.fr/login",
-                    "last_seen_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-                    "total_tokens": 820459,
-                    "input_tokens": 753900,
-                    "output_tokens": 66559,
-                    "api_calls": 138,
-                    "cost_usd": 0.1142,
-                    "status": "active",
-                    "error_count": 0,
-                    "container_id": "orso_client_backend",
-                    "server_ip": "92.222.68.80",
-                },
-            ]
+        # Si l'API télémétrie n'est pas joignable mais que des conteneurs gérés tournent réellement sur la machine
+        if not raw_agents and docker_vitals:
+            for idx, (dname, dv) in enumerate(docker_vitals.items(), start=1):
+                if dv.get("is_managed"):
+                    raw_agents.append({
+                        "agent_id": idx,
+                        "display_name": dname,
+                        "module": dv.get("role") or ("supervision" if "olympe" in dname else "agent"),
+                        "dashboard_url": "",
+                        "last_seen_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S") if dv.get("state") == "running" else None,
+                        "total_tokens": 0,
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "api_calls": 0,
+                        "cost_usd": 0.0,
+                        "status": "active" if dv.get("state") == "running" else "stopped",
+                        "error_count": 0,
+                        "container_id": dname,
+                        "server_ip": "127.0.0.1",
+                    })
 
         enriched_environments = []
         for ag in raw_agents:
@@ -227,7 +213,7 @@ class TelemetryClient:
             display_name = ag.get("display_name", "Agent")
             module = ag.get("module", "générique")
             container_id = ag.get("container_id", "")
-            server_ip = ag.get("server_ip", "92.222.68.80")
+            server_ip = ag.get("server_ip") or os.environ.get("ORSO_HOST_IP", "127.0.0.1")
             status = ag.get("status", "active")
             
             # Recherche du tenant associé
@@ -304,11 +290,11 @@ class TelemetryClient:
                     }
 
             vitals = {
-                "cpu_percent": matched_vitals.get("cpu_percent", 0.25) if matched_vitals else 0.25,
-                "memory_usage_mb": matched_vitals.get("memory_usage_mb", 140.0) if matched_vitals else 140.0,
-                "memory_limit_mb": matched_vitals.get("memory_limit_mb", 3700.0) if matched_vitals else 3700.0,
-                "memory_percent": matched_vitals.get("memory_percent", 3.8) if matched_vitals else 3.8,
-                "docker_status": matched_vitals.get("status_str", "Up 6 hours") if matched_vitals else "Up 6 hours (healthy)",
+                "cpu_percent": matched_vitals.get("cpu_percent", 0.0) if matched_vitals else 0.0,
+                "memory_usage_mb": matched_vitals.get("memory_usage_mb", 0.0) if matched_vitals else 0.0,
+                "memory_limit_mb": matched_vitals.get("memory_limit_mb", 0.0) if matched_vitals else 0.0,
+                "memory_percent": matched_vitals.get("memory_percent", 0.0) if matched_vitals else 0.0,
+                "docker_status": matched_vitals.get("status_str", "Inconnu") if matched_vitals else "Indisponible",
             }
 
             env_item = {
@@ -339,27 +325,13 @@ class TelemetryClient:
         if res:
             return res
 
-        # Fallback simulation
-        now_ts = datetime.now(timezone.utc)
-        sim_snapshots = []
-        for i in range(min(limit, 10)):
-            sim_snapshots.append({
-                "id": 2250 - i,
-                "snapshot_at": now_ts.strftime("%Y-%m-%d %H:%M:%S"),
-                "total_tokens": 820459 - (i * 1200),
-                "input_tokens": 753900 - (i * 1000),
-                "output_tokens": 66559 - (i * 200),
-                "api_calls": 138 - i,
-                "cost_usd": round(0.1142 - (i * 0.001), 4),
-                "status": "active" if i == 0 else "idle",
-                "error_count": 0,
-            })
-        agent_name = "PROD-FR-002" if agent_id == 1 else ("Olympe" if agent_id == 2 else f"Agent #{agent_id}")
+        # Télémétrie indisponible / déconnectée : aucun snapshot fictif
         return {
             "agent_id": agent_id,
-            "agent_name": agent_name,
-            "snapshots": sim_snapshots,
-            "count": len(sim_snapshots),
+            "agent_name": f"Agent #{agent_id}",
+            "snapshots": [],
+            "count": 0,
+            "connected": False,
         }
 
     def get_alerts(self, resolved: bool = False, agent_id: Optional[int] = None) -> List[Dict[str, Any]]:
