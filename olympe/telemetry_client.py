@@ -213,7 +213,7 @@ class TelemetryClient:
             display_name = ag.get("display_name", "Agent")
             module = ag.get("module", "générique")
             container_id = ag.get("container_id", "")
-            server_ip = ag.get("server_ip", "92.222.68.80")
+            server_ip = ag.get("server_ip") or os.environ.get("ORSO_HOST_IP", "127.0.0.1")
             status = ag.get("status", "active")
             
             # Recherche du tenant associé

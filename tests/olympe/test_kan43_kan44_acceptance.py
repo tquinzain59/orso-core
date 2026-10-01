@@ -305,16 +305,16 @@ def test_kan44_ca1_and_ca2_webhook_creates_environment_and_logs_delivery():
         },
     }
 
-    mock_status = {
-        "tenant_slug": slug,
-        "container_name": f"orso_client_{slug}",
-        "status": "ready",
-        "running": True,
-    }
-    with patch.object(manager, "provision_tenant", return_value={"status": "created", "container_name": f"orso_client_{slug}"}), \
-         patch.object(manager, "wake_tenant", return_value={"status": "ready", "running": True}), \
-         patch.object(manager, "get_tenant_status", return_value=mock_status):
-        # Émission du webhook
+    daemon_online = False
+    if manager.has_docker:
+        try:
+            res = manager._exec_docker(["version"], timeout=1.5)
+            daemon_online = (res.returncode == 0)
+        except Exception:
+            daemon_online = False
+
+    if daemon_online:
+        # 1. Démon Docker réel actif : exercice complet de la chaîne sans substitution
         resp = client.post("/api/olympe/ops/webhooks/stripe", json=webhook_payload)
         assert resp.status_code == 200
         data = resp.json()
@@ -336,6 +336,40 @@ def test_kan44_ca1_and_ca2_webhook_creates_environment_and_logs_delivery():
         status_info = manager.get_tenant_status(slug)
         assert status_info["tenant_slug"] == slug
         assert status_info["status"] in ("ready", "starting")
+    else:
+        # 2. Environnement sans démon Docker actif (ex: CI standard, runner sans socket) :
+        # Substitution explicite et assumée pour valider la réconciliation du webhook et l'idempotence.
+        mock_status = {
+            "tenant_slug": slug,
+            "container_name": f"orso_client_{slug}",
+            "status": "ready",
+            "running": True,
+        }
+        with patch.object(manager, "provision_tenant", return_value={"status": "created", "container_name": f"orso_client_{slug}"}), \
+             patch.object(manager, "wake_tenant", return_value={"status": "ready", "running": True}), \
+             patch.object(manager, "get_tenant_status", return_value=mock_status):
+            # Émission du webhook
+            resp = client.post("/api/olympe/ops/webhooks/stripe", json=webhook_payload)
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["status"] == "processed"
+            assert data["tenant_slug"] == slug
+            assert data["environment_status"] == "active"
+            assert "orso_client_nexis_logistics" in data["container_name"]
+
+            # CA1 Preuve : Consultation du journal des livraisons
+            resp_journal = client.get("/api/olympe/ops/webhooks/deliveries", headers=admin_headers)
+            assert resp_journal.status_code == 200
+            deliveries = resp_journal.json()["deliveries"]
+            matched_delivery = next((d for d in deliveries if d["id"] == event_id), None)
+            assert matched_delivery is not None
+            assert matched_delivery["tenant_slug"] == slug
+            assert matched_delivery["status"] == "processed"
+
+            # CA2 Preuve : L'environnement du tenant existe et est opérationnel
+            status_info = manager.get_tenant_status(slug)
+            assert status_info["tenant_slug"] == slug
+            assert status_info["status"] in ("ready", "starting")
 
 
 def test_kan44_ca3_unknown_client_rejected_with_reason_and_no_side_effects():
