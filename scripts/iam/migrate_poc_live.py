@@ -10,11 +10,37 @@ Ce script :
 import json
 import os
 import secrets
+import sys
 import urllib.error
 import urllib.request
 
-# Configuration Supabase
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://nyntmjorcqgbzaxszekk.supabase.co").rstrip("/")
+# ── GARDE-FOU UNIVERSEL INVIOLABLE (KAN-71) ─────────────────────────────────
+# Vérifier toutes les variables d'environnement usuelles de production
+_PROD_ENV_VARS = ["ORSO_ENV", "APP_ENV", "ENVIRONMENT", "ENV"]
+for _var in _PROD_ENV_VARS:
+    _val = (os.environ.get(_var) or "").strip().lower()
+    if _val in ("production", "prod"):
+        raise RuntimeError(
+            f"[SECURITY] Interdiction formelle d'exécuter migrate_poc_live.py : {_var}='{_val}' détecté (KAN-71)."
+        )
+
+# Exiger explicitement le drapeau de seed de dev
+if "--allow-dev-seed" not in sys.argv:
+    raise RuntimeError(
+        "[SECURITY] Ce script d'amorçage POC est strictement cantonné aux bases de test/développement locales. "
+        "Pour l'exécuter sur un environnement de recette dédié, passez impérativement le drapeau --allow-dev-seed."
+    )
+
+# Configuration Supabase (aucune valeur par défaut vers la production)
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+if not SUPABASE_URL:
+    raise RuntimeError("[SECURITY] SUPABASE_URL doit être explicitement défini.")
+
+if "nyntmjorcqgbzaxszekk" in SUPABASE_URL:
+    raise RuntimeError(
+        "[SECURITY] Interdiction formelle : l'URL cible correspond à la base de production (nyntmjorcqgbzaxszekk) !"
+    )
+
 SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
 
 HEADERS = {
@@ -22,6 +48,7 @@ HEADERS = {
     "Authorization": f"Bearer {SERVICE_KEY}",
     "Content-Type": "application/json",
 }
+
 
 POC_DATA = [
     {

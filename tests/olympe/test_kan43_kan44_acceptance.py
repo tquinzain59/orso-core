@@ -232,10 +232,41 @@ def test_kan43_ca4_demo_mode_safety_locks(monkeypatch):
     assert resp_prod_tenants.status_code == 200
     assert resp_prod_tenants.json()["demo_mode"] is False
 
-    # 4. En production, list_all_invoices ne renvoie jamais de factures fictives
+    # 4. En production sans base ou panne de base, list_all_invoices fail-closed (DATABASE_UNAVAILABLE)
     monkeypatch.setenv("ORSO_ENV", "production")
     prod_ops = OpsManager(demo_mode=False)
-    assert prod_ops.list_all_invoices() == []
+    with pytest.raises(RuntimeError, match="DATABASE_UNAVAILABLE"):
+        prod_ops.list_all_invoices()
+
+
+def test_kan43_ca1_db_failure_in_production_fails_closed_503(monkeypatch):
+    """CA1 / Fail-Closed — En production, si Supabase est défaillant ou injoignable, l'API renvoie HTTP 503."""
+    monkeypatch.setenv("ORSO_ENV", "production")
+    client = TestClient(app)
+    admin_headers = {"Authorization": f"Bearer {MOCK_SUPERADMIN_TOKEN}"}
+
+    # Sauvegarder la configuration initiale
+    old_url = ops_manager.supabase_url
+    old_key = ops_manager.supabase_key
+    ops_manager.supabase_url = "https://mock.supabase.co"
+    ops_manager.supabase_key = "mock_key"
+    try:
+        # Simuler une panne de base de données (requête Supabase renvoie None)
+        with patch.object(ops_manager, "_query_supabase", return_value=None):
+            resp_tenants = client.get("/api/olympe/ops/tenants", headers=admin_headers)
+            assert resp_tenants.status_code == 503
+            assert "Service indisponible" in resp_tenants.json()["detail"]
+
+            resp_stats = client.get("/api/olympe/ops/stats", headers=admin_headers)
+            assert resp_stats.status_code == 503
+            assert "Service indisponible" in resp_stats.json()["detail"]
+
+            resp_invoices = client.get("/api/olympe/ops/invoices", headers=admin_headers)
+            assert resp_invoices.status_code == 503
+            assert "Service indisponible" in resp_invoices.json()["detail"]
+    finally:
+        ops_manager.supabase_url = old_url
+        ops_manager.supabase_key = old_key
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -400,28 +431,30 @@ def test_kan44_ca2_production_refuses_inprocess_provisioning_without_local_docke
 
     slug = "prod-tenant-refusal"
     tenant_id = f"test-{slug}"
-    ops_manager._mock_tenants[tenant_id] = {
+    mock_tenant = {
         "id": tenant_id,
         "name": "Prod Refusal Test",
         "slug": slug,
         "subscription": {"status": "active", "stripe_customer_id": "cus_prod_999"},
         "instance": {"status": "not_provisioned", "environment_status": "inactive"},
     }
+    ops_manager._mock_tenants[tenant_id] = mock_tenant
 
-    resp = client.post(f"/api/olympe/ops/onboarding/{tenant_id}/provision", headers=admin_headers)
-    assert resp.status_code == 400
-    detail = resp.json()["detail"]
-    assert "ERR_NO_LOCAL_DOCKER_DELEGATED_HOST_REQUIRED" in detail
+    with patch.object(ops_manager, "get_tenant_detail", return_value=mock_tenant):
+        resp = client.post(f"/api/olympe/ops/onboarding/{tenant_id}/provision", headers=admin_headers)
+        assert resp.status_code == 400
+        detail = resp.json()["detail"]
+        assert "ERR_NO_LOCAL_DOCKER_DELEGATED_HOST_REQUIRED" in detail
 
-    # Preuve : Événement d'audit consigné
-    audit_events = ops_manager._audit_log
-    failed_audit = next((ev for ev in audit_events if ev.get("action") == "provision:failed" and ev.get("target") == tenant_id), None)
-    assert failed_audit is not None
-    assert failed_audit["details"]["error"] == "ERR_NO_LOCAL_DOCKER_DELEGATED_HOST_REQUIRED"
+        # Preuve : Événement d'audit consigné
+        audit_events = ops_manager._audit_log
+        failed_audit = next((ev for ev in audit_events if ev.get("action") == "provision:failed" and ev.get("target") == tenant_id), None)
+        assert failed_audit is not None
+        assert failed_audit["details"]["error"] == "ERR_NO_LOCAL_DOCKER_DELEGATED_HOST_REQUIRED"
 
-    # L'instance n'est jamais passée à active en production
-    assert ops_manager._mock_tenants[tenant_id]["instance"]["status"] == "not_provisioned"
-    assert ops_manager._mock_tenants[tenant_id]["instance"]["environment_status"] == "inactive"
+        # L'instance n'est jamais passée à active en production
+        assert ops_manager._mock_tenants[tenant_id]["instance"]["status"] == "not_provisioned"
+        assert ops_manager._mock_tenants[tenant_id]["instance"]["environment_status"] == "inactive"
 
 
 def test_kan44_auto_provision_when_enabled_verifies_return_and_logs_failure_if_error(monkeypatch):

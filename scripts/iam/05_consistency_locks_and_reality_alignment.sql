@@ -2,19 +2,18 @@
 -- Migration 05: Align instances reality and set consistency locks
 BEGIN;
 
--- 1. Align the 5 inactive tenants
+-- 1. Align inactive instances (generic consistency)
+-- NOTE KAN-71 : Les 5 organisations POC (commercialink, helpdesk360, batipro-services,
+-- eurotech-conseil, aura-sans-env) ont été purgées de la base de production.
 UPDATE public.tenant_instances
 SET 
   agents_enabled = '[]'::jsonb,
-  status = 'not_provisioned',
-  environment_status = 'inactive',
   docker_container_name = NULL,
   docker_host = NULL,
   docker_port = NULL,
   instance_url = NULL
-FROM public.tenants t
-WHERE t.id = public.tenant_instances.tenant_id
-AND t.slug IN ('commercialink', 'helpdesk360', 'batipro-services', 'eurotech-conseil', 'aura-sans-env');
+WHERE status = 'not_provisioned' OR environment_status = 'inactive';
+
 
 -- 2. Explicitly align the active tenant
 UPDATE public.tenant_instances
