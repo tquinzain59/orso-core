@@ -41,7 +41,17 @@ L'ensemble des critères d'acceptation du ticket KAN-68 a été traité avec suc
 
 ---
 
-h3. 1. Reproductibilité de l'Installation Verrouillée (CA2)
+h3. 1. Validation du Contrôle JS et TS en Succès (CA1)
+* *Job GitHub Actions* : {{JS & TS checks / JS & TS checks}}
+* *Identifiant d'exécution (Run)* : [36832261480|https://github.com/tquinzain59/orso-core/actions/runs/36832261480]
+* *Identifiant du Job* : [110271432389|https://github.com/tquinzain59/orso-core/actions/runs/36832261480/job/110271432389]
+* *Branche* : {{KAN-68-sync-verrou-npm-workspaces}}
+* *Pull Request* : [#5|https://github.com/tquinzain59/orso-core/pull/5]
+* *Conclusion* : *SUCCESS* (10/10 sous-projets et vérifications validés en 4m56s).
+
+---
+
+h3. 2. Reproductibilité de l'Installation Verrouillée (CA2)
 * *Environnement d'exécution* : Docker {{node:26-bookworm-slim}} avec alignement {{npm@12.2.0}} (strictement identique à l'environnement CI du job JS & TS).
 * *Commande* : {{npm ci}}
 * *Code retour* : *0*
@@ -62,7 +72,7 @@ npm ci return code: 0
 
 ---
 
-h3. 2. Mesure Factuelle de la Cohérence Avant / Après (CA3)
+h3. 3. Mesure Factuelle de la Cohérence Avant / Après (CA3)
 * *Occurrences avant correction* :
 ** {{@orso/ui-client}} : *0* occurrence
 ** {{@orso/ui-ops}} : *0* occurrence
@@ -80,7 +90,7 @@ h3. 2. Mesure Factuelle de la Cohérence Avant / Après (CA3)
 
 ---
 
-h3. 3. Traçabilité du Diff et Invariance des Dépendances (CA4)
+h3. 4. Traçabilité du Diff et Invariance des Dépendances (CA4)
 * *Outil d'audit sémantique du dépôt* : {{scripts/ci/lockfile_diff.py}}
 {code:markdown}
 #### `package-lock.json`
@@ -98,16 +108,17 @@ h3. 3. Traçabilité du Diff et Invariance des Dépendances (CA4)
 
 ---
 
-h3. 4. Périmètre Borné & Zéro Altération Métier (CA5)
+h3. 5. Périmètre Borné & Zéro Altération Métier (CA5)
 * *Code applicatif touché* : *0 ligne, 0 fichier*.
 * *Fichiers de la pull request* :
 ** {{package-lock.json}} (synchronisation verrou)
+** {{web/src/pages/SessionsPage.test.tsx}} (timeout 20s pour la charge parallèle conforme à la flake policy AGENTS.md)
 ** {{docs/3_Technique/note_exploitation_kan68_synchronisation_verrou_npm.md}} (note d'exploitation et réponses aux questions ouvertes)
 ** {{scripts/publish_kan68_atlassian.py}} (outillage de traçabilité Jira)
 
 ---
 
-h3. 5. Réponses aux Questions Ouvertes du Ticket
+h3. 6. Réponses aux Questions Ouvertes du Ticket
 1. *Espaces de travail vs dépendances publiées* : Les paquets doivent impérativement demeurer des *espaces de travail (workspaces)* du monorepo. Ils constituent des briques d'interface d'Orso vivant avec le moteur. Les publier induirait des frictions de publication et de versioning inutiles.
 2. *Rôle du contrôle automatique de réparation* : {{js-autofix.yml}} ne doit pas toucher au verrou pour des raisons de sécurité supply-chain (d'où l'exclusion explicite). En revanche, le job CI {{JS & TS checks}} joue ce rôle de garde strict : {{npm ci}} échoue immédiatement en cas de désynchronisation.
 """
