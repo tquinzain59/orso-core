@@ -7,6 +7,7 @@ et la supervision des conteneurs isolés orso_client_{slug}.
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -241,8 +242,12 @@ class DockerLifecycleManager:
         tenant_id: str,
         tenant_slug: str,
         image_name: str = "orso-backend:latest",
+        image_digest: Optional[str] = None,
         env_vars: Optional[Dict[str, str]] = None,
         quotas: Optional[Dict[str, Any]] = None,
+        require_digest: Optional[bool] = None,
+        allow_floating_tag: bool = False,
+        persona_hmac_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Provisionne un nouvel environnement client hermétique."""
         container_name = normalize_container_name(tenant_slug)
@@ -263,11 +268,76 @@ class DockerLifecycleManager:
         default_image = os.environ.get("ORSO_BACKEND_IMAGE", "orso-core-orso-backend:latest")
         target_image = default_image if (not image_name or image_name == "orso-backend:latest") else image_name
 
+        # Alignement de la variable de digest de référence (KAN-64) :
+        # ORSO_TARGET_ENGINE_DIGEST (spécification) avec repli sur ORSO_BACKEND_IMAGE_DIGEST
+        effective_digest = (
+            image_digest
+            or os.environ.get("ORSO_TARGET_ENGINE_DIGEST")
+            or os.environ.get("ORSO_BACKEND_IMAGE_DIGEST", "")
+        ).strip()
+
+        # Règle d'or KAN-64 : Le refus du provisioning sans digest valide est INCONDITIONNEL par défaut.
+        # Seul un paramètre explicite allow_floating_tag=True peut lever ce refus pour des tests locaux.
+        allow_floating = (
+            allow_floating_tag
+            if allow_floating_tag is not None
+            else os.environ.get("ORSO_ALLOW_FLOATING_TAG", "false").lower() in ("true", "1", "yes")
+        )
+
+        has_embedded_digest = "@sha256:" in target_image
+        if has_embedded_digest and not effective_digest:
+            effective_digest = target_image.split("@", 1)[1].strip()
+
+        if effective_digest:
+            if not re.match(r"^sha256:[a-f0-9]{64}$", effective_digest):
+                return {
+                    "success": False,
+                    "error": "ERR_INVALID_DIGEST",
+                    "tenant_slug": tenant_slug,
+                    "message": f"Provisioning refusé : digest SHA-256 invalide '{effective_digest}'. Format attendu : sha256:<64_hex_digits>",
+                }
+            if not has_embedded_digest:
+                base_repo = target_image.split(":")[0]
+                target_image = f"{base_repo}@{effective_digest}"
+        elif not allow_floating:
+            # CA6 : Refus formel et inconditionnel
+            return {
+                "success": False,
+                "error": "ERR_DIGEST_REQUIRED",
+                "tenant_slug": tenant_slug,
+                "message": (
+                    "Provisioning refusé : une image épinglée par un digest SHA-256 valide est strictement requise "
+                    "(tag flottant interdit). Spécifiez 'image_digest' ou la variable ORSO_TARGET_ENGINE_DIGEST."
+                ),
+            }
+
+        # Règle d'or KAN-33 / KAN-64 (Arbitrage Thibaut - Commentaire 13) :
+        # Le plan de gestion lit ORSO_PERSONA_HMAC_KEY dans son propre environnement
+        # et la transmet au conteneur client lors du docker run (base_envs).
+        # Si la variable est absente de l'environnement de gestion lors de la création,
+        # le provisioning échoue explicitement (ERR_HMAC_KEY_REQUIRED), sans créer de conteneur zombi.
+        effective_hmac_key = (
+            persona_hmac_key
+            or (env_vars or {}).get("ORSO_PERSONA_HMAC_KEY")
+            or os.environ.get("ORSO_PERSONA_HMAC_KEY")
+        )
+        if not effective_hmac_key:
+            return {
+                "success": False,
+                "error": "ERR_HMAC_KEY_REQUIRED",
+                "tenant_slug": tenant_slug,
+                "message": (
+                    "Provisioning refusé : ORSO_PERSONA_HMAC_KEY est strictement requise "
+                    "dans l'environnement de gestion pour garantir l'intégrité cryptographique des personas."
+                ),
+            }
+
         base_envs = {
             "ORSO_CLIENT_ID": tenant_id,
             "ORSO_CLIENT_SLUG": tenant_slug,
             "HERMES_CONFIG_PATH": "/app/config/hermes.yaml",
             "HERMES_HOME": "/app/data/hermes_home",
+            "ORSO_PERSONA_HMAC_KEY": effective_hmac_key,
         }
         for key in ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY"]:
             val = os.environ.get(key)
@@ -288,6 +358,8 @@ class DockerLifecycleManager:
                 "container_name": container_name,
                 "status": "ready",
                 "simulated": True,
+                "image": target_image,
+                "digest": effective_digest or None,
                 "quotas": quotas or {},
                 "message": "Provisioning simulé avec succès.",
             }
@@ -306,6 +378,8 @@ class DockerLifecycleManager:
             "--label", f"com.orso.tenant_slug={tenant_slug}",
             "--label", "com.orso.role=client_backend",
             "--label", f"com.orso.created_at={now_iso}",
+            "--label", f"com.orso.engine.image={target_image}",
+            *(["--label", f"com.orso.engine.digest={effective_digest}", "--label", "com.orso.engine.pinned=true"] if effective_digest else []),
             "-v", f"{tenant_data_dir}:/app/data",
         ]
 
@@ -366,6 +440,8 @@ class DockerLifecycleManager:
             "tenant_slug": tenant_slug,
             "container_name": container_name,
             "status": "ready",
+            "image": target_image,
+            "digest": effective_digest or None,
             "quotas": effective_quotas,
             "data_directory": str(tenant_data_dir),
             "message": f"Conteneur {container_name} provisionné et démarré avec succès.",

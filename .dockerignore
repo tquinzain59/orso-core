@@ -37,9 +37,16 @@ ui-tui/packages/hermes-ink/dist/
 # CI/CD
 .github
 
-# Environment files
+# Environment files and secrets
 .env
 .env.*
+Secrets/
+secrets/
+*.pem
+*.key
+*.token
+*.secret
+*.crt
 # ...but keep the template: docker/stage2-hook.sh seeds $HERMES_HOME/.env from
 # /opt/hermes/.env.example on first boot (OOF-285 — excluding it silently broke
 # first-boot .env seeding and the API_SERVER_KEY generation that depends on it).

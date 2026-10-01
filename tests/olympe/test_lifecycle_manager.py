@@ -138,9 +138,30 @@ def test_provision_tenant(tmp_path):
         mock_run_proc = subprocess.CompletedProcess(args=["docker", "run"], returncode=0, stdout="c12345", stderr="")
         with patch.object(manager, "_exec_docker", return_value=mock_run_proc) as mock_exec:
             with patch.object(manager, "_sync_tenant_instance_record"):
+                # 1. Sans digest et sans allow_floating_tag : refus inconditionnel
+                res_refused = manager.provision_tenant(
+                    tenant_id="test-uuid",
+                    tenant_slug="nouveau-client-refuse",
+                )
+                assert res_refused["success"] is False
+                assert res_refused["error"] == "ERR_DIGEST_REQUIRED"
+
+                # 1bis. Avec digest valide mais sans clé HMAC : refus ERR_HMAC_KEY_REQUIRED
+                res_no_hmac = manager.provision_tenant(
+                    tenant_id="test-uuid",
+                    tenant_slug="client-no-hmac",
+                    image_digest="sha256:d8a5f82c448bb95b28a9b49b43e8b0b8c6e07eb4838a1f2987a123456789abcd",
+                )
+                assert res_no_hmac["success"] is False
+                assert res_no_hmac["error"] == "ERR_HMAC_KEY_REQUIRED"
+                assert "ORSO_PERSONA_HMAC_KEY est strictement requise" in res_no_hmac["message"]
+
+                # 2. Avec digest valide et clé HMAC : succès
                 res = manager.provision_tenant(
                     tenant_id="test-uuid",
                     tenant_slug="nouveau-client",
+                    image_digest="sha256:d8a5f82c448bb95b28a9b49b43e8b0b8c6e07eb4838a1f2987a123456789abcd",
+                    persona_hmac_key="mock-fleet-hmac-key",
                 )
                 assert res["success"] is True
                 assert res["container_name"] == "orso_client_nouveau_client"
@@ -154,6 +175,8 @@ def test_provision_tenant(tmp_path):
                 assert "com.orso.tenant_id=test-uuid" in run_call_args
                 assert "com.orso.tenant_slug=nouveau-client" in run_call_args
                 assert "com.orso.role=client_backend" in run_call_args
+                assert "-e" in run_call_args
+                assert "ORSO_PERSONA_HMAC_KEY=mock-fleet-hmac-key" in run_call_args
 
 
 def test_api_olympe_health(api_client):

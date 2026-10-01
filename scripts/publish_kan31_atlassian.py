@@ -63,7 +63,11 @@ def markdown_to_confluence_storage(md_text: str) -> str:
             if not in_table:
                 html_lines.append("<table><tbody>")
                 in_table = True
-            row_html = "".join(f"<td>{re.sub(r'`([^`]+)`', r'<code>\1</code>', c)}</td>" for c in cols)
+            cells = []
+            for c in cols:
+                formatted_c = re.sub(r'`([^`]+)`', r'<code>\1</code>', c)
+                cells.append(f"<td>{formatted_c}</td>")
+            row_html = "".join(cells)
             html_lines.append(f"<tr>{row_html}</tr>")
             continue
         elif in_table:
@@ -172,7 +176,8 @@ account_id = get_myself_account_id()
 
 def create_or_get_issue(summary: str, description_text: str):
     # Chercher si le ticket existe déjà par son résumé
-    search_url = f"https://{DOMAIN}.atlassian.net/rest/api/3/search/jql?jql={urllib.parse.quote(f'project = KAN AND summary ~ \"{summary[:30]}\"')}"
+    jql = f'project = KAN AND summary ~ "{summary[:30]}"'
+    search_url = f"https://{DOMAIN}.atlassian.net/rest/api/3/search/jql?jql={urllib.parse.quote(jql)}"
     req = urllib.request.Request(search_url, headers=headers)
     with urllib.request.urlopen(req) as resp:
         data = json.loads(resp.read().decode())

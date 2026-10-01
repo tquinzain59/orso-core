@@ -62,7 +62,11 @@ def markdown_to_confluence_storage(md_text: str) -> str:
             if not in_table:
                 html_lines.append("<table><tbody>")
                 in_table = True
-            row_html = "".join(f"<td>{re.sub(r'`([^`]+)`', r'<code>\1</code>', c)}</td>" for c in cols)
+            cells = []
+            for c in cols:
+                formatted_c = re.sub(r'`([^`]+)`', r'<code>\1</code>', c)
+                cells.append(f"<td>{formatted_c}</td>")
+            row_html = "".join(cells)
             html_lines.append(f"<tr>{row_html}</tr>")
             continue
         elif in_table:
