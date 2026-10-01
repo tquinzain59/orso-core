@@ -581,19 +581,45 @@ async def provision_onboarding_order(tenant_id: str, admin: Dict[str, Any] = Dep
     """Valide le déploiement d'un client et active ses agents en production."""
     try:
         tenant_detail = ops_manager.get_tenant_detail(tenant_id)
-        if tenant_detail:
-            actual_tenant_id = tenant_detail["id"]
-            tenant_slug = tenant_detail.get("slug", "")
-            # Déclenchement du provisioning physique Docker
-            try:
-                manager.provision_tenant(
-                    tenant_id=actual_tenant_id,
-                    tenant_slug=tenant_slug,
-                )
-            except Exception as pe:
-                _log.warning("Provisioning conteneur Docker client %s (%s): %s", tenant_slug, actual_tenant_id, pe)
+        if not tenant_detail:
+            raise HTTPException(status_code=404, detail=f"Client {tenant_id} introuvable.")
 
-        return ops_manager.provision_onboarding_order(tenant_id)
+        actual_tenant_id = tenant_detail["id"]
+        tenant_slug = tenant_detail.get("slug", "")
+
+        # Déclenchement du provisioning physique Docker
+        prov_res = manager.provision_tenant(
+            tenant_id=actual_tenant_id,
+            tenant_slug=tenant_slug,
+        )
+
+        # Contrôle strict du retour du provisioning (KAN-44)
+        if not prov_res.get("success"):
+            err_code = prov_res.get("error", "ERR_PROVISION_FAILED")
+            err_msg = prov_res.get("message", "Échec du provisioning conteneur")
+            _log.error("Provisioning refusé pour %s (%s): %s - %s", tenant_slug, actual_tenant_id, err_code, err_msg)
+            ops_manager.record_audit_event(
+                actor=admin,
+                action="provision:failed",
+                target=actual_tenant_id,
+                details={"error": err_code, "reason": err_msg, "tenant_slug": tenant_slug},
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=f"Provisioning refusé : {err_msg} [{err_code}]",
+            )
+
+        # Réveil conteneur post-provisioning si non running
+        try:
+            status_after = manager.get_tenant_status(tenant_slug)
+            if not status_after.get("running"):
+                manager.wake_tenant(tenant_slug, wait_healthy=False)
+        except Exception as we:
+            _log.warning("Notice réveil conteneur post-provisioning pour %s: %s", tenant_slug, we)
+
+        return ops_manager.provision_onboarding_order(tenant_id, provisioning_result=prov_res)
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
