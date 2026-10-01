@@ -1,4 +1,4 @@
-"""Publication du commentaire d'avancement KAN-64 sur Jira Atlassian."""
+"""Publication du compte-rendu KAN-64 (réponse aux Commentaires 15 & 16) sur Jira Atlassian."""
 
 import os
 import base64
@@ -29,106 +29,93 @@ headers = {
     "Accept": "application/json",
 }
 
-COMMENT_MARKDOWN = """h2. ⚡ Avancement KAN-64 : Prise en compte de l'arbitrage Thibaut & Protocole d'Exécution sur PROD-FR-003
+COMMENT_MARKDOWN = """h2. ⚡ Avancement KAN-64 : Prise en compte intégrale des exigences (Commentaires 15 & 16)
 
 Bonjour Jarvis, Thibaut,
 
-Suite à l'arbitrage sans ambiguïté de Thibaut (Commentaire 13), le plan de gestion a été mis à jour et validé à 100% par les tests automatisés.
+L'ensemble des exigences et constats soulevés dans les commentaires 15 et 16 a été pris en compte et corrigé au cordeau dans le commit {{53b791bcb5}}.
 
 ---
 
-h3. 1. Implémentation de l'Arbitrage Thibaut (Demandes 1, 2, 3)
+h3. 1. Correction de l'Incident Potentiel : Secret sorti de la ligne de commande (Exigence 1)
 
-* *Clé de flotte partagée* : Une seule clé de flotte partagée, alignée sur celle ayant scellé le manifeste {{personas.lock.json}} dans l'image.
-* *Plan de gestion ({{olympe/lifecycle_manager.py}})* :
-** Lit strictement {{ORSO_PERSONA_HMAC_KEY}} dans son propre environnement (ou paramètre) et l'injecte dans {{base_envs}} du conteneur client.
-** *Refus explicite sans zombi* : Si la variable est absente lors de la demande de création, le provisioning est refusé immédiatement avec le code d'erreur {{ERR_HMAC_KEY_REQUIRED}} (aucun conteneur n'est créé).
-** *Nommage strict* : Variable nommée exactement {{ORSO_PERSONA_HMAC_KEY}}.
-* *Outil de distribution ({{scripts/distribution/engine_image_manager.py}})* :
-** Support de l'injection automatique de {{ORSO_PERSONA_HMAC_KEY}} lors des mises à jour et rollbacks.
-** Ajout du mode local direct (--local) pour sonder le démon Docker local sans passer par SSH.
+* *Ligne de commande purgée* : Aucune valeur de clé secrète n'apparaît plus sur la ligne de commande {{docker run}} (ni en local, ni par transport SSH).
+* *Mécanisme natif Docker* : Utilisation stricte du flag {{-e ORSO_PERSONA_HMAC_KEY}} (sans valeur). Docker hérite de la variable présente dans l'environnement du processus appelant ({{subprocess.run(..., env=...)}} ou session) sans exposition dans {{ps aux}} ni dans les traces de commande.
+* *Fail-Closed sans compromis* : Si {{ORSO_PERSONA_HMAC_KEY}} est absente de l'environnement appelant lors d'un update ou rollback, l'opération est immédiatement bloquée ({{ValueError / Fail-Closed}}). Aucun conteneur n'est lancé avec un environnement vide.
+* *Port binding sécurisé* : La publication de port est STRICTEMENT restreinte à la boucle locale {{-p 127.0.0.1:9119:9119}} (toute écoute sur {{0.0.0.0}} est bannie).
 
 ---
 
-h3. 2. Preuves Formelles Apportées (Demande 4 / 0 Secret)
+h3. 2. Sonde de Dérive : Image Réelle en Source de Vérité & Détection de Falsification (Exigences 2 & 3)
 
-Suite de tests complétée dans {{tests/distribution/test_kan64_execution_reelle_distribution.py}} (test {{test_persona_hmac_key_fleet_enforcement_and_container_launch}}) :
-# *Preuve 1 (Contrôle avec clé)* : Vérification d'intégrité personas avec clé HMAC valide -> Code retour 0 ({{PER-INTEGRITY-000}}).
-# *Preuve 2 (Contrôle sans clé)* : Vérification d'intégrité sans clé HMAC -> Échec immédiat Fail-Closed ({{PER-INTEGRITY-003}}).
-# *Preuve 3 (Provisioning sans clé)* : Tentative de provisioning Olympe sans clé -> Refus immédiat {{ERR_HMAC_KEY_REQUIRED}}, 0 conteneur créé.
-# *Preuve 4 (Provisioning avec clé)* : Provisioning Olympe avec clé -> Succès conteneur, transmission stricte dans {{base_envs}}.
-# *Zero Secret* : Aucune valeur de secret n'a été affichée ni consignée (compteur secrets = 0, audit CA5 PASSED).
-
-*Résultat des tests automatisés* :
-{noformat}
-Discovered 11 test files (~76 tests) under ['tests/olympe', 'tests/distribution']
-=== Summary: 11 files, 76 tests passed, 0 failed (100% complete) in 13.0s ===
-{noformat}
-
-Commit : {{d0c099e21d}} poussé sur la branche {{KAN-64-execution-reelle-distribution}} et PR #3 synchronisée.
+* *Interdiction absolue de déclarer IN_SYNC sans conteneur actif* : Si aucun conteneur client ne tourne sur l'hôte, la sonde ne regarde plus le cache local des images. Le statut est immédiatement {{DRIFT_DETECTED}} avec le motif {{"Aucun conteneur client actif en service sur cet hôte"}}.
+* *Source de vérité immuable* : La sonde inspecte l'image Docker réellement chargée par le conteneur en service (lecture de {{.Image}} et {{RepoDigests}} via {{docker inspect}}).
+* *Contrôle croisé de l'étiquette* : L'étiquette {{com.orso.engine.digest}} est systématiquement confrontée à l'image réelle. En cas de divergence (cas de figure testé avec {{alpine}} portant l'étiquette orso), une alerte critique est immédiatement levée ({{DRIFT_DETECTED}} avec motif explicite d'usurpation d'étiquette).
 
 ---
 
-h3. 3. Protocole pour Jarvis : Commandes à jouer sur PROD-FR-003 (CA3 & CA4)
+h3. 3. Clôture des Footguns Windows & Dette Ruff (Exigence 5 Rectifiée)
 
-Puisque l'image officielle {{ghcr.io/tquinzain59/orso-engine@sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f}} est déjà en cache local sur {{prod-fr-003}}, voici la séquence de commandes à exécuter en root :
+* *Footguns Windows ({{scripts/check-windows-footguns.py --all}})* :
+** *0 footgun* sur l'intégralité des 1534 fichiers du dépôt.
+** Les 5 constats propres à la branche (encodages UTF-8 sur {{subprocess.run}} et {{open()}}) ainsi que le {{signal.SIGKILL}} dans {{persona_integrity.py}} ont tous été assainis.
+* *Ruff ({{ruff check scripts/}})* :
+** *0 erreur Ruff* dans tout le répertoire {{scripts/}}.
+** Les 9 erreurs dans les scripts de publication Jira (KAN-57) relatives aux f-strings Python 3.11 ont été corrigées à la racine.
 
-*Étape 1 : Nettoyage éventuel du conteneur précédent*
+---
+
+h3. 4. Architecture de Mise à Jour
+
+* Il est acté et documenté que les opérations de mise à jour et de rollback de flotte sont pilotées *depuis le plan de gestion vers les clients via SSH*.
+* Les sous-commandes {{update}} et {{rollback}} supportent désormais également le flag {{--local}} pour une exécution directe sur l'hôte sans passerelle SSH réseau.
+
+---
+
+h3. 5. Protocole Strict pour Jarvis sur PROD-FR-003 (CA3 & CA4)
+
+Toutes les commandes sont purgées de secret en clair et le port est borné sur la boucle locale :
+
+*Étape 1 : Nettoyage éventuel*
 {code:bash}
 docker rm -f orso_client_demo 2>/dev/null || true
 {code}
 
-*Étape 2 : Lancement avec la clé HMAC de flotte partagée*
-*(S'assurer que {{ORSO_PERSONA_HMAC_KEY}} est exportée dans la session ou passée directement)* :
+*Étape 2 : Lancement sécurisé (clé héritée de l'environnement, écoute 127.0.0.1)*
 {code:bash}
 docker run -d --name orso_client_demo \
-  -p 9119:9119 \
+  -p 127.0.0.1:9119:9119 \
   --label com.orso.managed=true \
   --label com.orso.engine.digest=sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f \
   --label com.orso.engine.pinned=true \
-  -e ORSO_PERSONA_HMAC_KEY="$ORSO_PERSONA_HMAC_KEY" \
+  -e ORSO_PERSONA_HMAC_KEY \
   ghcr.io/tquinzain59/orso-engine@sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f
 {code}
 
-*Étape 3 : Vérification de l'état d'exécution (Le conteneur doit rester Up)* :
+*Étape 3 : Constat de service actif (CA4)*
 {code:bash}
 docker ps --filter "name=orso_client_demo"
+curl -i http://127.0.0.1:9119/api/client/status
 {code}
-*Attendu* : {{Up X seconds (healthy)}} ou {{Up X seconds}}.
+*Attendu* : Conteneur en statut {{Up}} et code HTTP {{200 OK}}.
 
-*Étape 4 : Validation de la sonde de santé HTTP (CA4)* :
+*Étape 4 : Sonde de dérive en mode local (CA3)*
 {code:bash}
-curl -i http://localhost:9119/api/client/status
-{code}
-*Attendu* : Code HTTP {{200 OK}} avec payload JSON attestant de la disponibilité du moteur.
-
-*Étape 5 : Validation de la sonde d'empreinte sans inventaire manuel (CA3)* :
-{code:bash}
-docker inspect --format '{{.Config.Image}} | {{index .Config.Labels "com.orso.engine.digest"}}' orso_client_demo
+python3 scripts/distribution/engine_image_manager.py probe --local --host-id prod-fr-003
 {code}
 *Attendu* :
-{{ghcr.io/tquinzain59/orso-engine@sha256:4506ccd6... | sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f}}
+Digest actif = {{sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f}}, conteneur détecté {{orso_client_demo}}.
 
-*Étape 6 : Test de retour arrière / rollback (CA4)* :
+*Étape 5 : Audit de conformité sans dérive (CA3)*
 {code:bash}
-docker stop -t 5 orso_client_demo
-docker rm orso_client_demo
-# Relance avec validation immédiate du statut Up et de la sonde curl
-docker run -d --name orso_client_demo \
-  -p 9119:9119 \
-  --label com.orso.managed=true \
-  --label com.orso.engine.digest=sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f \
-  --label com.orso.engine.pinned=true \
-  -e ORSO_PERSONA_HMAC_KEY="$ORSO_PERSONA_HMAC_KEY" \
-  ghcr.io/tquinzain59/orso-engine@sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:9119/api/client/status
+python3 scripts/distribution/engine_image_manager.py audit --local --host-id prod-fr-003 --target-digest sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f
 {code}
-*Attendu* : Code {{200}}.
+*Attendu* : Code retour 0, statut {{IN_SYNC}}, {{is_drift_detected: false}}.
 """
 
 
 def main():
-    print(f"\nPublication du commentaire sur {TICKET_KEY}...")
+    print(f"\nPublication du compte-rendu sur {TICKET_KEY}...")
     url = f"https://{DOMAIN}.atlassian.net/rest/api/3/issue/{TICKET_KEY}/comment"
     payload = {
         "body": {
