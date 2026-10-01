@@ -62,9 +62,15 @@ jobs:
         id: classify
         uses: ./.github/actions/detect-changes
         with:
-          sparse-checkout: scripts/ci/classify_changes.py
+          sparse-checkout: |
+            scripts/ci/classify_changes.py
+            scripts/ci/check_runner_guard.py
+            .github/workflows
           sparse-checkout-cone-mode: false
           github-token: ${{ github.token }}
+
+      - name: Guard runner infrastructure
+        run: python3 scripts/ci/check_runner_guard.py --scan-workflows
 
   # ─────────────────────────────────────────────────────────────────────
   # Lane-gated sub-workflows. Each runs in parallel after detect finishes.
