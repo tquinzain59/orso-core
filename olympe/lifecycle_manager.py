@@ -224,10 +224,28 @@ class DockerLifecycleManager:
         restart_container: bool = True,
     ) -> Dict[str, Any]:
         """Exécute la procédure de retour arrière sur l'espace d'agents d'un client (CA4).
-        Restaure la sauvegarde spécifiée ou réinitialise à l'état usine baseline.
+        Sauvegarde préventivement l'état actuel avant restauration, puis restaure
+        la sauvegarde spécifiée ou réinitialise à l'état usine baseline.
+        Contrôle la santé et le redémarrage effectif du conteneur.
         """
         space_dir = self.get_tenant_space_dir(tenant_slug)
         project_root = Path(__file__).resolve().parent.parent
+
+        if not space_dir.exists():
+            return {
+                "success": False,
+                "error": "ERR_SPACE_NOT_FOUND",
+                "tenant_slug": tenant_slug,
+                "message": f"Espace client introuvable pour {tenant_slug}.",
+            }
+
+        # Sauvegarde préventive avant rollback (sécurité anti-écrasement irréversible)
+        pre_rollback_backup = None
+        try:
+            tag = f"pre_rollback_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+            pre_rollback_backup = self.backup_tenant_space(tenant_slug, backup_tag=tag)
+        except Exception as e:
+            _log.warning("Impossible de créer la sauvegarde préventive pour %s: %s", tenant_slug, e)
 
         if backup_path and Path(backup_path).is_dir():
             source_dir = Path(backup_path)
@@ -237,23 +255,48 @@ class DockerLifecycleManager:
             source_dir = project_root
             mode = "baseline_restore"
 
-        if space_dir.exists():
+        try:
             shutil.rmtree(space_dir)
-
-        self._initialize_tenant_space(
-            tenant_slug,
-            space_dir,
-            source_template_dir=source_dir if mode == "backup_restore" else None,
-        )
+            self._initialize_tenant_space(
+                tenant_slug,
+                space_dir,
+                source_template_dir=source_dir if mode == "backup_restore" else None,
+            )
+        except Exception as e:
+            _log.error("Échec lors de la restauration des fichiers pour %s: %s", tenant_slug, e)
+            return {
+                "success": False,
+                "error": "ERR_RESTORE_FAILED",
+                "tenant_slug": tenant_slug,
+                "mode": mode,
+                "pre_rollback_backup": str(pre_rollback_backup) if pre_rollback_backup else None,
+                "message": f"Échec de la restauration de l'espace client : {str(e)}",
+            }
 
         action_taken = False
+        container_healthy = True
         if restart_container and self.has_docker:
             container_name = normalize_container_name(tenant_slug)
             status = self.get_tenant_status(tenant_slug)
             if status.get("running"):
                 _log.info("Redémarrage du conteneur après rollback de l'espace : %s", container_name)
-                self._exec_docker(["restart", container_name], timeout=15.0)
+                proc = self._exec_docker(["restart", container_name], timeout=15.0)
+                if proc.returncode != 0:
+                    err_msg = proc.stderr.strip() or "Erreur lors du docker restart"
+                    _log.error("Échec du redémarrage du conteneur %s: %s", container_name, err_msg)
+                    return {
+                        "success": False,
+                        "error": "ERR_CONTAINER_RESTART_FAILED",
+                        "tenant_slug": tenant_slug,
+                        "mode": mode,
+                        "container_restarted": False,
+                        "container_healthy": False,
+                        "pre_rollback_backup": str(pre_rollback_backup) if pre_rollback_backup else None,
+                        "message": f"Espace restauré mais échec du redémarrage du conteneur : {err_msg}",
+                    }
                 action_taken = True
+                post_status = self.get_tenant_status(tenant_slug)
+                container_healthy = post_status.get("running", False)
 
         return {
             "success": True,
@@ -261,7 +304,9 @@ class DockerLifecycleManager:
             "mode": mode,
             "source_restored": str(source_dir),
             "space_directory": str(space_dir),
+            "pre_rollback_backup": str(pre_rollback_backup) if pre_rollback_backup else None,
             "container_restarted": action_taken,
+            "container_healthy": container_healthy,
             "message": f"Retour arrière de l'espace client '{tenant_slug}' exécuté avec succès ({mode}).",
         }
 
@@ -688,8 +733,22 @@ class DockerLifecycleManager:
         custom_space_dir: Optional[str] = None,
         use_dedicated_space: bool = True,
     ) -> Dict[str, Any]:
-        """Provisionne un nouvel environnement client hermétique."""
         container_name = normalize_container_name(tenant_slug)
+
+        # Montages de l'environnement client (fin des dossiers partagés KAN-58 / Document 27)
+        legacy_shared = not use_dedicated_space or os.environ.get("ORSO_LEGACY_SHARED_MOUNTS") == "1"
+        if legacy_shared:
+            from olympe.ops_manager import is_production
+            if is_production():
+                return {
+                    "success": False,
+                    "error": "ERR_LEGACY_MOUNTS_FORBIDDEN_IN_PROD",
+                    "tenant_slug": tenant_slug,
+                    "container_name": container_name,
+                    "action_taken": False,
+                    "message": "Provisioning refusé : les montages partagés legacy sont formellement proscrits en environnement de production (KAN-58). L'espace d'agents dédié est obligatoire.",
+                }
+
         tenant_data_dir = self.data_root / tenant_slug
         tenant_data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -829,6 +888,20 @@ class DockerLifecycleManager:
                 }
 
             legacy_shared = not use_dedicated_space or os.environ.get("ORSO_LEGACY_SHARED_MOUNTS") == "1"
+            if legacy_shared:
+                from olympe.ops_manager import is_production
+                if is_production():
+                    return {
+                        "success": False,
+                        "error": "ERR_LEGACY_MOUNTS_FORBIDDEN_IN_PROD",
+                        "tenant_slug": tenant_slug,
+                        "container_name": container_name,
+                        "simulated": False,
+                        "mode": "delegated_host",
+                        "action_taken": False,
+                        "message": "Provisioning refusé : les montages partagés legacy sont formellement proscrits en environnement de production (KAN-58). L'espace d'agents dédié est obligatoire.",
+                    }
+
             simulated_space_dir = str(Path(custom_space_dir).resolve() if custom_space_dir else self.get_tenant_space_dir(tenant_slug)) if not legacy_shared else None
             self._simulated_containers[tenant_slug] = {
                 "tenant_id": tenant_id,
@@ -897,6 +970,16 @@ class DockerLifecycleManager:
         legacy_shared = not use_dedicated_space or os.environ.get("ORSO_LEGACY_SHARED_MOUNTS") == "1"
 
         if legacy_shared:
+            from olympe.ops_manager import is_production
+            if is_production():
+                return {
+                    "success": False,
+                    "error": "ERR_LEGACY_MOUNTS_FORBIDDEN_IN_PROD",
+                    "tenant_slug": tenant_slug,
+                    "container_name": container_name,
+                    "action_taken": False,
+                    "message": "Provisioning refusé : les montages partagés legacy sont formellement proscrits en environnement de production (KAN-58). L'espace d'agents dédié est obligatoire.",
+                }
             # Mode legacy de repli (partage des dossiers de l'hôte, déprécié KAN-58 / Document 27)
             _log.warning("Provisioning avec montages partagés legacy pour %s", tenant_slug)
             for shared_dir in ["config", "skills", "profiles"]:
