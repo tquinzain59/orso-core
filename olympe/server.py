@@ -76,6 +76,9 @@ class ProvisionRequest(BaseModel):
     tenant_id: str = Field(..., description="UUID unique du tenant Supabase")
     tenant_slug: str = Field(..., description="Slug normalisé du tenant (ex: financia-solutions)")
     image_name: Optional[str] = Field("orso-backend:latest", description="Image Docker à instancier")
+    image_digest: Optional[str] = Field(None, description="Digest SHA-256 immuable de l'image (KAN-64)")
+    tier_id: Optional[str] = Field(None, description="Forfait sélectionné : 1_agent, 2_agents, 3_agents, 4_agents, custom (KAN-59)")
+    quotas: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Quotas matériels explicites (cpus, memory, pids_limit)")
     env_vars: Optional[Dict[str, str]] = Field(default_factory=dict, description="Variables d'environnement spécifiques")
     custom_space_dir: Optional[str] = Field(None, description="Chemin d'un espace d'agents personnalisé spécifique")
     use_dedicated_space: Optional[bool] = Field(True, description="Active l'espace d'agents propre et isolé (KAN-58)")
@@ -225,12 +228,15 @@ async def suspend_tenant(tenant_slug: str, actor: Dict[str, Any] = Depends(requi
 
 @app.post("/api/olympe/tenants/provision")
 async def provision_tenant(req: ProvisionRequest, admin: Dict[str, Any] = Depends(require_superadmin)):
-    """Provisionne un nouvel environnement conteneurisé dédié pour un client (strictement superadmin - KAN-40 / KAN-58)."""
+    """Provisionne un nouvel environnement conteneurisé dédié pour un client (strictement superadmin - KAN-40 / KAN-58 / KAN-59)."""
     _log.info("Provisioning d'un nouvel environnement par admin %s : %s (%s)", admin.get("email"), req.tenant_slug, req.tenant_id)
     res = manager.provision_tenant(
         tenant_id=req.tenant_id,
         tenant_slug=req.tenant_slug,
         image_name=req.image_name or "orso-backend:latest",
+        image_digest=req.image_digest,
+        tier_id=req.tier_id,
+        quotas=req.quotas,
         env_vars=req.env_vars,
         custom_space_dir=req.custom_space_dir,
         use_dedicated_space=True if req.use_dedicated_space is None else req.use_dedicated_space,
@@ -238,7 +244,13 @@ async def provision_tenant(req: ProvisionRequest, admin: Dict[str, Any] = Depend
     if not res.get("success"):
         err_code = res.get("error", "ERR_PROVISION_FAILED")
         err_msg = res.get("message") or res.get("error", "Échec du provisioning de l'environnement.")
-        status_code = 400 if err_code == "ERR_NO_LOCAL_DOCKER_DELEGATED_HOST_REQUIRED" else 500
+        status_code = 400 if err_code in (
+            "ERR_NO_LOCAL_DOCKER_DELEGATED_HOST_REQUIRED",
+            "ERR_HOST_CAPACITY_EXCEEDED",
+            "ERR_DIGEST_REQUIRED",
+            "ERR_INVALID_DIGEST",
+            "ERR_HMAC_KEY_REQUIRED",
+        ) else 500
         mode = res.get("mode", "delegated_host")
         action_taken = res.get("action_taken", False)
         raise HTTPException(
@@ -604,6 +616,12 @@ async def get_ovh_sizing(admin: Dict[str, Any] = Depends(require_superadmin)):
     return ops_manager.get_ovh_sizing()
 
 
+@app.get("/api/olympe/ops/host/capacity")
+async def get_host_capacity(actor: Dict[str, Any] = Depends(require_ops_actor("tenants:read"))):
+    """Retourne l'état de la capacité matérielle de l'hôte et les quotas alloués (KAN-59)."""
+    return manager.get_host_allocated_resources()
+
+
 @app.post("/api/olympe/ops/onboarding/{tenant_id}/provision")
 async def provision_onboarding_order(tenant_id: str, admin: Dict[str, Any] = Depends(require_superadmin)):
     """Valide le déploiement d'un client et active ses agents en production."""
@@ -615,13 +633,18 @@ async def provision_onboarding_order(tenant_id: str, admin: Dict[str, Any] = Dep
         actual_tenant_id = tenant_detail["id"]
         tenant_slug = tenant_detail.get("slug", "")
 
+        # Détermination du forfait client pour application des quotas matériels (KAN-59)
+        sub_info = tenant_detail.get("subscription", {})
+        client_tier = sub_info.get("tier_id") or "1_agent"
+
         # Déclenchement du provisioning physique Docker
         prov_res = manager.provision_tenant(
             tenant_id=actual_tenant_id,
             tenant_slug=tenant_slug,
+            tier_id=client_tier,
         )
 
-        # Contrôle strict du retour du provisioning (KAN-44)
+        # Contrôle strict du retour du provisioning (KAN-44 / KAN-59)
         if not prov_res.get("success"):
             err_code = prov_res.get("error", "ERR_PROVISION_FAILED")
             err_msg = prov_res.get("message", "Échec du provisioning conteneur")
@@ -630,7 +653,12 @@ async def provision_onboarding_order(tenant_id: str, admin: Dict[str, Any] = Dep
                 actor=admin,
                 action="provision:failed",
                 target=actual_tenant_id,
-                details={"error": err_code, "reason": err_msg, "tenant_slug": tenant_slug},
+                details={
+                    "error": err_code,
+                    "reason": err_msg,
+                    "tenant_slug": tenant_slug,
+                    "capacity_details": prov_res.get("capacity_details"),
+                },
             )
             raise HTTPException(
                 status_code=400,

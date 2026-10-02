@@ -15,9 +15,83 @@ import urllib.request
 import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 _log = logging.getLogger("orso.olympe.lifecycle")
+
+
+
+# ── Quotas Matériels par Défaut & Paliers Tarifaires (KAN-59 / Document 27) ──
+
+DEFAULT_CLIENT_QUOTAS = {
+    "cpus": "0.5",
+    "memory": "512m",
+    "pids_limit": "100",
+}
+
+TIER_RESOURCE_QUOTAS: Dict[str, Dict[str, Any]] = {
+    "none": {"cpus": "0.5", "memory": "512m", "pids_limit": "100", "agents_max": 0},
+    "1_agent": {"cpus": "0.5", "memory": "512m", "pids_limit": "100", "agents_max": 1},
+    "2_agents": {"cpus": "1.0", "memory": "1024m", "pids_limit": "150", "agents_max": 2},
+    "3_agents": {"cpus": "1.5", "memory": "1536m", "pids_limit": "200", "agents_max": 3},
+    "4_agents": {"cpus": "2.0", "memory": "2048m", "pids_limit": "250", "agents_max": 4},
+    "custom": {"cpus": "2.0", "memory": "2048m", "pids_limit": "250", "agents_max": 4},
+}
+
+
+def parse_memory_str_to_mb(mem_val: Any) -> int:
+    """Convertit une chaîne de quota mémoire Docker (ex: '512m', '1g', '2048M') en mégaoctets entiers."""
+    if isinstance(mem_val, (int, float)):
+        return int(mem_val)
+    if not mem_val or not isinstance(mem_val, str):
+        return 512
+    s = mem_val.strip().lower()
+    m = re.match(r"^([0-9]+(?:\.[0-9]+)?)\s*([a-z]*)$", s)
+    if not m:
+        return 512
+    num_str, unit = m.groups()
+    num = float(num_str)
+    if unit in ("g", "gb", "gib"):
+        return int(num * 1024)
+    elif unit in ("k", "kb", "kib"):
+        return max(1, int(num / 1024))
+    else:  # "m", "mb", "mib" ou sans unité
+        return int(num)
+
+
+def parse_cpus_str_to_float(cpu_val: Any) -> float:
+    """Convertit une chaîne de quota vCPU (ex: '0.5', '1', '2.0') en float."""
+    if isinstance(cpu_val, (int, float)):
+        return float(cpu_val)
+    if not cpu_val or not isinstance(cpu_val, str):
+        return 0.5
+    try:
+        return float(cpu_val.strip())
+    except (ValueError, TypeError):
+        return 0.5
+
+
+def get_quotas_for_tier(
+    tier_id: Optional[str] = None,
+    overrides: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Retourne les quotas matériels garantis pour un palier tarifaire, fusionnés avec les surcharges (CA1/CA4)."""
+    base = dict(TIER_RESOURCE_QUOTAS.get(tier_id or "1_agent", DEFAULT_CLIENT_QUOTAS))
+    res = {
+        "cpus": str(base.get("cpus", "0.5")),
+        "memory": str(base.get("memory", "512m")),
+        "pids_limit": str(base.get("pids_limit", "100")),
+    }
+    if overrides and isinstance(overrides, dict):
+        if "cpus" in overrides and overrides["cpus"] is not None:
+            res["cpus"] = str(overrides["cpus"])
+        if "memory" in overrides and overrides["memory"] is not None:
+            res["memory"] = str(overrides["memory"])
+        if "pids_limit" in overrides and overrides["pids_limit"] is not None:
+            res["pids_limit"] = str(overrides["pids_limit"])
+        elif "pids" in overrides and overrides["pids"] is not None:
+            res["pids_limit"] = str(overrides["pids"])
+    return res
 
 
 def normalize_container_name(tenant_slug: str) -> str:
@@ -38,6 +112,10 @@ class DockerLifecycleManager:
         supabase_url: Optional[str] = None,
         supabase_key: Optional[str] = None,
         spaces_root: Optional[str] = None,
+        host_max_memory_mb: Optional[int] = None,
+        host_max_cpus: Optional[float] = None,
+        host_max_containers: Optional[int] = None,
+        host_flavor: Optional[str] = None,
     ):
         self.network_name = network_name
         self.data_root = Path(data_root or os.environ.get("ORSO_DATA_ROOT", "./data/tenants")).resolve()
@@ -53,6 +131,36 @@ class DockerLifecycleManager:
         self.supabase_url = (supabase_url or os.environ.get("SUPABASE_URL", "")).rstrip("/")
         self.supabase_key = supabase_key or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
         self.has_docker = shutil.which("docker") is not None
+
+        # ── Gestion de la Capacité Matérielle Hôte (KAN-59 / CA2 / CA4) ────────
+        self.host_flavor = host_flavor or os.environ.get("ORSO_HOST_FLAVOR", "d2-4")
+        # Gabarit OVH par défaut (d2-4 : 2 vCPUs, 4096 Mo RAM)
+        # Réserve système/Olympe standard : 1024 Mo
+        default_max_mem = 3072
+        default_max_cpus = 2.0
+
+        if host_max_memory_mb is not None:
+            self.host_max_memory_mb = host_max_memory_mb
+        elif "ORSO_HOST_MAX_MEMORY_MB" in os.environ:
+            self.host_max_memory_mb = int(os.environ["ORSO_HOST_MAX_MEMORY_MB"])
+        else:
+            self.host_max_memory_mb = default_max_mem
+
+        if host_max_cpus is not None:
+            self.host_max_cpus = float(host_max_cpus)
+        elif "ORSO_HOST_MAX_CPUS" in os.environ:
+            self.host_max_cpus = float(os.environ["ORSO_HOST_MAX_CPUS"])
+        else:
+            self.host_max_cpus = default_max_cpus
+
+        if host_max_containers is not None:
+            self.host_max_containers = host_max_containers
+        elif "ORSO_HOST_MAX_CONTAINERS" in os.environ:
+            self.host_max_containers = int(os.environ["ORSO_HOST_MAX_CONTAINERS"])
+        else:
+            self.host_max_containers = None
+
+        self._simulated_containers: Dict[str, Dict[str, Any]] = {}
 
     def get_tenant_space_dir(self, tenant_slug: str) -> Path:
         """Retourne le chemin vers le dossier d'espace d'agents propre au client (KAN-58)."""
@@ -169,6 +277,155 @@ class DockerLifecycleManager:
             timeout=timeout,
             check=False,
         )
+
+    def get_host_allocated_resources(self) -> Dict[str, Any]:
+        """Calcule les ressources matérielles allouées aux conteneurs clients gérés sur l'hôte (KAN-59)."""
+        allocated_memory_mb = 0
+        allocated_cpus = 0.0
+        managed_containers: List[Dict[str, Any]] = []
+
+        if self.has_docker:
+            # Inspection des conteneurs réels sur le démon Docker
+            proc = self._exec_docker([
+                "ps", "-a",
+                "--filter", "label=com.orso.managed=true",
+                "--filter", "label=com.orso.role=client_backend",
+                "--format", "{{json .}}",
+            ], timeout=10.0)
+            if proc.returncode == 0 and proc.stdout.strip():
+                for line in proc.stdout.strip().splitlines():
+                    if not line.strip():
+                        continue
+                    try:
+                        c_info = json.loads(line.strip())
+                        c_name = c_info.get("Names", "")
+                        inspect_proc = self._exec_docker([
+                            "inspect",
+                            "--format",
+                            "{{json .Config.Labels}}|||{{.HostConfig.Memory}}|||{{.HostConfig.NanoCpus}}|||{{.State.Status}}",
+                            c_name,
+                        ], timeout=5.0)
+                        if inspect_proc.returncode == 0:
+                            parts = inspect_proc.stdout.strip().split("|||")
+                            labels = json.loads(parts[0]) if len(parts) > 0 and parts[0] else {}
+                            raw_mem_bytes = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+                            raw_nano_cpus = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+                            status = parts[3] if len(parts) > 3 else "unknown"
+
+                            mem_label = labels.get("com.orso.quotas.memory")
+                            if mem_label:
+                                mem_mb = parse_memory_str_to_mb(mem_label)
+                            elif raw_mem_bytes > 0:
+                                mem_mb = int(raw_mem_bytes / (1024 * 1024))
+                            else:
+                                mem_mb = 0
+
+                            cpu_label = labels.get("com.orso.quotas.cpus")
+                            if cpu_label:
+                                cpus = parse_cpus_str_to_float(cpu_label)
+                            elif raw_nano_cpus > 0:
+                                cpus = round(raw_nano_cpus / 1e9, 2)
+                            else:
+                                cpus = 0.0
+
+                            allocated_memory_mb += mem_mb
+                            allocated_cpus += cpus
+                            managed_containers.append({
+                                "name": c_name,
+                                "slug": labels.get("com.orso.tenant_slug", ""),
+                                "memory_mb": mem_mb,
+                                "cpus": cpus,
+                                "status": status,
+                            })
+                    except Exception as e:
+                        _log.debug("Erreur parsing conteneur pour quotas: %s", e)
+
+        # Prise en compte des conteneurs simulés enregistrés
+        for slug, sim_c in self._simulated_containers.items():
+            if not any(c.get("slug") == slug for c in managed_containers):
+                q = sim_c.get("quotas", {})
+                mem_mb = parse_memory_str_to_mb(q.get("memory", "512m"))
+                cpus = parse_cpus_str_to_float(q.get("cpus", "0.5"))
+                allocated_memory_mb += mem_mb
+                allocated_cpus += cpus
+                managed_containers.append({
+                    "name": normalize_container_name(slug),
+                    "slug": slug,
+                    "memory_mb": mem_mb,
+                    "cpus": cpus,
+                    "status": "simulated",
+                })
+
+        available_memory_mb = max(0, self.host_max_memory_mb - allocated_memory_mb)
+        available_cpus = max(0.0, round(self.host_max_cpus - allocated_cpus, 2))
+
+        return {
+            "host_max_memory_mb": self.host_max_memory_mb,
+            "host_max_cpus": self.host_max_cpus,
+            "allocated_memory_mb": allocated_memory_mb,
+            "allocated_cpus": round(allocated_cpus, 2),
+            "available_memory_mb": available_memory_mb,
+            "available_cpus": available_cpus,
+            "containers_count": len(managed_containers),
+            "containers": managed_containers,
+        }
+
+    def check_host_admission(
+        self,
+        tenant_slug: str,
+        quotas: Dict[str, Any],
+    ) -> Tuple[bool, Optional[str], Dict[str, Any]]:
+        """Contrôle d'admission strict : valide que l'hôte dispose de la capacité matérielle requise (CA2)."""
+        req_mem_mb = parse_memory_str_to_mb(quotas.get("memory", "512m"))
+        req_cpus = parse_cpus_str_to_float(quotas.get("cpus", "0.5"))
+
+        usage = self.get_host_allocated_resources()
+
+        # Si le conteneur existe déjà parmi les conteneurs alloués, on ne compte pas deux fois
+        existing = next((c for c in usage["containers"] if c["slug"] == tenant_slug), None)
+        current_alloc_mem = usage["allocated_memory_mb"] - (existing["memory_mb"] if existing else 0)
+        current_alloc_cpus = usage["allocated_cpus"] - (existing["cpus"] if existing else 0.0)
+
+        new_total_mem = current_alloc_mem + req_mem_mb
+        new_total_cpus = current_alloc_cpus + req_cpus
+
+        capacity_details = {
+            "tenant_slug": tenant_slug,
+            "requested_memory_mb": req_mem_mb,
+            "requested_cpus": req_cpus,
+            "host_max_memory_mb": usage["host_max_memory_mb"],
+            "host_max_cpus": usage["host_max_cpus"],
+            "current_allocated_memory_mb": current_alloc_mem,
+            "current_allocated_cpus": round(current_alloc_cpus, 2),
+            "available_memory_mb": max(0, usage["host_max_memory_mb"] - current_alloc_mem),
+            "available_cpus": max(0.0, round(usage["host_max_cpus"] - current_alloc_cpus, 2)),
+            "new_total_memory_mb": new_total_mem,
+            "new_total_cpus": round(new_total_cpus, 2),
+        }
+
+        if new_total_mem > usage["host_max_memory_mb"]:
+            msg = (
+                f"Capacité mémoire de l'hôte dépassée pour '{tenant_slug}' : "
+                f"{req_mem_mb} Mo requis, {capacity_details['available_memory_mb']} Mo disponibles "
+                f"(plafond hôte: {usage['host_max_memory_mb']} Mo, alloué: {current_alloc_mem} Mo)."
+            )
+            return False, msg, capacity_details
+
+        if new_total_cpus > usage["host_max_cpus"]:
+            msg = (
+                f"Capacité processeur de l'hôte dépassée pour '{tenant_slug}' : "
+                f"{req_cpus} vCPU requis, {capacity_details['available_cpus']} vCPU disponibles "
+                f"(plafond hôte: {usage['host_max_cpus']} vCPU, alloué: {round(current_alloc_cpus, 2)} vCPU)."
+            )
+            return False, msg, capacity_details
+
+        if self.host_max_containers and (usage["containers_count"] + (0 if existing else 1)) > self.host_max_containers:
+            msg = (
+                f"Nombre maximal de conteneurs atteint sur l'hôte ({self.host_max_containers})."
+            )
+            return False, msg, capacity_details
+
+        return True, None, capacity_details
 
     def get_tenant_status(self, tenant_slug: str) -> Dict[str, Any]:
         """Inspecte le statut réel du conteneur client Docker."""
@@ -424,6 +681,7 @@ class DockerLifecycleManager:
         image_digest: Optional[str] = None,
         env_vars: Optional[Dict[str, str]] = None,
         quotas: Optional[Dict[str, Any]] = None,
+        tier_id: Optional[str] = None,
         require_digest: Optional[bool] = None,
         allow_floating_tag: bool = False,
         persona_hmac_key: Optional[str] = None,
@@ -532,6 +790,26 @@ class DockerLifecycleManager:
         if env_vars:
             base_envs.update(env_vars)
 
+        # ── Quotas de Ressources & Contrôle d'Admission de l'Hôte (KAN-59 / CA1 / CA2 / CA4) ──
+        effective_quotas = get_quotas_for_tier(tier_id=tier_id, overrides=quotas)
+        admitted, admission_reason, capacity_details = self.check_host_admission(tenant_slug, effective_quotas)
+        if not admitted:
+            _log.warning(
+                "Provisioning refusé pour %s : capacité hôte dépassée (%s)",
+                tenant_slug,
+                admission_reason,
+            )
+            return {
+                "success": False,
+                "error": "ERR_HOST_CAPACITY_EXCEEDED",
+                "tenant_slug": tenant_slug,
+                "container_name": container_name,
+                "message": f"Provisioning refusé : {admission_reason}",
+                "capacity_details": capacity_details,
+                "quotas": effective_quotas,
+                "tier_id": tier_id or "1_agent",
+            }
+
         if not self.has_docker:
             # En production, le provisioning in-process local sur l'Hôte 1 est strictement proscrit (Option B KAN-74)
             from olympe.ops_manager import is_production
@@ -552,6 +830,13 @@ class DockerLifecycleManager:
 
             legacy_shared = not use_dedicated_space or os.environ.get("ORSO_LEGACY_SHARED_MOUNTS") == "1"
             simulated_space_dir = str(Path(custom_space_dir).resolve() if custom_space_dir else self.get_tenant_space_dir(tenant_slug)) if not legacy_shared else None
+            self._simulated_containers[tenant_slug] = {
+                "tenant_id": tenant_id,
+                "tenant_slug": tenant_slug,
+                "quotas": effective_quotas,
+                "tier_id": tier_id or "1_agent",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
             return {
                 "success": True,
                 "tenant_slug": tenant_slug,
@@ -562,7 +847,8 @@ class DockerLifecycleManager:
                 "action_taken": False,
                 "image": target_image,
                 "digest": effective_digest or None,
-                "quotas": quotas or {},
+                "quotas": effective_quotas,
+                "tier_id": tier_id or "1_agent",
                 "data_directory": str(tenant_data_dir),
                 "space_directory": simulated_space_dir,
                 "dedicated_space": not legacy_shared,
@@ -588,26 +874,23 @@ class DockerLifecycleManager:
             "-v", f"{tenant_data_dir}:/app/data",
         ]
 
-        # Quotas explicites de ressources (L3)
-        effective_quotas = quotas or {}
-        if tenant_slug in ("clientx-orso",) and not quotas:
-            effective_quotas = {"cpus": "0.5", "memory": "512m", "pids_limit": "100"}
-
-        if effective_quotas:
-            cpus = str(effective_quotas.get("cpus", "0.5"))
-            memory = str(effective_quotas.get("memory", "512m"))
-            pids = str(effective_quotas.get("pids_limit", "100"))
-            run_args.extend([
-                "--cpus", cpus,
-                "--memory", memory,
-                "--memory-swap", memory,
-                "--pids-limit", pids,
-                "--label", f"com.orso.quotas.cpus={cpus}",
-                "--label", f"com.orso.quotas.memory={memory}",
-                "--label", f"com.orso.quotas.pids_limit={pids}",
-            ])
-            if tenant_slug in ("clientx-orso",):
-                run_args.extend(["--label", "com.orso.sandbox=true"])
+        # Quotas stricts de ressources (L3 / KAN-59 / CA1)
+        # Règle CA1 inviolable : AUCUN conteneur client ne peut être créé sans limites explicites de processeur, mémoire, swap et processus
+        cpus = str(effective_quotas["cpus"])
+        memory = str(effective_quotas["memory"])
+        pids = str(effective_quotas["pids_limit"])
+        run_args.extend([
+            "--cpus", cpus,
+            "--memory", memory,
+            "--memory-swap", memory,
+            "--pids-limit", pids,
+            "--label", f"com.orso.quotas.cpus={cpus}",
+            "--label", f"com.orso.quotas.memory={memory}",
+            "--label", f"com.orso.quotas.pids_limit={pids}",
+            "--label", f"com.orso.tier_id={tier_id or 'default'}",
+        ])
+        if tenant_slug in ("clientx-orso",):
+            run_args.extend(["--label", "com.orso.sandbox=true"])
 
         # Montages de l'environnement client (fin des dossiers partagés KAN-58 / Document 27)
         project_root = Path(__file__).resolve().parent.parent
@@ -697,6 +980,8 @@ class DockerLifecycleManager:
         container_name = normalize_container_name(tenant_slug)
         tenant_data_dir = self.data_root / tenant_slug
         tenant_space_dir = self.get_tenant_space_dir(tenant_slug)
+
+        self._simulated_containers.pop(tenant_slug, None)
 
         if not self.has_docker:
             if remove_data:

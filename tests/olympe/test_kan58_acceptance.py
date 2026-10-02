@@ -85,9 +85,10 @@ def test_kan58_ca1_no_shared_host_directories(tmp_path):
                             mounts.append(cmd_args[i + 1])
                     return mounts
 
-                mounts_a = extract_mounts(recorded_calls[0])
-                mounts_b = extract_mounts(recorded_calls[1])
-                mounts_c = extract_mounts(recorded_calls[2])
+                run_calls = [c for c in recorded_calls if c and c[0] == "run"]
+                mounts_a = extract_mounts(run_calls[0])
+                mounts_b = extract_mounts(run_calls[1])
+                mounts_c = extract_mounts(run_calls[2])
 
                 # Extraire les chemins sources de l'hôte
                 sources_a = {m.split(":")[0] for m in mounts_a}
@@ -158,7 +159,7 @@ def test_kan58_ca3_profile_mount_convergence(tmp_path):
                 )
                 assert res["success"] is True
 
-                run_args = recorded_calls[0]
+                run_args = next(c for c in recorded_calls if c and c[0] == "run")
                 expected_client_profiles_src = str((spaces_dir / "client-single-source" / "profiles").resolve())
 
                 # Les 3 destinations de profils attendues dans le conteneur
@@ -249,7 +250,7 @@ def test_kan58_legacy_fallback_mounts(tmp_path, monkeypatch):
                 assert res["dedicated_space"] is False
                 assert res["space_directory"] is None
 
-                run_args = recorded_calls[0]
+                run_args = next(c for c in recorded_calls if c and c[0] == "run")
                 project_root = Path(__file__).resolve().parent.parent.parent
                 assert f"{project_root / 'profiles'}:/app/profiles:ro" in run_args
 
