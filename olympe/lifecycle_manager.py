@@ -13,11 +13,46 @@ import subprocess
 import time
 import urllib.request
 import urllib.error
+import socket
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 _log = logging.getLogger("orso.olympe.lifecycle")
+
+
+def _clean_env(key: str) -> Optional[str]:
+    """Extrait une variable d'environnement en la traitant comme absente si vide ou blanche."""
+    val = os.environ.get(key)
+    if val is None:
+        return None
+    val_clean = val.strip()
+    return val_clean if val_clean else None
+
+
+def _safe_int_env(key: str, default: Optional[int] = None) -> Optional[int]:
+    """Lit un entier d'environnement de manière sûre sans jamais lever de ValueError."""
+    cleaned = _clean_env(key)
+    if cleaned is None:
+        return default
+    try:
+        return int(cleaned)
+    except (ValueError, TypeError):
+        _log.warning("Variable d'environnement %s invalide (%r), repli sur %s", key, cleaned, default)
+        return default
+
+
+def _safe_float_env(key: str, default: Optional[float] = None) -> Optional[float]:
+    """Lit un float d'environnement de manière sûre sans jamais lever de ValueError."""
+    cleaned = _clean_env(key)
+    if cleaned is None:
+        return default
+    try:
+        return float(cleaned)
+    except (ValueError, TypeError):
+        _log.warning("Variable d'environnement %s invalide (%r), repli sur %s", key, cleaned, default)
+        return default
+
 
 
 
@@ -153,14 +188,40 @@ class DockerLifecycleManager:
         host_max_containers: Optional[int] = None,
         host_flavor: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Détermine dynamiquement la capacité matérielle de l'hôte et cite sa source de vérité (KAN-59)."""
-        explicit_flavor = host_flavor is not None or "ORSO_HOST_FLAVOR" in os.environ
-        flavor_name = host_flavor or os.environ.get("ORSO_HOST_FLAVOR", "d2-4")
-        from olympe.ovh_client import OVH_FLAVORS
-        flavor_spec = OVH_FLAVORS.get(flavor_name)
+        """Détermine dynamiquement la capacité matérielle de l'hôte et cite sa source de vérité (KAN-59).
+        Résout selon la priorité :
+        1. Paramètres explicites passés au constructeur
+        2. Variables d'environnement explicites (ORSO_HOST_MAX_MEMORY_MB, ORSO_HOST_MAX_CPUS)
+        3. Sonde physique de l'hôte (meminfo / sysconf / cpu_count)
+        4. Gabarit OVH explicitement demandé (ORSO_HOST_FLAVOR)
+        5. Repli documenté baseline (3072 MB, 2.0 vCPUs)
+        """
+        # Résolution sécurisée du gabarit : uniquement si explicitement non vide
+        explicit_flavor = False
+        flavor_name = None
+        if host_flavor and host_flavor.strip():
+            explicit_flavor = True
+            flavor_name = host_flavor.strip()
+        else:
+            env_flavor = _clean_env("ORSO_HOST_FLAVOR")
+            if env_flavor:
+                explicit_flavor = True
+                flavor_name = env_flavor
 
-        reserved_sys_mem = int(os.environ.get("ORSO_SYSTEM_RESERVED_MEM_MB", "512"))
-        cpu_overcommit = float(os.environ.get("ORSO_CPU_OVERCOMMIT_RATIO", "2.0"))
+        from olympe.ovh_client import OVH_FLAVORS
+        flavor_spec = OVH_FLAVORS.get(flavor_name) if flavor_name else None
+
+        # Réserve système (Point 2 Jarvis) : configurable via ORSO_HOST_SYSTEM_RESERVE_RAM_MB ou ORSO_SYSTEM_RESERVED_MEM_MB
+        # Par défaut 512 Mo pour couvrir l'OS Linux, Docker daemon, Olympe supervisor et Ingress Nginx.
+        reserved_sys_mem = _safe_int_env("ORSO_HOST_SYSTEM_RESERVE_RAM_MB", None)
+        if reserved_sys_mem is None:
+            reserved_sys_mem = _safe_int_env("ORSO_SYSTEM_RESERVED_MEM_MB", 512)
+        if reserved_sys_mem is None or reserved_sys_mem < 0:
+            reserved_sys_mem = 512
+
+        cpu_overcommit = _safe_float_env("ORSO_CPU_OVERCOMMIT_RATIO", 2.0)
+        if cpu_overcommit is None or cpu_overcommit <= 0:
+            cpu_overcommit = 2.0
 
         system_total_mem_mb = None
         system_avail_mem_mb = None
@@ -191,11 +252,12 @@ class DockerLifecycleManager:
             pass
 
         # 1. Mémoire maximale
+        env_mem = _safe_int_env("ORSO_HOST_MAX_MEMORY_MB")
         if host_max_memory_mb is not None:
             resolved_mem = host_max_memory_mb
             mem_source = f"explicit_parameter ({host_max_memory_mb} MB)"
-        elif "ORSO_HOST_MAX_MEMORY_MB" in os.environ:
-            resolved_mem = int(os.environ["ORSO_HOST_MAX_MEMORY_MB"])
+        elif env_mem is not None:
+            resolved_mem = env_mem
             mem_source = f"env_ORSO_HOST_MAX_MEMORY_MB ({resolved_mem} MB)"
         elif system_total_mem_mb and not explicit_flavor:
             resolved_mem = max(512, system_total_mem_mb - reserved_sys_mem)
@@ -211,11 +273,12 @@ class DockerLifecycleManager:
             mem_source = "default_fallback (3072 MB)"
 
         # 2. CPU maximal (avec ratio de surallocation pour conteneurs I/O bound)
+        env_cpus = _safe_float_env("ORSO_HOST_MAX_CPUS")
         if host_max_cpus is not None:
             resolved_cpus = float(host_max_cpus)
             cpu_source = f"explicit_parameter ({resolved_cpus} vCPUs)"
-        elif "ORSO_HOST_MAX_CPUS" in os.environ:
-            resolved_cpus = float(os.environ["ORSO_HOST_MAX_CPUS"])
+        elif env_cpus is not None:
+            resolved_cpus = env_cpus
             cpu_source = f"env_ORSO_HOST_MAX_CPUS ({resolved_cpus} vCPUs)"
         elif system_total_cpus and not explicit_flavor:
             resolved_cpus = round(system_total_cpus * cpu_overcommit, 2)
@@ -232,10 +295,11 @@ class DockerLifecycleManager:
             cpu_source = "default_fallback (2.0 vCPUs)"
 
         # 3. Conteneurs max
+        env_containers = _safe_int_env("ORSO_HOST_MAX_CONTAINERS")
         if host_max_containers is not None:
             resolved_containers = host_max_containers
-        elif "ORSO_HOST_MAX_CONTAINERS" in os.environ:
-            resolved_containers = int(os.environ["ORSO_HOST_MAX_CONTAINERS"])
+        elif env_containers is not None:
+            resolved_containers = env_containers
         elif flavor_spec:
             resolved_containers = flavor_spec.get("capacity_agents", 4)
         else:
@@ -447,9 +511,18 @@ class DockerLifecycleManager:
                             raw_nano_cpus = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
                             status = parts[3] if len(parts) > 3 else "unknown"
 
-                            is_client = "orso_client" in c_name or labels.get("com.orso.role") == "client_backend"
+                            # Détection exhaustive de tout conteneur client
+                            is_client = (
+                                "orso_client" in c_name
+                                or labels.get("com.orso.role") in ("client_backend", "client")
+                                or "com.orso.tenant_slug" in labels
+                                or "com.orso.tenant_id" in labels
+                                or "com.orso.tier_id" in labels
+                            )
                             is_managed = labels.get("com.orso.managed") == "true"
 
+                            # Doctrine d'admission : Tout conteneur client provisionné réserve sa capacité,
+                            # même s'il est en veille scale-to-zero, afin de garantir un réveil immédiat (wake-on-demand).
                             if is_managed or is_client:
                                 mem_label = labels.get("com.orso.quotas.memory")
                                 if mem_label:
@@ -505,6 +578,7 @@ class DockerLifecycleManager:
         available_cpus = max(0.0, round(self.host_max_cpus - allocated_cpus, 2))
 
         return {
+            "hostname": socket.gethostname(),
             "host_max_memory_mb": self.host_max_memory_mb,
             "host_max_cpus": self.host_max_cpus,
             "host_capacity_source": self.host_capacity_info.get("memory_source", "default"),

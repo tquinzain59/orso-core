@@ -134,15 +134,16 @@ class OVHClient:
         pending_agents_count: int,
         existing_host_ip: str = "92.222.68.80",
     ) -> Dict[str, Any]:
-        # ── Règle empirique issue des mesures du POC KAN-59 (Document 27 / CA3 / CA4) ──
-        # - Empreinte réelle au repos : ~100 Mo RAM par conteneur client (6-11 PIDs, <0.3% CPU)
-        # - Empreinte réelle en charge active : ~250 Mo RAM par agent actif (15-25 PIDs, ~25-50% CPU)
-        # - Plafonds de quotas garantis par palier tarifaire :
-        #   * Starter (1 agent)  : 512 Mo RAM, 0.5 vCPU, 100 PIDs
+        # ── Règle empirique issue des mesures réelles du POC KAN-59 (Document 27 / CA3 / CA4) ──
+        # - Empreinte réelle au repos mesurée : ~95-105 Mo RAM par conteneur client (6-11 PIDs, <0.3% CPU)
+        # - Empreinte réelle en charge active mesurée : ~93 à 139 Mo RAM par agent actif sous requêtes (10-18 PIDs, <10% CPU)
+        # - Plafonds de quotas garantis alloués par palier tarifaire (marge de sécurité 2x à 4x) :
+        #   * Starter (1 agent)   : 512 Mo RAM, 0.5 vCPU, 100 PIDs
         #   * Duo (2 agents)      : 1024 Mo RAM, 1.0 vCPU, 150 PIDs
         #   * Trio (3 agents)     : 1536 Mo RAM, 1.5 vCPU, 200 PIDs
         #   * Flotte (4 agents)   : 2048 Mo RAM, 2.0 vCPU, 250 PIDs
-        empirical_ram_mb = (pending_agents_count * 256) + (pending_tenants_count * 128)
+        # Modèle empirique fondé sur le pic réel observé (139 Mo par agent en charge + 100 Mo socle conteneur) :
+        empirical_ram_mb = (pending_agents_count * 139) + (pending_tenants_count * 100)
         tier_quotas_ram_mb = (pending_agents_count * 512)
 
         # Modèle de dimensionnement conservateur (règle historique) pour compatibilité

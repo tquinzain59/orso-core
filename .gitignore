@@ -264,5 +264,6 @@ scripts/iam/backups/
 *.dump
 *.backup
 scripts/publish_*.py
+!scripts/publish_kan59_atlassian.py
 
 

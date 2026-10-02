@@ -236,8 +236,8 @@ def test_kan59_ca3_empirical_sizing_model():
     sizing = client.estimate_sizing(pending_tenants_count=3, pending_agents_count=4)
 
     assert sizing["sizing_model"] == "empirical_measured_kan59"
-    # Empreinte réelle mesurée : 4 agents * 256 Mo + 3 conteneurs * 128 Mo = 1408 Mo
-    assert sizing["empirical_measured_ram_mb"] == (4 * 256) + (3 * 128)
+    # Empreinte réelle mesurée : 4 agents * 139 Mo (charge) + 3 conteneurs * 100 Mo (socle) = 856 Mo
+    assert sizing["empirical_measured_ram_mb"] == (4 * 139) + (3 * 100)
     assert sizing["tier_quotas_ram_mb"] == (4 * 512)
     # Vérification que le snippet docker run embarque des quotas stricts
     assert "--cpus 0.5" in sizing["docker_deploy_snippet"]
@@ -382,3 +382,57 @@ def test_kan59_ops_host_capacity_endpoint(api_client):
     assert "allocated_memory_mb" in data
     assert "available_memory_mb" in data
     assert "containers_count" in data
+
+
+def test_kan59_point1_empty_env_vars_and_four_resolution_cases(monkeypatch, tmp_path):
+    """Point 1 (Voie A Jarvis) : Vérifie que des variables d'environnement vides ne provoquent aucune ValueError,
+    et valide les 4 cas de résolution (absente, vide, renseignée, gabarit posé).
+    """
+    # CAS 2 : Variables vides/blanches (doit être traité comme absent sans planter)
+    monkeypatch.setenv("ORSO_HOST_MAX_MEMORY_MB", "")
+    monkeypatch.setenv("ORSO_HOST_MAX_CPUS", "   ")
+    monkeypatch.setenv("ORSO_HOST_FLAVOR", "")
+    monkeypatch.setenv("ORSO_SYSTEM_RESERVED_MEM_MB", "")
+    monkeypatch.setenv("ORSO_CPU_OVERCOMMIT_RATIO", "")
+    monkeypatch.setenv("ORSO_HOST_MAX_CONTAINERS", "")
+
+    # Cette instanciation échouait avec ValueError avant correction
+    mgr_empty = DockerLifecycleManager(
+        data_root=str(tmp_path / "tenants_empty"),
+        spaces_root=str(tmp_path / "spaces_empty"),
+    )
+    assert mgr_empty.host_max_memory_mb > 0
+    assert mgr_empty.host_max_cpus > 0
+    assert mgr_empty.host_max_containers > 0
+
+    # CAS 1 : Variables totalement absentes (priorité sonde physique)
+    monkeypatch.delenv("ORSO_HOST_MAX_MEMORY_MB", raising=False)
+    monkeypatch.delenv("ORSO_HOST_MAX_CPUS", raising=False)
+    monkeypatch.delenv("ORSO_HOST_FLAVOR", raising=False)
+    monkeypatch.delenv("ORSO_SYSTEM_RESERVED_MEM_MB", raising=False)
+    monkeypatch.delenv("ORSO_CPU_OVERCOMMIT_RATIO", raising=False)
+    monkeypatch.delenv("ORSO_HOST_MAX_CONTAINERS", raising=False)
+
+    res_case1 = DockerLifecycleManager._resolve_host_capacity()
+    assert res_case1["max_memory_mb"] > 0
+    assert "probe" in res_case1["memory_source"] or "fallback" in res_case1["memory_source"]
+
+    # CAS 3 : Variables explicitement renseignées
+    monkeypatch.setenv("ORSO_HOST_MAX_MEMORY_MB", "6144")
+    monkeypatch.setenv("ORSO_HOST_MAX_CPUS", "4.5")
+    monkeypatch.setenv("ORSO_HOST_MAX_CONTAINERS", "12")
+    res_case3 = DockerLifecycleManager._resolve_host_capacity()
+    assert res_case3["max_memory_mb"] == 6144
+    assert res_case3["max_cpus"] == 4.5
+    assert res_case3["max_containers"] == 12
+    assert "env_ORSO_HOST_MAX_MEMORY_MB" in res_case3["memory_source"]
+
+    # CAS 4 : Gabarit OVH posé explicitement
+    monkeypatch.delenv("ORSO_HOST_MAX_MEMORY_MB", raising=False)
+    monkeypatch.delenv("ORSO_HOST_MAX_CPUS", raising=False)
+    monkeypatch.setenv("ORSO_HOST_FLAVOR", "b2-15")
+    res_case4 = DockerLifecycleManager._resolve_host_capacity()
+    # b2-15 = 15360 Mo RAM - 512 Mo réserve = 14848 Mo
+    assert res_case4["max_memory_mb"] == 14848
+    assert "ovh_catalog_flavor:b2-15" in res_case4["memory_source"]
+

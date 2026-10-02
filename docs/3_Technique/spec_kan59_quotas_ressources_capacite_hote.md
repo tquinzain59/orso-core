@@ -34,10 +34,10 @@ Les limites physiques sont strictement calquées sur les forfaits d'abonnement o
 
 | Palier Tarifaire | Nombre d'Agents Max | Quota RAM | Quota Swap | Quota vCPU | Limite PIDs | Marge vs Charge Réelle |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Starter (1 agent)** | 1 | **512 Mo** | **512 Mo** (no-leak) | **0.5 vCPU** | **100** | 5.1x au repos (~100 Mo), 2.0x en pic (~250 Mo) |
-| **Duo (2 agents)** | 2 | **1024 Mo** (1 Go) | **1024 Mo** | **1.0 vCPU** | **150** | 10.2x au repos, 2.0x sous 2 requêtes simultanées |
-| **Trio (3 agents)** | 3 | **1536 Mo** (1.5 Go)| **1536 Mo** | **1.5 vCPU** | **200** | 15.3x au repos, 2.0x sous 3 requêtes simultanées |
-| **Flotte Complète (4 agents)** | 4 | **2048 Mo** (2 Go) | **2048 Mo** | **2.0 vCPU** | **250** | 20.4x au repos, 2.0x sous 4 requêtes simultanées |
+| **Starter (1 agent)** | 1 | **512 Mo** | **512 Mo** (no-leak) | **0.5 vCPU** | **100** | 5.1x au repos (~100 Mo), 3.6x en pic de charge (~139 Mo) |
+| **Duo (2 agents)** | 2 | **1024 Mo** (1 Go) | **1024 Mo** | **1.0 vCPU** | **150** | 10.2x au repos, 3.6x sous 2 requêtes simultanées |
+| **Trio (3 agents)** | 3 | **1536 Mo** (1.5 Go)| **1536 Mo** | **1.5 vCPU** | **200** | 15.3x au repos, 3.6x sous 3 requêtes simultanées |
+| **Flotte Complète (4 agents)** | 4 | **2048 Mo** (2 Go) | **2048 Mo** | **2.0 vCPU** | **250** | 20.4x au repos, 3.6x sous 4 requêtes simultanées |
 | *Sur mesure (custom)* | ≥ 4 | **2048 Mo+** | = RAM | **2.0 vCPU+** | **250+** | Ajusté selon contrat |
 
 > [!IMPORTANT]

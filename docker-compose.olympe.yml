@@ -60,9 +60,11 @@ services:
       - OVH_CLOUD_PROJECT_ID=${OVH_CLOUD_PROJECT_ID:-}
       - OVH_ENDPOINT=${OVH_ENDPOINT:-ovh-eu}
       # Capacité matérielle et contrôle d'admission hôte (KAN-59)
-      - ORSO_HOST_FLAVOR=${ORSO_HOST_FLAVOR:-d2-4}
+      # Laisser vide par défaut pour privilégier la sonde physique réelle de l'hôte (recommandation CA3)
+      - ORSO_HOST_FLAVOR=${ORSO_HOST_FLAVOR:-}
       - ORSO_HOST_MAX_MEMORY_MB=${ORSO_HOST_MAX_MEMORY_MB:-}
       - ORSO_HOST_MAX_CPUS=${ORSO_HOST_MAX_CPUS:-}
+      - ORSO_HOST_SYSTEM_RESERVE_RAM_MB=${ORSO_HOST_SYSTEM_RESERVE_RAM_MB:-512}
       - ORSO_CPU_OVERCOMMIT_RATIO=${ORSO_CPU_OVERCOMMIT_RATIO:-2.0}
     volumes:
       # Accès à la socket Docker pour lancer / réveiller les conteneurs clients
