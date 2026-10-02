@@ -2183,7 +2183,12 @@ class OpsManager:
         """Retourne le détail exhaustif d'une commande d'onboarding."""
         return self.get_tenant_detail(tenant_id)
 
-    def provision_onboarding_order(self, tenant_id: str, provisioning_result: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def provision_onboarding_order(
+        self,
+        tenant_id: str,
+        provisioning_result: Optional[Dict[str, Any]] = None,
+        is_simulated: Optional[bool] = None,
+    ) -> Dict[str, Any]:
         """Active le déploiement d'un client et bascule ses agents en production (ACTIVE)."""
         tenant = self.get_tenant_detail(tenant_id)
         if not tenant:
@@ -2202,13 +2207,17 @@ class OpsManager:
             )
             raise ValueError(f"Provisioning refusé : {err_msg} [{err_code}]")
 
-        is_simulated = bool(provisioning_result and provisioning_result.get("simulated"))
-        execution_mode = "simulated" if is_simulated else "containerized"
+        effective_is_simulated = (
+            is_simulated
+            if is_simulated is not None
+            else bool(provisioning_result and provisioning_result.get("simulated"))
+        )
+        execution_mode = "simulated" if effective_is_simulated else "containerized"
 
         # 1. Traitement via le worker souverain si Supabase est configuré
         if self.supabase_url and self.supabase_key:
             # CA2 KAN-74 : Interdiction d'écrire un statut actif ou prêt en production suite à un mode simulé
-            if is_simulated and is_production():
+            if effective_is_simulated and is_production():
                 raise ValueError("Interdiction formelle d'écrire un statut actif ou prêt en base de production suite à un provisioning simulé (CA2 KAN-74).")
 
             worker_res = onboarding_worker.provision_tenant_agents(actual_tenant_id)
@@ -2221,8 +2230,8 @@ class OpsManager:
                     f"tenant_instances?tenant_id=eq.{actual_tenant_id}",
                     method="PATCH",
                     payload={
-                        "status": "ready" if not is_simulated else "simulated",
-                        "environment_status": "active" if not is_simulated else "simulated",
+                        "status": "ready" if not effective_is_simulated else "simulated",
+                        "environment_status": "active" if not effective_is_simulated else "simulated",
                         "docker_container_name": container_name,
                         "instance_url": f"https://app.orso-agents.fr/t/{tenant_slug}" if tenant_slug else "https://app.orso-agents.fr",
                     },
@@ -2247,10 +2256,14 @@ class OpsManager:
 
         # 2. Mise à jour de l'état local / mock
         if actual_tenant_id in self._mock_tenants:
+            # CA2 KAN-74 : Interdiction d'écrire un statut actif ou prêt en production suite à un mode simulé
+            if effective_is_simulated and is_production():
+                raise ValueError("Interdiction formelle d'écrire un statut actif ou prêt en base de production suite à un provisioning simulé (CA2 KAN-74).")
+
             t = self._mock_tenants[actual_tenant_id]
             t["status"] = "active"
-            t["instance"]["status"] = "ready" if not is_simulated else "simulated"
-            t["instance"]["environment_status"] = "active" if not is_simulated else "simulated"
+            t["instance"]["status"] = "ready" if not effective_is_simulated else "simulated"
+            t["instance"]["environment_status"] = "active" if not effective_is_simulated else "simulated"
             for ai in t.get("agent_instances", []):
                 ai["provisioning_status"] = "ACTIVE"
 
@@ -2260,7 +2273,7 @@ class OpsManager:
             target=actual_tenant_id,
             details={
                 "tenant_slug": tenant.get("slug"),
-                "simulated": is_simulated,
+                "simulated": effective_is_simulated,
                 "execution_mode": execution_mode,
             },
         )
@@ -2269,9 +2282,9 @@ class OpsManager:
             "success": True,
             "tenant_id": actual_tenant_id,
             "status": "ACTIVE",
-            "simulated": is_simulated,
+            "simulated": effective_is_simulated,
             "execution_mode": execution_mode,
-            "message": f"Organisation {tenant.get('name')} et agents activés avec succès ({'mode simulé' if is_simulated else 'mode conteneurisé réel'}).",
+            "message": f"Organisation {tenant.get('name')} et agents activés avec succès ({'mode simulé' if effective_is_simulated else 'mode conteneurisé réel'}).",
             "timestamp": _format_timestamp(),
         }
 

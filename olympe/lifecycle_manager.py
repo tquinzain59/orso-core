@@ -62,13 +62,17 @@ class DockerLifecycleManager:
         container_name = normalize_container_name(tenant_slug)
 
         if not self.has_docker:
-            # Mode simulation ou environnement de test sans Docker daemon
+            # Mode simulation ou environnement sans Docker daemon local
+            from olympe.ops_manager import is_production
+            mode = "delegated_host" if is_production() else "simulated"
             return {
                 "tenant_slug": tenant_slug,
                 "container_name": container_name,
                 "status": "ready" if os.environ.get("ORSO_SIMULATION_MODE") == "1" else "unknown",
                 "running": os.environ.get("ORSO_SIMULATION_MODE") == "1",
                 "simulated": True,
+                "mode": mode,
+                "action_taken": False,
             }
 
         proc = self._exec_docker(
@@ -82,6 +86,9 @@ class DockerLifecycleManager:
                 "container_name": container_name,
                 "status": "not_found",
                 "running": False,
+                "simulated": False,
+                "mode": "containerized",
+                "action_taken": False,
                 "detail": f"Le conteneur {container_name} n'est pas provisionné.",
             }
 
@@ -106,6 +113,9 @@ class DockerLifecycleManager:
                 "container_name": container_name,
                 "status": normalized_status,
                 "running": is_running,
+                "simulated": False,
+                "mode": "containerized",
+                "action_taken": False,
                 "started_at": state.get("StartedAt"),
                 "finished_at": state.get("FinishedAt"),
                 "exit_code": state.get("ExitCode"),
@@ -117,6 +127,9 @@ class DockerLifecycleManager:
                 "container_name": container_name,
                 "status": "error",
                 "running": False,
+                "simulated": False,
+                "mode": "containerized",
+                "action_taken": False,
                 "error": str(e),
             }
 
@@ -130,6 +143,9 @@ class DockerLifecycleManager:
                 "success": False,
                 "tenant_slug": tenant_slug,
                 "status": "not_found",
+                "simulated": False,
+                "mode": status_info.get("mode", "containerized"),
+                "action_taken": False,
                 "message": f"Impossible de réveiller {container_name} : conteneur non provisionné.",
             }
 
@@ -138,6 +154,9 @@ class DockerLifecycleManager:
                 "success": True,
                 "tenant_slug": tenant_slug,
                 "status": "ready",
+                "simulated": status_info.get("simulated", False),
+                "mode": status_info.get("mode", "containerized"),
+                "action_taken": False,
                 "message": f"Le conteneur {container_name} est déjà en cours d'exécution.",
             }
 
@@ -150,14 +169,18 @@ class DockerLifecycleManager:
                     "tenant_slug": tenant_slug,
                     "status": "error",
                     "simulated": False,
-                    "message": "Réveil in-process refusé : aucun démon Docker local sur l'hôte de gestion.",
+                    "mode": "delegated_host",
+                    "action_taken": False,
+                    "message": "Réveil in-process refusé : aucun démon Docker local sur l'hôte de gestion. Le réveil des conteneurs clients en production est exclusivement délégué aux hôtes d'exécution dédiés (PROD-FR-003).",
                 }
             return {
                 "success": True,
                 "tenant_slug": tenant_slug,
                 "status": "ready",
                 "simulated": True,
-                "message": "Conteneur simulé démarré avec succès.",
+                "mode": "simulated",
+                "action_taken": False,
+                "message": "Conteneur simulé démarré avec succès (mode simulé).",
             }
 
         _log.info("Réveil du conteneur client : %s", container_name)
@@ -169,6 +192,9 @@ class DockerLifecycleManager:
                 "success": False,
                 "tenant_slug": tenant_slug,
                 "status": "error",
+                "simulated": False,
+                "mode": "containerized",
+                "action_taken": False,
                 "message": f"Échec du démarrage : {err}",
             }
 
@@ -177,6 +203,9 @@ class DockerLifecycleManager:
                 "success": True,
                 "tenant_slug": tenant_slug,
                 "status": "starting",
+                "simulated": False,
+                "mode": "containerized",
+                "action_taken": True,
                 "message": f"Conteneur {container_name} en cours de démarrage.",
             }
 
@@ -190,6 +219,9 @@ class DockerLifecycleManager:
                     "success": True,
                     "tenant_slug": tenant_slug,
                     "status": "ready",
+                    "simulated": False,
+                    "mode": "containerized",
+                    "action_taken": True,
                     "duration_seconds": round(time.time() - start_time, 2),
                     "message": f"Conteneur {container_name} opérationnel et prêt.",
                 }
@@ -198,6 +230,9 @@ class DockerLifecycleManager:
             "success": True,
             "tenant_slug": tenant_slug,
             "status": "starting",
+            "simulated": False,
+            "mode": "containerized",
+            "action_taken": True,
             "warning": f"Démarré mais le conteneur met plus de {timeout}s à répondre.",
         }
 
@@ -211,6 +246,9 @@ class DockerLifecycleManager:
                 "success": False,
                 "tenant_slug": tenant_slug,
                 "status": "not_found",
+                "simulated": False,
+                "mode": status_info.get("mode", "containerized"),
+                "action_taken": False,
                 "message": f"Conteneur {container_name} introuvable.",
             }
 
@@ -218,16 +256,26 @@ class DockerLifecycleManager:
             return {
                 "success": True,
                 "tenant_slug": tenant_slug,
+                "container_name": container_name,
                 "status": "sleeping",
-                "message": f"Conteneur {container_name} déjà en veille.",
+                "simulated": status_info.get("simulated", False),
+                "mode": status_info.get("mode", "containerized"),
+                "action_taken": False,
+                "message": f"Conteneur {container_name} déjà en veille (mode {status_info.get('mode', 'containerized')}).",
             }
 
         if not self.has_docker:
+            from olympe.ops_manager import is_production
+            mode = "delegated_host" if is_production() else "simulated"
             return {
                 "success": True,
                 "tenant_slug": tenant_slug,
+                "container_name": container_name,
                 "status": "sleeping",
                 "simulated": True,
+                "mode": mode,
+                "action_taken": False,
+                "message": f"Conteneur {container_name} placé en veille (mode {mode}, aucune action conteneur physique requise).",
             }
 
         _log.info("Mise en veille du conteneur client : %s", container_name)
@@ -236,14 +284,22 @@ class DockerLifecycleManager:
             return {
                 "success": False,
                 "tenant_slug": tenant_slug,
+                "container_name": container_name,
                 "status": "error",
+                "simulated": False,
+                "mode": "containerized",
+                "action_taken": False,
                 "message": stop_proc.stderr.strip() or "Erreur lors de l'arrêt du conteneur",
             }
 
         return {
             "success": True,
             "tenant_slug": tenant_slug,
+            "container_name": container_name,
             "status": "sleeping",
+            "simulated": False,
+            "mode": "containerized",
+            "action_taken": True,
             "message": f"Conteneur {container_name} placé en veille avec succès.",
         }
 
@@ -371,6 +427,8 @@ class DockerLifecycleManager:
                     "tenant_slug": tenant_slug,
                     "container_name": container_name,
                     "simulated": False,
+                    "mode": "delegated_host",
+                    "action_taken": False,
                     "message": (
                         "Provisioning in-process refusé : aucun démon Docker local sur l'hôte de gestion. "
                         "Le déploiement des conteneurs clients en production est exclusivement délégué aux hôtes d'exécution dédiés (PROD-FR-003)."
@@ -383,10 +441,12 @@ class DockerLifecycleManager:
                 "container_name": container_name,
                 "status": "ready",
                 "simulated": True,
+                "mode": "simulated",
+                "action_taken": False,
                 "image": target_image,
                 "digest": effective_digest or None,
                 "quotas": quotas or {},
-                "message": "Provisioning simulé avec succès.",
+                "message": "Provisioning simulé avec succès (mode simulé, aucune action conteneur physique).",
             }
 
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -466,6 +526,8 @@ class DockerLifecycleManager:
             "container_name": container_name,
             "status": "ready",
             "simulated": False,
+            "mode": "containerized",
+            "action_taken": True,
             "image": target_image,
             "digest": effective_digest or None,
             "quotas": effective_quotas,

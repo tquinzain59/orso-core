@@ -164,6 +164,8 @@ async def health_check():
         "service": "olympe-core",
         "version": "1.1.0",
         "docker_available": manager.has_docker,
+        "fleet_mode": "delegated_host_provisioning" if not manager.has_docker else "local_container_host",
+        "mode": "delegated_host" if not manager.has_docker else "containerized",
         "network": manager.network_name,
         "ui_ops_built": (UI_OPS_DIST / "index.html").is_file(),
     }
@@ -196,9 +198,14 @@ async def wake_tenant(tenant_slug: str, actor: Dict[str, Any] = Depends(require_
             detail=f"L'environnement client '{tenant_slug}' n'a pas été trouvé.",
         )
     if not res.get("success"):
+        err_code = res.get("error", "ERR_WAKE_FAILED")
+        err_msg = res.get("message", "Erreur lors du réveil du conteneur.")
+        status_code = 400 if err_code == "ERR_NO_LOCAL_DOCKER_DELEGATED_HOST_REQUIRED" else 500
+        mode = res.get("mode", "delegated_host")
+        action_taken = res.get("action_taken", False)
         raise HTTPException(
-            status_code=500,
-            detail=res.get("message", "Erreur lors du réveil du conteneur."),
+            status_code=status_code,
+            detail=f"{err_msg} [{err_code}] [mode={mode}] [action_taken={action_taken}]",
         )
     return res
 
@@ -225,9 +232,14 @@ async def provision_tenant(req: ProvisionRequest, admin: Dict[str, Any] = Depend
         env_vars=req.env_vars,
     )
     if not res.get("success"):
+        err_code = res.get("error", "ERR_PROVISION_FAILED")
+        err_msg = res.get("message") or res.get("error", "Échec du provisioning de l'environnement.")
+        status_code = 400 if err_code == "ERR_NO_LOCAL_DOCKER_DELEGATED_HOST_REQUIRED" else 500
+        mode = res.get("mode", "delegated_host")
+        action_taken = res.get("action_taken", False)
         raise HTTPException(
-            status_code=500,
-            detail=res.get("error", "Échec du provisioning de l'environnement."),
+            status_code=status_code,
+            detail=f"Provisioning refusé : {err_msg} [{err_code}] [mode={mode}] [action_taken={action_taken}]",
         )
     return res
 
