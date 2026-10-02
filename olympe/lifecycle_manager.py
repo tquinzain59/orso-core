@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from olympe.artifact_manager import ClientSpaceArtifactManager
+
 _log = logging.getLogger("orso.olympe.lifecycle")
 
 
@@ -151,6 +153,7 @@ class DockerLifecycleManager:
         host_max_cpus: Optional[float] = None,
         host_max_containers: Optional[int] = None,
         host_flavor: Optional[str] = None,
+        artifacts_root: Optional[str] = None,
     ):
         self.network_name = network_name
         self.data_root = Path(data_root or os.environ.get("ORSO_DATA_ROOT", "./data/tenants")).resolve()
@@ -163,6 +166,20 @@ class DockerLifecycleManager:
                 self.spaces_root = (Path(data_root) / "spaces").resolve()
             else:
                 self.spaces_root = Path("./data/spaces").resolve()
+
+        if artifacts_root:
+            self.artifacts_root = Path(artifacts_root).resolve()
+        elif "ORSO_ARTIFACTS_ROOT" in os.environ:
+            self.artifacts_root = Path(os.environ["ORSO_ARTIFACTS_ROOT"]).resolve()
+        else:
+            self.artifacts_root = (self.spaces_root.parent / "artifacts").resolve()
+        self.artifacts_root.mkdir(parents=True, exist_ok=True)
+
+        self.artifact_manager = ClientSpaceArtifactManager(
+            artifacts_root=self.artifacts_root,
+            spaces_root=self.spaces_root,
+        )
+
         self.supabase_url = (supabase_url or os.environ.get("SUPABASE_URL", "")).rstrip("/")
         self.supabase_key = supabase_key or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
         self.has_docker = shutil.which("docker") is not None
@@ -465,6 +482,83 @@ class DockerLifecycleManager:
             "container_healthy": container_healthy,
             "message": f"Retour arrière de l'espace client '{tenant_slug}' exécuté avec succès ({mode}).",
         }
+
+    def deploy_tenant_artifact(
+        self,
+        tenant_slug: str,
+        version: str,
+        restart_container: bool = True,
+    ) -> Dict[str, Any]:
+        """Déploie une version d'artefact d'espace client et actualise le conteneur (KAN-60 / CA1, CA2)."""
+        space_dir = self.get_tenant_space_dir(tenant_slug)
+        manifest = self.artifact_manager.get_artifact_manifest(tenant_slug, version)
+        if not manifest:
+            return {
+                "success": False,
+                "error": "ERR_ARTIFACT_NOT_FOUND",
+                "tenant_slug": tenant_slug,
+                "version": version,
+                "message": f"Artefact introuvable pour {tenant_slug} version {version}",
+            }
+
+        try:
+            deploy_res = self.artifact_manager.extract_and_deploy_artifact(
+                tenant_slug=tenant_slug,
+                version=version,
+                target_space_dir=space_dir,
+                verify_fingerprint=True,
+            )
+        except Exception as e:
+            _log.error("Échec déploiement artefact %s v%s: %s", tenant_slug, version, e)
+            return {
+                "success": False,
+                "error": "ERR_ARTIFACT_DEPLOY_FAILED",
+                "tenant_slug": tenant_slug,
+                "version": version,
+                "message": f"Échec du déploiement de l'artefact : {e}",
+            }
+
+        container_restarted = False
+        container_healthy = True
+        if restart_container and self.has_docker:
+            container_name = normalize_container_name(tenant_slug)
+            status = self.get_tenant_status(tenant_slug)
+            if status.get("running"):
+                _log.info("Redémarrage du conteneur après déploiement d'artefact : %s", container_name)
+                proc = self._exec_docker(["restart", container_name], timeout=15.0)
+                container_restarted = (proc.returncode == 0)
+                post_status = self.get_tenant_status(tenant_slug)
+                container_healthy = post_status.get("running", False)
+
+        return {
+            "success": True,
+            "tenant_slug": tenant_slug,
+            "version": version,
+            "fingerprint": deploy_res.get("fingerprint"),
+            "content_fingerprint": deploy_res.get("content_fingerprint"),
+            "space_directory": str(space_dir),
+            "container_restarted": container_restarted,
+            "container_healthy": container_healthy,
+            "deployed_at": deploy_res.get("deployed_at"),
+            "message": f"Artefact {version} déployé avec succès pour {tenant_slug}.",
+        }
+
+    def rollback_tenant_artifact(
+        self,
+        tenant_slug: str,
+        target_version: str,
+        restart_container: bool = True,
+    ) -> Dict[str, Any]:
+        """Exécute un retour arrière vers une version d'artefact d'espace client antérieure (KAN-60 / CA3)."""
+        res = self.deploy_tenant_artifact(
+            tenant_slug=tenant_slug,
+            version=target_version,
+            restart_container=restart_container,
+        )
+        if res.get("success"):
+            res["action"] = "artifact_rollback"
+            res["message"] = f"Retour arrière vers l'artefact {target_version} exécuté avec succès pour {tenant_slug}."
+        return res
 
     def _exec_docker(self, args: List[str], timeout: float = 15.0) -> subprocess.CompletedProcess:
         """Exécute une commande docker sécurisée avec timeout."""
@@ -917,6 +1011,8 @@ class DockerLifecycleManager:
         persona_hmac_key: Optional[str] = None,
         custom_space_dir: Optional[str] = None,
         use_dedicated_space: bool = True,
+        artifact_version: Optional[str] = None,
+        artifact_digest: Optional[str] = None,
     ) -> Dict[str, Any]:
         container_name = normalize_container_name(tenant_slug)
 
@@ -1088,11 +1184,18 @@ class DockerLifecycleManager:
                     }
 
             simulated_space_dir = str(Path(custom_space_dir).resolve() if custom_space_dir else self.get_tenant_space_dir(tenant_slug)) if not legacy_shared else None
+            simulated_artifact_digest = None
+            if artifact_version:
+                sim_manifest = self.artifact_manager.get_artifact_manifest(tenant_slug, artifact_version)
+                simulated_artifact_digest = sim_manifest.get("fingerprint") if sim_manifest else (artifact_digest or f"sha256:simulated_art_{artifact_version}")
+
             self._simulated_containers[tenant_slug] = {
                 "tenant_id": tenant_id,
                 "tenant_slug": tenant_slug,
                 "quotas": effective_quotas,
                 "tier_id": tier_id or "1_agent",
+                "artifact_version": artifact_version,
+                "artifact_digest": simulated_artifact_digest,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             return {
@@ -1105,6 +1208,8 @@ class DockerLifecycleManager:
                 "action_taken": False,
                 "image": target_image,
                 "digest": effective_digest or None,
+                "artifact_version": artifact_version,
+                "artifact_digest": simulated_artifact_digest,
                 "quotas": effective_quotas,
                 "tier_id": tier_id or "1_agent",
                 "data_directory": str(tenant_data_dir),
@@ -1153,6 +1258,8 @@ class DockerLifecycleManager:
         # Montages de l'environnement client (fin des dossiers partagés KAN-58 / Document 27)
         project_root = Path(__file__).resolve().parent.parent
         legacy_shared = not use_dedicated_space or os.environ.get("ORSO_LEGACY_SHARED_MOUNTS") == "1"
+        applied_artifact_version = None
+        applied_artifact_digest = None
 
         if legacy_shared:
             from olympe.ops_manager import is_production
@@ -1173,9 +1280,22 @@ class DockerLifecycleManager:
                     run_args.extend(["-v", f"{p}:/app/{shared_dir}:ro"])
             tenant_space_dir = None
         else:
-            # Mode KAN-58 : Espace d'agents propre et hermétique à chaque client
+            # Mode KAN-58 / KAN-60 : Espace d'agents propre et hermétique à chaque client
             tenant_space_dir = Path(custom_space_dir).resolve() if custom_space_dir else self.get_tenant_space_dir(tenant_slug)
-            self._initialize_tenant_space(tenant_slug, tenant_space_dir)
+
+            applied_artifact_version = None
+            applied_artifact_digest = None
+            if artifact_version:
+                deploy_res = self.artifact_manager.extract_and_deploy_artifact(
+                    tenant_slug=tenant_slug,
+                    version=artifact_version,
+                    target_space_dir=tenant_space_dir,
+                    verify_fingerprint=True,
+                )
+                applied_artifact_version = artifact_version
+                applied_artifact_digest = deploy_res.get("fingerprint")
+            else:
+                self._initialize_tenant_space(tenant_slug, tenant_space_dir)
 
             tenant_config_dir = tenant_space_dir / "config"
             tenant_skills_dir = tenant_space_dir / "skills"
@@ -1201,6 +1321,12 @@ class DockerLifecycleManager:
                 "--label", "com.orso.space.type=dedicated",
                 "--label", f"com.orso.space.path={tenant_space_dir}",
             ])
+            if applied_artifact_version:
+                run_args.extend([
+                    "--label", f"com.orso.artifact.version={applied_artifact_version}",
+                    "--label", f"com.orso.artifact.digest={applied_artifact_digest}",
+                    "--label", "com.orso.artifact.mounted_ro=true",
+                ])
 
         for k, v in base_envs.items():
             run_args.extend(["-e", f"{k}={v}"])
@@ -1236,6 +1362,8 @@ class DockerLifecycleManager:
             "action_taken": True,
             "image": target_image,
             "digest": effective_digest or None,
+            "artifact_version": applied_artifact_version,
+            "artifact_digest": applied_artifact_digest,
             "quotas": effective_quotas,
             "data_directory": str(tenant_data_dir),
             "space_directory": str(tenant_space_dir) if tenant_space_dir else None,
