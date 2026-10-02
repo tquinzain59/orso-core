@@ -69,9 +69,9 @@ def main():
         {"slug": "poc-gamma", "uuid": "uuid-poc-gamma-003"},
     ]
 
-    host_uname = subprocess.run(["uname", "-a"], capture_output=True, text=True).stdout.strip()
-    host_name = subprocess.run(["hostname"], capture_output=True, text=True).stdout.strip()
-    docker_ver = subprocess.run(["docker", "--version"], capture_output=True, text=True).stdout.strip()
+    host_uname = subprocess.run(["uname", "-a"], capture_output=True, text=True, encoding="utf-8", errors="replace").stdout.strip()
+    host_name = subprocess.run(["hostname"], capture_output=True, text=True, encoding="utf-8", errors="replace").stdout.strip()
+    docker_ver = subprocess.run(["docker", "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace").stdout.strip()
 
     evidence = {
         "ticket": "KAN-58",
