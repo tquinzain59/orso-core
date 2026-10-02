@@ -227,7 +227,13 @@ def main():
             subprocess.run(["docker", "network", "create", "orso_network"], capture_output=True)
 
             # Détection de l'image moteur disponible
-            local_imgs = subprocess.run(["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"], capture_output=True, text=True).stdout
+            local_imgs = subprocess.run(
+                ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            ).stdout
             if "orso-core-orso-backend:latest" in local_imgs:
                 default_engine = "orso-core-orso-backend:latest"
             else:
@@ -255,6 +261,8 @@ def main():
                     ["docker", "inspect", "--format", "{{json .Mounts}}", cname],
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                 )
                 mounts_data = json.loads(inspect_proc.stdout.strip())
                 space_mounts = [m for m in mounts_data if "/app/data" not in m.get("Destination", "")]
@@ -265,6 +273,8 @@ def main():
                     ["docker", "exec", cname, "touch", "/app/config/illegal_write_test.txt"],
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                 )
                 write_denied = (
                     write_attempt.returncode != 0
@@ -276,6 +286,8 @@ def main():
                     ["docker", "exec", cname, "touch", "/app/skills/illegal_skill_test.txt"],
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                 )
                 skills_write_denied = (
                     write_skills.returncode != 0
@@ -351,6 +363,8 @@ def main():
                 ["docker", "exec", target_cname, "cat", "/app/config/hermes.yaml"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
             v2_active = "CALIBRATION V2 UPGRADE" in cat_v2.stdout
         else:
@@ -371,6 +385,8 @@ def main():
                 ["docker", "exec", target_cname, "cat", "/app/config/hermes.yaml"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
             v1_restored = "Calibration exclusive pour poc-alpha (version 1.0.0)" in cat_v1_restored.stdout
             v2_absent = "CALIBRATION V2 UPGRADE" not in cat_v1_restored.stdout
