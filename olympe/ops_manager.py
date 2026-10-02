@@ -1607,8 +1607,9 @@ class OpsManager:
         stripe_customer_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Crée ou provisionne un tenant de test sandbox hermétique (L3/CA2)."""
+        from olympe.lifecycle_manager import get_quotas_for_tier
         tenant_id = f"test-tenant-{tenant_slug}"
-        effective_quotas = quotas or {"cpus": "0.5", "memory": "512m", "storage": "1g"}
+        effective_quotas = get_quotas_for_tier(tier_id="1_agent", overrides=quotas)
 
         tenant_record = {
             "id": tenant_id,
@@ -1680,6 +1681,7 @@ class OpsManager:
             docker_mgr.provision_tenant(
                 tenant_id=tenant_id,
                 tenant_slug=tenant_slug,
+                tier_id="1_agent",
                 quotas=effective_quotas,
             )
         except Exception as e:
@@ -1957,9 +1959,14 @@ class OpsManager:
                 from olympe.server import manager as docker_mgr
                 if auto_provision:
                     _log.info("Tentative de provisioning automatique conteneur pour %s (auto_provision=1)", matched_slug)
+                    from olympe.lifecycle_manager import get_quotas_for_tier
+                    effective_tier = effective_tier_id or "1_agent"
+                    tier_quotas = get_quotas_for_tier(effective_tier)
                     prov_res = docker_mgr.provision_tenant(
                         tenant_id=matched_tenant_id or f"tenant_{matched_slug}",
                         tenant_slug=matched_slug,
+                        tier_id=effective_tier,
+                        quotas=tier_quotas,
                     )
                     # Lecture stricte du retour du provisioning avant toute déclaration d'état
                     if not prov_res.get("success"):
@@ -1970,7 +1977,12 @@ class OpsManager:
                             actor={"actor": "stripe-webhook", "role": "system"},
                             action="provision:failed",
                             target=matched_slug,
-                            details={"tenant_id": matched_tenant_id, "error": err_code, "reason": err_msg},
+                            details={
+                                "tenant_id": matched_tenant_id,
+                                "error": err_code,
+                                "reason": err_msg,
+                                "capacity_details": prov_res.get("capacity_details"),
+                            },
                         )
                         env_result = "error"
                     else:

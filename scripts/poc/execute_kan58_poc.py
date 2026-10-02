@@ -24,9 +24,9 @@ _log = logging.getLogger("kan58_poc")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-# Load .env
+# Load .env (sauf si ORSO_NO_DOTENV est activé)
 env_file = PROJECT_ROOT / ".env"
-if env_file.exists():
+if os.environ.get("ORSO_NO_DOTENV") != "1" and env_file.exists():
     with open(env_file, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -38,9 +38,11 @@ from olympe.lifecycle_manager import DockerLifecycleManager, normalize_container
 
 
 def main():
-    _log.info("Démarrage du protocole de validation POC KAN-58 sur conteneurs réels...")
+    hmac_key = os.environ.get("ORSO_PERSONA_HMAC_KEY")
+    if not hmac_key or not hmac_key.strip():
+        _log.error("ERREUR DE SECURITE (Point 3) : La variable d'environnement ORSO_PERSONA_HMAC_KEY est requise mais absente. Aucun secret de repli n'est autorisé dans un dépôt public.")
+        sys.exit(1)
 
-    hmac_key = os.environ.get("ORSO_PERSONA_HMAC_KEY", "89fb4a7e32cf33668ef85fbc04b08e11ab77f5c3f65bb363cba3de18a675fe10")
     engine_image = os.environ.get("ORSO_ENGINE_IMAGE", "ghcr.io/tquinzain59/orso-engine:latest")
     engine_digest = os.environ.get(
         "ORSO_TARGET_ENGINE_DIGEST",

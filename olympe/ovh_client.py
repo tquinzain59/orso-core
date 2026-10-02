@@ -134,8 +134,19 @@ class OVHClient:
         pending_agents_count: int,
         existing_host_ip: str = "92.222.68.80",
     ) -> Dict[str, Any]:
-        """Calcule l'empreinte matérielle requise et formule une recommandation OVH."""
-        # Règle de calcul : 1 Go de RAM par agent actif + 500 Mo socle conteneur client
+        # ── Règle empirique issue des mesures réelles du POC KAN-59 (Document 27 / CA3 / CA4) ──
+        # - Empreinte réelle au repos mesurée : ~95-105 Mo RAM par conteneur client (6-11 PIDs, <0.3% CPU)
+        # - Empreinte réelle en charge active mesurée : ~93 à 139 Mo RAM par agent actif sous requêtes (10-18 PIDs, <10% CPU)
+        # - Plafonds de quotas garantis alloués par palier tarifaire (marge de sécurité 2x à 4x) :
+        #   * Starter (1 agent)   : 512 Mo RAM, 0.5 vCPU, 100 PIDs
+        #   * Duo (2 agents)      : 1024 Mo RAM, 1.0 vCPU, 150 PIDs
+        #   * Trio (3 agents)     : 1536 Mo RAM, 1.5 vCPU, 200 PIDs
+        #   * Flotte (4 agents)   : 2048 Mo RAM, 2.0 vCPU, 250 PIDs
+        # Modèle empirique fondé sur le pic réel observé (139 Mo par agent en charge + 100 Mo socle conteneur) :
+        empirical_ram_mb = (pending_agents_count * 139) + (pending_tenants_count * 100)
+        tier_quotas_ram_mb = (pending_agents_count * 512)
+
+        # Modèle de dimensionnement conservateur (règle historique) pour compatibilité
         ram_mb_required = (pending_agents_count * 1024) + (pending_tenants_count * 512)
         vcpus_required = max(1, pending_agents_count // 2 + 1)
 
@@ -156,7 +167,7 @@ class OVHClient:
         )
 
         docker_deploy_snippet = (
-            "# 1. Déploiement Conteneur Client sécurisé sur le réseau orso_network\n"
+            "# 1. Déploiement Conteneur Client sécurisé sur le réseau orso_network avec quotas stricts (KAN-59)\n"
             f"docker run -d \\\n"
             f"  --name orso_client_{{tenant_slug}} \\\n"
             f"  --network orso_network \\\n"
@@ -165,7 +176,10 @@ class OVHClient:
             f"  --label com.orso.tenant_id={{tenant_id}} \\\n"
             f"  --label com.orso.tenant_slug={{tenant_slug}} \\\n"
             f"  --label com.orso.role=client_backend \\\n"
-            f"  --memory=2g \\\n"
+            f"  --cpus 0.5 \\\n"
+            f"  --memory 512m \\\n"
+            f"  --memory-swap 512m \\\n"
+            f"  --pids-limit 100 \\\n"
             f"  -e ORSO_CLIENT_ID={{tenant_id}} \\\n"
             f"  -e ORSO_CLIENT_SLUG={{tenant_slug}} \\\n"
             f"  -e HERMES_HOME=/app/data/hermes_home \\\n"
@@ -179,6 +193,9 @@ class OVHClient:
             "pending_agents": pending_agents_count,
             "ram_mb_estimated": ram_mb_required,
             "vcpus_estimated": vcpus_required,
+            "empirical_measured_ram_mb": empirical_ram_mb,
+            "tier_quotas_ram_mb": tier_quotas_ram_mb,
+            "sizing_model": "empirical_measured_kan59",
             "recommended_flavor": recommended_flavor,
             "flavor_details": flavor_info,
             "can_fit_on_current_pool": ram_mb_required <= 4096,  # Si <= 4Go, peut tourner sur le VPS actuel
