@@ -41,8 +41,17 @@ def main():
     _log.info("Démarrage du protocole de validation POC KAN-58 sur conteneurs réels...")
 
     hmac_key = os.environ.get("ORSO_PERSONA_HMAC_KEY", "89fb4a7e32cf33668ef85fbc04b08e11ab77f5c3f65bb363cba3de18a675fe10")
-    engine_image = "orso-core-orso-backend:latest"
-    engine_digest = "sha256:41654b58b210207160a9dbb152576ac6530f2f4d5363d10f4d749f4de70b812d"
+    engine_image = os.environ.get("ORSO_ENGINE_IMAGE", "ghcr.io/tquinzain59/orso-engine:latest")
+    engine_digest = os.environ.get(
+        "ORSO_TARGET_ENGINE_DIGEST",
+        "sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
+    )
+
+    # Assurer la présence du réseau orso_network
+    res_net = subprocess.run(["docker", "network", "inspect", "orso_network"], capture_output=True)
+    if res_net.returncode != 0:
+        _log.info("Création du réseau Docker orso_network...")
+        subprocess.run(["docker", "network", "create", "orso_network"], check=True)
 
     poc_data_root = PROJECT_ROOT / "data" / "tenants_poc_kan58"
     poc_spaces_root = PROJECT_ROOT / "data" / "spaces_poc_kan58"
@@ -60,9 +69,20 @@ def main():
         {"slug": "poc-gamma", "uuid": "uuid-poc-gamma-003"},
     ]
 
+    host_uname = subprocess.run(["uname", "-a"], capture_output=True, text=True).stdout.strip()
+    host_name = subprocess.run(["hostname"], capture_output=True, text=True).stdout.strip()
+    docker_ver = subprocess.run(["docker", "--version"], capture_output=True, text=True).stdout.strip()
+
     evidence = {
         "ticket": "KAN-58",
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "host_telemetry": {
+            "hostname": host_name,
+            "kernel": host_uname,
+            "docker_version": docker_ver,
+            "target_host_ip": os.environ.get("ORSO_HOST_IP", "57.131.196.106"),
+            "target_host_name": "vps-9df18c40.vps.ovh.net",
+        },
         "engine_image": engine_image,
         "engine_digest": engine_digest,
         "ca1_no_shared_mounts": {},

@@ -81,6 +81,11 @@ class ProvisionRequest(BaseModel):
     use_dedicated_space: Optional[bool] = Field(True, description="Active l'espace d'agents propre et isolé (KAN-58)")
 
 
+class RollbackSpaceRequest(BaseModel):
+    backup_path: Optional[str] = Field(None, description="Chemin d'un backup spécifique à restaurer. Si omis, restaure la baseline.")
+    restart_container: Optional[bool] = Field(True, description="Redémarre le conteneur du client si actif.")
+
+
 class CreateTenantOpsRequest(BaseModel):
     tenant_slug: str = Field("clientx-orso", description="Slug normalisé du tenant")
     name: Optional[str] = Field("CLIENTX-ORSO (TEST)", description="Nom d'affichage du tenant")
@@ -249,12 +254,28 @@ async def provision_tenant(req: ProvisionRequest, admin: Dict[str, Any] = Depend
 
 
 @app.post("/api/olympe/tenants/rollback-space/{tenant_slug}")
-async def rollback_space(tenant_slug: str, admin: Dict[str, Any] = Depends(require_superadmin)):
+async def rollback_space(
+    tenant_slug: str,
+    req: Optional[RollbackSpaceRequest] = None,
+    admin: Dict[str, Any] = Depends(require_superadmin),
+):
     """Procédure de retour arrière sur l'espace d'agents propre du client (CA4 / KAN-58)."""
     _log.info("Demande de retour arrière sur l'espace client %s par admin %s", tenant_slug, admin.get("email"))
     try:
-        res = manager.rollback_tenant_space(tenant_slug)
+        backup_path = req.backup_path if req else None
+        restart_container = req.restart_container if req and req.restart_container is not None else True
+        res = manager.rollback_tenant_space(tenant_slug, backup_path=backup_path, restart_container=restart_container)
+        if not res.get("success"):
+            err_code = res.get("error", "ERR_ROLLBACK_FAILED")
+            err_msg = res.get("message") or "Échec de l'opération de retour arrière."
+            status_code = 404 if err_code == "ERR_SPACE_NOT_FOUND" else 500
+            raise HTTPException(
+                status_code=status_code,
+                detail=f"Rollback refusé : {err_msg} [{err_code}]",
+            )
         return res
+    except HTTPException:
+        raise
     except Exception as e:
         _log.error("Échec du rollback pour %s: %s", tenant_slug, e)
         raise HTTPException(status_code=500, detail=f"Échec du retour arrière : {str(e)}")

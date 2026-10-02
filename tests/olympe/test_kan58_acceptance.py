@@ -292,12 +292,101 @@ def test_api_olympe_provision_and_rollback_endpoints(api_client, monkeypatch):
         "success": True,
         "tenant_slug": "api-tenant-test",
         "mode": "baseline_restore",
+        "pre_rollback_backup": "/tmp/spaces/.backups/api-tenant-test_pre_rollback",
+        "container_restarted": True,
+        "container_healthy": True,
         "message": "Retour arrière exécuté.",
     }
     with patch("olympe.server.manager.rollback_tenant_space", return_value=mock_rb) as mock_r:
-        resp_rollback = api_client.post("/api/olympe/tenants/rollback-space/api-tenant-test", headers=admin_headers)
+        payload = {"backup_path": "/tmp/custom_bck", "restart_container": True}
+        resp_rollback = api_client.post(
+            "/api/olympe/tenants/rollback-space/api-tenant-test",
+            json=payload,
+            headers=admin_headers,
+        )
         assert resp_rollback.status_code == 200
         rb_data = resp_rollback.json()
         assert rb_data["success"] is True
         assert rb_data["mode"] == "baseline_restore"
-        assert mock_r.called
+        assert rb_data["pre_rollback_backup"] is not None
+        mock_r.assert_called_once_with("api-tenant-test", backup_path="/tmp/custom_bck", restart_container=True)
+
+    # 3. Rollback via API avec erreur ERR_SPACE_NOT_FOUND (404)
+    with patch("olympe.server.manager.rollback_tenant_space", return_value={"success": False, "error": "ERR_SPACE_NOT_FOUND"}):
+        resp_err_404 = api_client.post("/api/olympe/tenants/rollback-space/unknown-client", headers=admin_headers)
+        assert resp_err_404.status_code == 404
+        assert "ERR_SPACE_NOT_FOUND" in resp_err_404.json()["detail"]
+
+    # 4. Rollback via API avec erreur ERR_CONTAINER_RESTART_FAILED (500)
+    with patch("olympe.server.manager.rollback_tenant_space", return_value={"success": False, "error": "ERR_CONTAINER_RESTART_FAILED"}):
+        resp_err_500 = api_client.post("/api/olympe/tenants/rollback-space/failed-client", headers=admin_headers)
+        assert resp_err_500.status_code == 500
+        assert "ERR_CONTAINER_RESTART_FAILED" in resp_err_500.json()["detail"]
+
+
+def test_kan58_legacy_mounts_strictly_forbidden_in_production(tmp_path, monkeypatch):
+    """Vérifie le blocage formel des montages partagés legacy en environnement de production."""
+    monkeypatch.setenv("ORSO_ENV", "production")
+
+    data_dir = tmp_path / "tenants"
+    spaces_dir = tmp_path / "spaces"
+    manager = DockerLifecycleManager(data_root=str(data_dir), spaces_root=str(spaces_dir))
+
+    # Test 1 : Sans Docker local (mode délégué / simulation)
+    manager.has_docker = False
+    res_sim = manager.provision_tenant(
+        tenant_id="uuid-prod-reject",
+        tenant_slug="prod-client",
+        use_dedicated_space=False,
+    )
+    assert res_sim["success"] is False
+    assert res_sim["error"] == "ERR_LEGACY_MOUNTS_FORBIDDEN_IN_PROD"
+
+    # Test 2 : Avec Docker local activé
+    manager.has_docker = True
+    status_not_found = {"status": "not_found", "running": False}
+    with patch.object(manager, "get_tenant_status", return_value=status_not_found):
+        res_docker = manager.provision_tenant(
+            tenant_id="uuid-prod-reject-2",
+            tenant_slug="prod-client-2",
+            allow_floating_tag=True,
+            persona_hmac_key="key-hmac",
+            use_dedicated_space=False,
+        )
+        assert res_docker["success"] is False
+        assert res_docker["error"] == "ERR_LEGACY_MOUNTS_FORBIDDEN_IN_PROD"
+
+
+def test_kan58_ca4_rollback_hardened_safety_and_restart(tmp_path):
+    """Vérifie la robustesse du rollback : sauvegarde préventive, gestion conteneur arrêté ou échec redémarrage."""
+    data_dir = tmp_path / "tenants"
+    spaces_dir = tmp_path / "spaces"
+    manager = DockerLifecycleManager(data_root=str(data_dir), spaces_root=str(spaces_dir))
+    manager.has_docker = True
+
+    tenant_slug = "client-hardened-rollback"
+
+    # 1. Tentative sur un espace inexistant -> ERR_SPACE_NOT_FOUND
+    res_not_found = manager.rollback_tenant_space("non-existent-tenant")
+    assert res_not_found["success"] is False
+    assert res_not_found["error"] == "ERR_SPACE_NOT_FOUND"
+
+    # 2. Création et altération d'un espace existant
+    space_dir = manager.get_tenant_space_dir(tenant_slug)
+    manager._initialize_tenant_space(tenant_slug, space_dir)
+    test_marker = space_dir / "config" / "before_rollback.txt"
+    test_marker.write_text("before", encoding="utf-8")
+
+    # Simulation d'un conteneur qui tourne mais dont le docker restart échoue
+    running_status = {"status": "running", "running": True}
+    failed_restart = subprocess.CompletedProcess(args=["docker", "restart"], returncode=1, stdout="", stderr="Restart timeout")
+
+    with patch.object(manager, "get_tenant_status", return_value=running_status):
+        with patch.object(manager, "_exec_docker", return_value=failed_restart):
+            res_fail = manager.rollback_tenant_space(tenant_slug, restart_container=True)
+            assert res_fail["success"] is False
+            assert res_fail["error"] == "ERR_CONTAINER_RESTART_FAILED"
+            assert res_fail["container_restarted"] is False
+            assert res_fail["container_healthy"] is False
+            assert res_fail["pre_rollback_backup"] is not None
+            assert Path(res_fail["pre_rollback_backup"]).is_dir()

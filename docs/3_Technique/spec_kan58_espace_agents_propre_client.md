@@ -105,4 +105,4 @@ Conformément à la Definition of Done du ticket KAN-58, toutes les preuves ci-d
 Conformément à la Charte de Gouvernance du Fork Orso :
 - **Zone A (Sanctuaire)** : Aucune modification effectuée dans les moteurs d'inférence (`agent/turn_*.py`, `run_agent.py`, `conversation_loop.py`, `hermes_state*.py`, prompt caching, `providers/`, `tools/registry.py`).
 - **Zone B (Évolution & Orchestration)** : Modifications circonscrites à `olympe/lifecycle_manager.py`, `olympe/server.py` et aux tests d'acceptation dans `tests/olympe/`.
-- **Rétro-compatibilité** : Le mode déprécié de montages partagés legacy reste accessible sur option explicite (`use_dedicated_space=False` ou variable `ORSO_LEGACY_SHARED_MOUNTS=1`) pour tout besoin de comparaison ou de secours immédiat.
+- **Rétro-compatibilité & Sécurité de Production** : Le mode déprécié de montages partagés legacy reste accessible uniquement hors-production sur option explicite (`use_dedicated_space=False` ou variable `ORSO_LEGACY_SHARED_MOUNTS=1`) pour des besoins de comparaison ou de tests locaux. Ce mode est formellement verrouillé et refusé en production (`ERR_LEGACY_MOUNTS_FORBIDDEN_IN_PROD`).
