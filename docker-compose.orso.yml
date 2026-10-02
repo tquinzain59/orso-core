@@ -50,6 +50,18 @@ services:
       - ./apps/ui-client/dist:/app/apps/ui-client/dist:ro
       # Montage des données (SQLite, mémoires, rapports, télémétrie)
       - ./data:/app/data
+    labels:
+      com.orso.managed: "true"
+      com.orso.role: "client_backend"
+      com.orso.quotas.memory: "512m"
+      com.orso.quotas.cpus: "0.5"
+      com.orso.quotas.pids: "100"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+          pids: 100
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9119/api/client/status"]
       interval: 15s

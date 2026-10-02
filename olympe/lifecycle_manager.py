@@ -132,35 +132,127 @@ class DockerLifecycleManager:
         self.supabase_key = supabase_key or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
         self.has_docker = shutil.which("docker") is not None
 
-        # ── Gestion de la Capacité Matérielle Hôte (KAN-59 / CA2 / CA4) ────────
-        self.host_flavor = host_flavor or os.environ.get("ORSO_HOST_FLAVOR", "d2-4")
-        # Gabarit OVH par défaut (d2-4 : 2 vCPUs, 4096 Mo RAM)
-        # Réserve système/Olympe standard : 1024 Mo
-        default_max_mem = 3072
-        default_max_cpus = 2.0
-
-        if host_max_memory_mb is not None:
-            self.host_max_memory_mb = host_max_memory_mb
-        elif "ORSO_HOST_MAX_MEMORY_MB" in os.environ:
-            self.host_max_memory_mb = int(os.environ["ORSO_HOST_MAX_MEMORY_MB"])
-        else:
-            self.host_max_memory_mb = default_max_mem
-
-        if host_max_cpus is not None:
-            self.host_max_cpus = float(host_max_cpus)
-        elif "ORSO_HOST_MAX_CPUS" in os.environ:
-            self.host_max_cpus = float(os.environ["ORSO_HOST_MAX_CPUS"])
-        else:
-            self.host_max_cpus = default_max_cpus
-
-        if host_max_containers is not None:
-            self.host_max_containers = host_max_containers
-        elif "ORSO_HOST_MAX_CONTAINERS" in os.environ:
-            self.host_max_containers = int(os.environ["ORSO_HOST_MAX_CONTAINERS"])
-        else:
-            self.host_max_containers = None
+        # ── Gestion Dynamique de la Capacité Matérielle Hôte (KAN-59 / CA2 / CA4) ──
+        self.host_capacity_info = self._resolve_host_capacity(
+            host_max_memory_mb=host_max_memory_mb,
+            host_max_cpus=host_max_cpus,
+            host_max_containers=host_max_containers,
+            host_flavor=host_flavor,
+        )
+        self.host_max_memory_mb = self.host_capacity_info["max_memory_mb"]
+        self.host_max_cpus = self.host_capacity_info["max_cpus"]
+        self.host_max_containers = self.host_capacity_info["max_containers"]
+        self.host_flavor = self.host_capacity_info["flavor_name"]
 
         self._simulated_containers: Dict[str, Dict[str, Any]] = {}
+
+    @staticmethod
+    def _resolve_host_capacity(
+        host_max_memory_mb: Optional[int] = None,
+        host_max_cpus: Optional[float] = None,
+        host_max_containers: Optional[int] = None,
+        host_flavor: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Détermine dynamiquement la capacité matérielle de l'hôte et cite sa source de vérité (KAN-59)."""
+        explicit_flavor = host_flavor is not None or "ORSO_HOST_FLAVOR" in os.environ
+        flavor_name = host_flavor or os.environ.get("ORSO_HOST_FLAVOR", "d2-4")
+        from olympe.ovh_client import OVH_FLAVORS
+        flavor_spec = OVH_FLAVORS.get(flavor_name)
+
+        reserved_sys_mem = int(os.environ.get("ORSO_SYSTEM_RESERVED_MEM_MB", "512"))
+        cpu_overcommit = float(os.environ.get("ORSO_CPU_OVERCOMMIT_RATIO", "2.0"))
+
+        system_total_mem_mb = None
+        system_avail_mem_mb = None
+        system_total_cpus = None
+
+        try:
+            if Path("/proc/meminfo").exists():
+                with open("/proc/meminfo", "r", encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        if line.startswith("MemTotal:"):
+                            system_total_mem_mb = int(line.split()[1]) // 1024
+                        elif line.startswith("MemAvailable:"):
+                            system_avail_mem_mb = int(line.split()[1]) // 1024
+        except Exception:
+            pass
+
+        if system_total_mem_mb is None:
+            try:
+                pages = os.sysconf("SC_PHYS_PAGES")
+                page_size = os.sysconf("SC_PAGE_SIZE")
+                system_total_mem_mb = (pages * page_size) // (1024 * 1024)
+            except Exception:
+                pass
+
+        try:
+            system_total_cpus = float(os.cpu_count() or 2)
+        except Exception:
+            pass
+
+        # 1. Mémoire maximale
+        if host_max_memory_mb is not None:
+            resolved_mem = host_max_memory_mb
+            mem_source = f"explicit_parameter ({host_max_memory_mb} MB)"
+        elif "ORSO_HOST_MAX_MEMORY_MB" in os.environ:
+            resolved_mem = int(os.environ["ORSO_HOST_MAX_MEMORY_MB"])
+            mem_source = f"env_ORSO_HOST_MAX_MEMORY_MB ({resolved_mem} MB)"
+        elif system_total_mem_mb and not explicit_flavor:
+            resolved_mem = max(512, system_total_mem_mb - reserved_sys_mem)
+            mem_source = f"host_physical_probe:meminfo ({system_total_mem_mb}MB total - {reserved_sys_mem}MB reserve = {resolved_mem}MB)"
+        elif flavor_spec:
+            resolved_mem = max(512, flavor_spec["ram_mb"] - reserved_sys_mem)
+            mem_source = f"ovh_catalog_flavor:{flavor_name} ({flavor_spec['ram_mb']}MB - {reserved_sys_mem}MB reserve = {resolved_mem}MB)"
+        elif system_total_mem_mb:
+            resolved_mem = max(512, system_total_mem_mb - reserved_sys_mem)
+            mem_source = f"host_physical_probe ({system_total_mem_mb}MB - {reserved_sys_mem}MB reserve = {resolved_mem}MB)"
+        else:
+            resolved_mem = 3072
+            mem_source = "default_fallback (3072 MB)"
+
+        # 2. CPU maximal (avec ratio de surallocation pour conteneurs I/O bound)
+        if host_max_cpus is not None:
+            resolved_cpus = float(host_max_cpus)
+            cpu_source = f"explicit_parameter ({resolved_cpus} vCPUs)"
+        elif "ORSO_HOST_MAX_CPUS" in os.environ:
+            resolved_cpus = float(os.environ["ORSO_HOST_MAX_CPUS"])
+            cpu_source = f"env_ORSO_HOST_MAX_CPUS ({resolved_cpus} vCPUs)"
+        elif system_total_cpus and not explicit_flavor:
+            resolved_cpus = round(system_total_cpus * cpu_overcommit, 2)
+            cpu_source = f"host_physical_probe:cpu_count ({system_total_cpus} vCPUs x {cpu_overcommit} overcommit = {resolved_cpus} vCPUs)"
+        elif flavor_spec:
+            base_cpus = float(flavor_spec["vcpus"])
+            resolved_cpus = round(base_cpus * cpu_overcommit, 2)
+            cpu_source = f"ovh_catalog_flavor:{flavor_name} ({base_cpus} vCPUs x {cpu_overcommit} overcommit = {resolved_cpus} vCPUs)"
+        elif system_total_cpus:
+            resolved_cpus = round(system_total_cpus * cpu_overcommit, 2)
+            cpu_source = f"host_physical_probe ({system_total_cpus} vCPUs x {cpu_overcommit} overcommit = {resolved_cpus} vCPUs)"
+        else:
+            resolved_cpus = 2.0
+            cpu_source = "default_fallback (2.0 vCPUs)"
+
+        # 3. Conteneurs max
+        if host_max_containers is not None:
+            resolved_containers = host_max_containers
+        elif "ORSO_HOST_MAX_CONTAINERS" in os.environ:
+            resolved_containers = int(os.environ["ORSO_HOST_MAX_CONTAINERS"])
+        elif flavor_spec:
+            resolved_containers = flavor_spec.get("capacity_agents", 4)
+        else:
+            resolved_containers = 4
+
+        return {
+            "max_memory_mb": resolved_mem,
+            "max_cpus": resolved_cpus,
+            "max_containers": resolved_containers,
+            "memory_source": mem_source,
+            "cpu_source": cpu_source,
+            "system_total_mem_mb": system_total_mem_mb,
+            "system_available_mem_mb": system_avail_mem_mb,
+            "system_total_cpus": system_total_cpus,
+            "flavor_name": flavor_name,
+            "reserved_system_mem_mb": reserved_sys_mem,
+        }
 
     def get_tenant_space_dir(self, tenant_slug: str) -> Path:
         """Retourne le chemin vers le dossier d'espace d'agents propre au client (KAN-58)."""
@@ -333,8 +425,6 @@ class DockerLifecycleManager:
             # Inspection des conteneurs réels sur le démon Docker
             proc = self._exec_docker([
                 "ps", "-a",
-                "--filter", "label=com.orso.managed=true",
-                "--filter", "label=com.orso.role=client_backend",
                 "--format", "{{json .}}",
             ], timeout=10.0)
             if proc.returncode == 0 and proc.stdout.strip():
@@ -357,31 +447,41 @@ class DockerLifecycleManager:
                             raw_nano_cpus = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
                             status = parts[3] if len(parts) > 3 else "unknown"
 
-                            mem_label = labels.get("com.orso.quotas.memory")
-                            if mem_label:
-                                mem_mb = parse_memory_str_to_mb(mem_label)
-                            elif raw_mem_bytes > 0:
-                                mem_mb = int(raw_mem_bytes / (1024 * 1024))
-                            else:
-                                mem_mb = 0
+                            is_client = "orso_client" in c_name or labels.get("com.orso.role") == "client_backend"
+                            is_managed = labels.get("com.orso.managed") == "true"
 
-                            cpu_label = labels.get("com.orso.quotas.cpus")
-                            if cpu_label:
-                                cpus = parse_cpus_str_to_float(cpu_label)
-                            elif raw_nano_cpus > 0:
-                                cpus = round(raw_nano_cpus / 1e9, 2)
-                            else:
-                                cpus = 0.0
+                            if is_managed or is_client:
+                                mem_label = labels.get("com.orso.quotas.memory")
+                                if mem_label:
+                                    mem_mb = parse_memory_str_to_mb(mem_label)
+                                elif raw_mem_bytes > 0:
+                                    mem_mb = int(raw_mem_bytes / (1024 * 1024))
+                                elif is_client:
+                                    # Conteneur client sans quota explicite : comptabilisé au socle par défaut (512 Mo)
+                                    mem_mb = 512
+                                else:
+                                    mem_mb = 0
 
-                            allocated_memory_mb += mem_mb
-                            allocated_cpus += cpus
-                            managed_containers.append({
-                                "name": c_name,
-                                "slug": labels.get("com.orso.tenant_slug", ""),
-                                "memory_mb": mem_mb,
-                                "cpus": cpus,
-                                "status": status,
-                            })
+                                cpu_label = labels.get("com.orso.quotas.cpus")
+                                if cpu_label:
+                                    cpus = parse_cpus_str_to_float(cpu_label)
+                                elif raw_nano_cpus > 0:
+                                    cpus = round(raw_nano_cpus / 1e9, 2)
+                                elif is_client:
+                                    cpus = 0.5
+                                else:
+                                    cpus = 0.0
+
+                                allocated_memory_mb += mem_mb
+                                allocated_cpus += cpus
+                                managed_containers.append({
+                                    "name": c_name,
+                                    "slug": labels.get("com.orso.tenant_slug") or c_name.replace("orso_client_", ""),
+                                    "memory_mb": mem_mb,
+                                    "cpus": cpus,
+                                    "status": status,
+                                    "unbridled": (not mem_label and raw_mem_bytes == 0),
+                                })
                     except Exception as e:
                         _log.debug("Erreur parsing conteneur pour quotas: %s", e)
 
@@ -407,12 +507,21 @@ class DockerLifecycleManager:
         return {
             "host_max_memory_mb": self.host_max_memory_mb,
             "host_max_cpus": self.host_max_cpus,
+            "host_capacity_source": self.host_capacity_info.get("memory_source", "default"),
+            "host_cpu_source": self.host_capacity_info.get("cpu_source", "default"),
+            "host_flavor": self.host_flavor,
             "allocated_memory_mb": allocated_memory_mb,
             "allocated_cpus": round(allocated_cpus, 2),
             "available_memory_mb": available_memory_mb,
             "available_cpus": available_cpus,
             "containers_count": len(managed_containers),
             "containers": managed_containers,
+            "system_metrics": {
+                "system_total_mem_mb": self.host_capacity_info.get("system_total_mem_mb"),
+                "system_available_mem_mb": self.host_capacity_info.get("system_available_mem_mb"),
+                "system_total_cpus": self.host_capacity_info.get("system_total_cpus"),
+                "reserved_system_mem_mb": self.host_capacity_info.get("reserved_system_mem_mb"),
+            },
         }
 
     def check_host_admission(
@@ -440,6 +549,8 @@ class DockerLifecycleManager:
             "requested_cpus": req_cpus,
             "host_max_memory_mb": usage["host_max_memory_mb"],
             "host_max_cpus": usage["host_max_cpus"],
+            "host_capacity_source": usage.get("host_capacity_source"),
+            "host_cpu_source": usage.get("host_cpu_source"),
             "current_allocated_memory_mb": current_alloc_mem,
             "current_allocated_cpus": round(current_alloc_cpus, 2),
             "available_memory_mb": max(0, usage["host_max_memory_mb"] - current_alloc_mem),

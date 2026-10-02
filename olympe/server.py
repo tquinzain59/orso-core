@@ -249,6 +249,17 @@ async def provision_tenant(req: ProvisionRequest, admin: Dict[str, Any] = Depend
     if not res.get("success"):
         err_code = res.get("error", "ERR_PROVISION_FAILED")
         err_msg = res.get("message") or res.get("error", "Échec du provisioning de l'environnement.")
+        if err_code == "ERR_HOST_CAPACITY_EXCEEDED":
+            ops_manager.record_audit_event(
+                admin,
+                "provision_refused_capacity",
+                req.tenant_slug,
+                details={
+                    "error": err_code,
+                    "message": err_msg,
+                    "capacity_details": res.get("capacity_details"),
+                },
+            )
         status_code = 400 if err_code in (
             "ERR_NO_LOCAL_DOCKER_DELEGATED_HOST_REQUIRED",
             "ERR_HOST_CAPACITY_EXCEEDED",

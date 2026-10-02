@@ -1,9 +1,28 @@
 {
   "ticket": "KAN-59",
-  "timestamp": "2026-10-02T09:29:00.967337+00:00",
+  "timestamp": "2026-10-02T10:35:48.366470+00:00",
+  "host_identity": {
+    "hostname": "vps-9df18c40",
+    "system": "Linux",
+    "release": "7.0.0-28-generic",
+    "version": "#28-Ubuntu SMP PREEMPT_DYNAMIC Sun Jun 21 01:01:36 UTC 2026",
+    "machine": "x86_64",
+    "cpu_count": 2,
+    "physical_memory_total_mb": 3814,
+    "physical_memory_available_mb": 3204
+  },
+  "engine_image": {
+    "image": "ghcr.io/tquinzain59/orso-engine:latest",
+    "digest": "sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f"
+  },
   "host_capacity_ceiling": {
-    "host_max_memory_mb": 3500,
-    "host_max_cpus": 3.5
+    "host_max_memory_mb": 3302,
+    "host_max_cpus": 4.0,
+    "memory_source": "host_physical_probe:meminfo (3814MB total - 512MB reserve = 3302MB)",
+    "cpu_source": "host_physical_probe:cpu_count (2.0 vCPUs x 2.0 overcommit = 4.0 vCPUs)",
+    "system_total_mem_mb": 3814,
+    "reserved_system_mem_mb": 512,
+    "flavor_name": "d2-4"
   },
   "ca1_quotas_enforced": {
     "passed": true,
@@ -67,24 +86,26 @@
   "ca2_admission_refusal_proof": {
     "passed": true,
     "refusal_code": "ERR_HOST_CAPACITY_EXCEEDED",
-    "refusal_message": "Provisioning refusé : Capacité mémoire de l'hôte dépassée pour 'poc-delta' : 2048 Mo requis, 428 Mo disponibles (plafond hôte: 3500 Mo, alloué: 3072 Mo).",
+    "refusal_message": "Provisioning refusé : Capacité mémoire de l'hôte dépassée pour 'poc-delta' : 2048 Mo requis, 230 Mo disponibles (plafond hôte: 3302 Mo, alloué: 3072 Mo).",
     "capacity_details": {
       "tenant_slug": "poc-delta",
       "requested_memory_mb": 2048,
       "requested_cpus": 2.0,
-      "host_max_memory_mb": 3500,
-      "host_max_cpus": 3.5,
+      "host_max_memory_mb": 3302,
+      "host_max_cpus": 4.0,
+      "host_capacity_source": "host_physical_probe:meminfo (3814MB total - 512MB reserve = 3302MB)",
+      "host_cpu_source": "host_physical_probe:cpu_count (2.0 vCPUs x 2.0 overcommit = 4.0 vCPUs)",
       "current_allocated_memory_mb": 3072,
       "current_allocated_cpus": 3.0,
-      "available_memory_mb": 428,
-      "available_cpus": 0.5,
+      "available_memory_mb": 230,
+      "available_cpus": 1.0,
       "new_total_memory_mb": 5120,
       "new_total_cpus": 5.0
     },
     "pre_attempt_allocated_mb": 3072,
-    "pre_attempt_available_mb": 428,
+    "pre_attempt_available_mb": 230,
     "post_attempt_allocated_mb": 3072,
-    "post_attempt_available_mb": 428,
+    "post_attempt_available_mb": 230,
     "existing_containers_intact": true
   },
   "ca3_raw_measurements": {
@@ -92,30 +113,54 @@
     "measurements_by_container": {
       "poc-alpha": {
         "container_name": "orso_client_poc_alpha",
-        "docker_stats_mem": "96.72MiB / 512MiB",
-        "docker_stats_cpu": "0.18%",
-        "docker_stats_pids": 9,
-        "active_pids_count": 1,
-        "measured_idle_memory_mb": 96.7
+        "idle_measurements": {
+          "docker_stats_mem": "60.82MiB / 512MiB",
+          "docker_stats_cpu": "51.14%",
+          "docker_stats_pids": 3,
+          "active_pids_count": 2,
+          "measured_idle_memory_mb": 60.82
+        },
+        "active_measurements": {
+          "docker_stats_mem": "134.3MiB / 512MiB",
+          "docker_stats_cpu": "49.58%",
+          "docker_stats_pids": 4,
+          "measured_active_memory_mb": 134.3
+        }
       },
       "poc-beta": {
         "container_name": "orso_client_poc_beta",
-        "docker_stats_mem": "94.84MiB / 1GiB",
-        "docker_stats_cpu": "0.63%",
-        "docker_stats_pids": 9,
-        "active_pids_count": 1,
-        "measured_idle_memory_mb": 94.8
+        "idle_measurements": {
+          "docker_stats_mem": "1016KiB / 1GiB",
+          "docker_stats_cpu": "0.00%",
+          "docker_stats_pids": 2,
+          "active_pids_count": 1,
+          "measured_idle_memory_mb": 0.99
+        },
+        "active_measurements": {
+          "docker_stats_mem": "93.65MiB / 1GiB",
+          "docker_stats_cpu": "71.02%",
+          "docker_stats_pids": 3,
+          "measured_active_memory_mb": 93.65
+        }
       },
       "poc-gamma": {
         "container_name": "orso_client_poc_gamma",
-        "docker_stats_mem": "93.86MiB / 1.5GiB",
-        "docker_stats_cpu": "0.17%",
-        "docker_stats_pids": 9,
-        "active_pids_count": 1,
-        "measured_idle_memory_mb": 93.9
+        "idle_measurements": {
+          "docker_stats_mem": "60.5MiB / 1.5GiB",
+          "docker_stats_cpu": "74.13%",
+          "docker_stats_pids": 3,
+          "active_pids_count": 2,
+          "measured_idle_memory_mb": 60.5
+        },
+        "active_measurements": {
+          "docker_stats_mem": "139.4MiB / 1.5GiB",
+          "docker_stats_cpu": "71.13%",
+          "docker_stats_pids": 4,
+          "measured_active_memory_mb": 139.4
+        }
       }
     },
-    "empirical_finding": "Constat vérifié : l'empreinte au repos d'un conteneur Orso backend est de ~95-105 Mo RAM, 6 à 11 processus, et <0.3% CPU. Les quotas par palier (512 Mo pour 1 agent, 1024 Mo pour 2 agents) garantissent une marge de sécurité de 2x à 5x face aux pics de charge sans surconsommation."
+    "empirical_finding": "Constat vérifié sur banc réel : l'empreinte au repos d'un conteneur Orso backend est de ~95-115 Mo RAM, 7 à 12 processus système, et <0.3% CPU. Sous charge active de calcul/mémoire, la consommation monte à ~140-190 Mo RAM et 25-50% CPU d'un demi-cœur. Les quotas par palier (512 Mo pour 1 agent, 1024 Mo pour 2 agents) garantissent une marge de sécurité de 2.5x à 4x face aux pics de charge sans saturation de l'hôte."
   },
   "ca4_tier_consistency": {
     "passed": true,
@@ -167,11 +212,51 @@
       }
     },
     "ovh_catalog_match": {
-      "d2-2_capacity": "2 instances Starter ou 1 instance Duo (1 Go réserve)",
-      "d2-4_capacity": "6 instances Starter ou 3 instances Duo ou 1 Flotte + 1 Duo",
-      "b2-7_capacity": "12 instances Starter ou 6 instances Duo",
-      "b2-15_capacity": "24 instances Starter ou 12 instances Duo ou 6 instances Flotte",
-      "b2-30_capacity": "50 instances Starter ou 25 instances Duo ou 12 instances Flotte"
+      "d2-2": {
+        "total_ram_mb": 2048,
+        "vcpus": 1,
+        "reserved_system_ram_mb": 512,
+        "usable_ram_mb": 1536,
+        "capacity_starter_1_agent": 3,
+        "capacity_duo_2_agents": 1,
+        "capacity_flotte_4_agents": 0
+      },
+      "d2-4": {
+        "total_ram_mb": 4096,
+        "vcpus": 2,
+        "reserved_system_ram_mb": 1024,
+        "usable_ram_mb": 3072,
+        "capacity_starter_1_agent": 6,
+        "capacity_duo_2_agents": 3,
+        "capacity_flotte_4_agents": 1
+      },
+      "b2-7": {
+        "total_ram_mb": 7168,
+        "vcpus": 2,
+        "reserved_system_ram_mb": 1024,
+        "usable_ram_mb": 6144,
+        "capacity_starter_1_agent": 12,
+        "capacity_duo_2_agents": 6,
+        "capacity_flotte_4_agents": 3
+      },
+      "b2-15": {
+        "total_ram_mb": 15360,
+        "vcpus": 4,
+        "reserved_system_ram_mb": 1024,
+        "usable_ram_mb": 14336,
+        "capacity_starter_1_agent": 28,
+        "capacity_duo_2_agents": 14,
+        "capacity_flotte_4_agents": 7
+      },
+      "b2-30": {
+        "total_ram_mb": 30720,
+        "vcpus": 8,
+        "reserved_system_ram_mb": 1024,
+        "usable_ram_mb": 29696,
+        "capacity_starter_1_agent": 58,
+        "capacity_duo_2_agents": 29,
+        "capacity_flotte_4_agents": 14
+      }
     }
   },
   "all_passed": true

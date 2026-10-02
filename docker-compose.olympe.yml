@@ -59,6 +59,11 @@ services:
       - OVH_CONSUMER_KEY=${OVH_CONSUMER_KEY:-}
       - OVH_CLOUD_PROJECT_ID=${OVH_CLOUD_PROJECT_ID:-}
       - OVH_ENDPOINT=${OVH_ENDPOINT:-ovh-eu}
+      # Capacité matérielle et contrôle d'admission hôte (KAN-59)
+      - ORSO_HOST_FLAVOR=${ORSO_HOST_FLAVOR:-d2-4}
+      - ORSO_HOST_MAX_MEMORY_MB=${ORSO_HOST_MAX_MEMORY_MB:-}
+      - ORSO_HOST_MAX_CPUS=${ORSO_HOST_MAX_CPUS:-}
+      - ORSO_CPU_OVERCOMMIT_RATIO=${ORSO_CPU_OVERCOMMIT_RATIO:-2.0}
     volumes:
       # Accès à la socket Docker pour lancer / réveiller les conteneurs clients
       - /var/run/docker.sock:/var/run/docker.sock
@@ -103,6 +108,15 @@ services:
       com.orso.role: "client_backend"
       com.orso.tenant_id: "f3e25379-6531-479e-b276-3b3185e7421b"
       com.orso.tenant_slug: "financia-solutions"
+      com.orso.quotas.memory: "512m"
+      com.orso.quotas.cpus: "0.5"
+      com.orso.quotas.pids: "100"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+          pids: 100
     networks:
       orso_network:
         aliases:
