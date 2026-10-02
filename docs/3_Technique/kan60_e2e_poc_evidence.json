@@ -1,7 +1,14 @@
 {
   "ticket": "KAN-60",
   "title": "POC 3 - Artefact d'espace client : construction, empreinte et montage",
-  "timestamp": "2026-10-02T16:47:36.063944+00:00",
+  "timestamp": "2026-10-02T17:06:33.118834+00:00",
+  "host_telemetry": {
+    "hostname": "vps-9df18c40",
+    "kernel": "Linux vps-9df18c40 7.0.0-28-generic #28-Ubuntu SMP PREEMPT_DYNAMIC Sun Jun 21 01:01:36 UTC 2026 x86_64 GNU/Linux",
+    "docker_version": "Docker version 29.8.1, build 4a63305",
+    "target_host_ip": "57.131.196.106",
+    "target_host_name": "vps-9df18c40.vps.ovh.net"
+  },
   "docker_available": true,
   "ca1_artifacts_versioning": {
     "passed": true,
@@ -10,46 +17,46 @@
     "details": {
       "poc-alpha": {
         "version": "1.0.0",
-        "fingerprint": "sha256:f0c1226bd0d7f58e488c24329922b29b8dd4b9823016cf69f45fa553117f196f",
-        "content_fingerprint": "sha256:86b92ca436edf58d7e6a8a202354bbe1742f1949cd594ed6e6e48f37d32f9c14",
+        "fingerprint": "sha256:e8f3830f9909ff6d6ab27c8953137a1db72f2aad6e9aac77b0549bcff8d2e235",
+        "content_fingerprint": "sha256:23bb142650b14a13d06eb3eaee13b864389a798129f0c56e3908408338d30a27",
         "archive_size_bytes": 664,
         "files_count": 4,
-        "archive_path": "/Users/tquinzain/Documents/Dev Projects/orso-core/data/artifacts_poc_kan60/poc-alpha/1.0.0/client-space-poc-alpha-1.0.0.tar.gz",
+        "archive_path": "/home/ubuntu/orso-poc-kan60/data/artifacts_poc_kan60/poc-alpha/1.0.0/client-space-poc-alpha-1.0.0.tar.gz",
         "is_cryptographically_valid": true,
         "contents_summary": [
           "config/hermes.yaml (7d4ab2cd2eb29b71..., 158 o)",
           "profiles/jerome/SOUL.md (56a15b0f89139151..., 134 o)",
-          "profiles/personas.lock.json (135b18851240e7e9..., 229 o)",
+          "profiles/personas.lock.json (883f17caa4e85723..., 229 o)",
           "skills/reconciliation_poc-alpha.py (56e4a3cb719b6571..., 139 o)"
         ]
       },
       "poc-beta": {
         "version": "1.0.0",
-        "fingerprint": "sha256:46dc4d60d63dfa7cb9f62a1fa02b66736c4544aa6a4c79cd4f40ac3a678bdffe",
-        "content_fingerprint": "sha256:d233c89c5661168a354af1905432f2d47ba21a1e9a319c3e2805eb1188e4f70e",
-        "archive_size_bytes": 661,
+        "fingerprint": "sha256:e126681784538cc283c4f9095115026fd32e0129af3e71db3a0154de5a6cc4ed",
+        "content_fingerprint": "sha256:baf7cd587903c579f9bd252f3b5d9a1d2e8f989cc85086395dce4707a1037333",
+        "archive_size_bytes": 660,
         "files_count": 4,
-        "archive_path": "/Users/tquinzain/Documents/Dev Projects/orso-core/data/artifacts_poc_kan60/poc-beta/1.0.0/client-space-poc-beta-1.0.0.tar.gz",
+        "archive_path": "/home/ubuntu/orso-poc-kan60/data/artifacts_poc_kan60/poc-beta/1.0.0/client-space-poc-beta-1.0.0.tar.gz",
         "is_cryptographically_valid": true,
         "contents_summary": [
           "config/hermes.yaml (fc0a40d27d2f2530..., 155 o)",
           "profiles/jerome/SOUL.md (601f22a5c2ee5142..., 133 o)",
-          "profiles/personas.lock.json (a3b68187ac0cc904..., 228 o)",
+          "profiles/personas.lock.json (df119cf6ced50c62..., 228 o)",
           "skills/reconciliation_poc-beta.py (19c945bbdc2b3ce7..., 137 o)"
         ]
       },
       "poc-gamma": {
         "version": "1.0.0",
-        "fingerprint": "sha256:68174b4d59f5e64e701898c30fac1bd8da5fc6870addc37eebe6601a0c58d4c7",
-        "content_fingerprint": "sha256:1acb7aa57cf743e59b45e7ac67334bcf78175eb53e7c305216f7ba05b37df5ad",
+        "fingerprint": "sha256:fb321d39d976fb85041cf11fbea8af9a22aaa92653cadb1cb8bea62ab9132632",
+        "content_fingerprint": "sha256:e1be87e57527309684950f252afc9a6f00e070d26d2a8818bf47bbeaccbe4310",
         "archive_size_bytes": 664,
         "files_count": 4,
-        "archive_path": "/Users/tquinzain/Documents/Dev Projects/orso-core/data/artifacts_poc_kan60/poc-gamma/1.0.0/client-space-poc-gamma-1.0.0.tar.gz",
+        "archive_path": "/home/ubuntu/orso-poc-kan60/data/artifacts_poc_kan60/poc-gamma/1.0.0/client-space-poc-gamma-1.0.0.tar.gz",
         "is_cryptographically_valid": true,
         "contents_summary": [
           "config/hermes.yaml (788ef2da8fa24f27..., 158 o)",
           "profiles/jerome/SOUL.md (18f8b3c6fe79bc54..., 134 o)",
-          "profiles/personas.lock.json (0483b9a01c7f715d..., 229 o)",
+          "profiles/personas.lock.json (7a4cef8d95a6bbc3..., 229 o)",
           "skills/reconciliation_poc-gamma.py (4eb63ad9e1ce100a..., 139 o)"
         ]
       }
@@ -87,8 +94,8 @@
   "ca3_rollback_replay": {
     "passed": true,
     "target_tenant": "poc-alpha",
-    "v1_fingerprint": "sha256:f0c1226bd0d7f58e488c24329922b29b8dd4b9823016cf69f45fa553117f196f",
-    "v2_fingerprint": "sha256:d7e6054d631395a5acd3bda11ddf0e71ee24addfe4c2ffa6b85b719e2a998ffb",
+    "v1_fingerprint": "sha256:e8f3830f9909ff6d6ab27c8953137a1db72f2aad6e9aac77b0549bcff8d2e235",
+    "v2_fingerprint": "sha256:548ad740ae2c476e064ba8efb10e9d6108154fc51c345d2a4f6d09eb28b7a599",
     "v2_active_after_deploy": true,
     "v1_restored_after_rollback": true,
     "v2_purged_after_rollback": true,

@@ -99,6 +99,32 @@ def _create_initial_space_source(base_dir: Path, tenant_slug: str, version: str 
     return space_dir
 
 
+def _force_rmtree(path: Path):
+    """Supprime un répertoire même s'il contient des fichiers ou sous-dossiers scellés en 0555/0444."""
+    if not path.exists():
+        return
+    for root, dirs, files in os.walk(path, topdown=False):
+        for f in files:
+            p = Path(root) / f
+            try:
+                p.chmod(0o644)
+                p.unlink()
+            except Exception:
+                pass
+        for d in dirs:
+            p = Path(root) / d
+            try:
+                p.chmod(0o755)
+                p.rmdir()
+            except Exception:
+                pass
+    try:
+        path.chmod(0o755)
+        path.rmdir()
+    except Exception:
+        pass
+
+
 def main():
     _log.info("Démarrage de l'exécution réelle du POC KAN-60 (Artefact d'espace client)...")
 
@@ -107,10 +133,9 @@ def main():
     poc_artifacts_root = PROJECT_ROOT / "data" / "artifacts_poc_kan60"
     poc_sources_root = PROJECT_ROOT / "data" / "sources_poc_kan60"
 
-    # Nettoyage initial
+    # Nettoyage initial robuste contre les permissions 0555/0444
     for d in [poc_data_root, poc_spaces_root, poc_artifacts_root, poc_sources_root]:
-        if d.exists():
-            shutil.rmtree(d, ignore_errors=True)
+        _force_rmtree(d)
         d.mkdir(parents=True, exist_ok=True)
 
     manager = DockerLifecycleManager(
@@ -123,10 +148,21 @@ def main():
     has_docker = manager.has_docker
     _log.info("Environnement d'exécution : Démon Docker = %s", has_docker)
 
+    host_uname = subprocess.run(["uname", "-a"], capture_output=True, text=True, encoding="utf-8", errors="replace").stdout.strip()
+    host_name = subprocess.run(["hostname"], capture_output=True, text=True, encoding="utf-8", errors="replace").stdout.strip()
+    docker_ver = subprocess.run(["docker", "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace").stdout.strip()
+
     evidence = {
         "ticket": "KAN-60",
         "title": "POC 3 - Artefact d'espace client : construction, empreinte et montage",
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "host_telemetry": {
+            "hostname": host_name,
+            "kernel": host_uname,
+            "docker_version": docker_ver,
+            "target_host_ip": os.environ.get("ORSO_HOST_IP", "57.131.196.106"),
+            "target_host_name": "vps-9df18c40.vps.ovh.net",
+        },
         "docker_available": has_docker,
         "ca1_artifacts_versioning": {},
         "ca2_readonly_mount": {},
@@ -414,6 +450,10 @@ def main():
             _log.info("Nettoyage des conteneurs de test POC...")
             for slug in ["poc-alpha", "poc-beta", "poc-gamma", "client-mod"]:
                 manager.teardown_tenant(slug, remove_data=True)
+
+        # Nettoyage des dossiers de test temporaires
+        for d in [poc_data_root, poc_spaces_root, poc_artifacts_root, poc_sources_root]:
+            _force_rmtree(d)
 
         # Écriture du fichier de preuves JSON
         out_evidence = PROJECT_ROOT / "docs" / "3_Technique" / "kan60_e2e_poc_evidence.json"

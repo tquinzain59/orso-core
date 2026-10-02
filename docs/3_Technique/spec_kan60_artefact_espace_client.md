@@ -59,21 +59,22 @@ Conformément à la contrainte du ticket KAN-60, l'**Option B (Extraction Contr�
 
 ## 3. Déclinaison des 4 Critères d'Acceptation et Preuves Réelles
 
-Toutes les preuves ci-dessous ont été produites en direct lors de l'exécution du harnais officiel (`scripts/poc/execute_kan60_poc.py`) sur trois conteneurs réels en service (`orso_client_poc_alpha`, `orso_client_poc_beta`, `orso_client_poc_gamma`) :
+Toutes les preuves ci-dessous ont été produites en direct sur l'hôte dédié du POC (`vps-9df18c40`, IP `57.131.196.106`, Linux 7.0.0-28-generic, Docker 29.8.1) lors de l'exécution du harnais officiel (`scripts/poc/execute_kan60_poc.py`) sur trois conteneurs réels en service (`orso_client_poc_alpha`, `orso_client_poc_beta`, `orso_client_poc_gamma`) :
 
 ### CA1 : Chaque espace client est produit depuis un artefact versionné et identifiable par une empreinte
 - **Règle** : Les 3 espaces clients du POC doivent être construits sous forme d'artefacts versionnés et posséder des empreintes SHA-256 distinctes et reproductibles.
 - **Preuve factuelle issue du rapport `kan60_e2e_poc_evidence.json`** :
+  - **Hôte d'exécution** : `vps-9df18c40` (Noyau `7.0.0-28-generic`, Docker `29.8.1`, IP `57.131.196.106`).
   - **Espace `poc-alpha` (v1.0.0)** :
-    - Empreinte : `sha256:f0c1226bd0d7f58e488c24329922b29b8dd4b9823016cf69f45fa553117f196f`
+    - Empreinte : `sha256:e8f3830f9909ff6d6ab27c8953137a1db72f2aad6e9aac77b0549bcff8d2e235`
     - Fichiers : 4 fichiers (`config/hermes.yaml`, `profiles/jerome/SOUL.md`, `profiles/personas.lock.json`, `skills/reconciliation_poc-alpha.py`)
     - Taille archive : 664 octets
   - **Espace `poc-beta` (v1.0.0)** :
-    - Empreinte : `sha256:46dc4d60d63dfa7cb9f62a1fa02b66736c4544aa6a4c79cd4f40ac3a678bdffe`
+    - Empreinte : `sha256:e126681784538cc283c4f9095115026fd32e0129af3e71db3a0154de5a6cc4ed`
     - Fichiers : 4 fichiers
-    - Taille archive : 661 octets
+    - Taille archive : 660 octets
   - **Espace `poc-gamma` (v1.0.0)** :
-    - Empreinte : `sha256:68174b4d59f5e64e701898c30fac1bd8da5fc6870addc37eebe6601a0c58d4c7`
+    - Empreinte : `sha256:fb321d39d976fb85041cf11fbea8af9a22aaa92653cadb1cb8bea62ab9132632`
     - Fichiers : 4 fichiers
     - Taille archive : 664 octets
   - Les 3 empreintes sont 100 % uniques, vérifiées cryptographiquement avec intégrité validée.
@@ -93,7 +94,7 @@ Toutes les preuves ci-dessous ont été produites en direct lors de l'exécution
 ### CA3 : Une modification d'espace produit une nouvelle version, et le retour arrière est possible et rejoué
 - **Règle** : Une modification entraîne la construction d'une nouvelle version (v2.0.0) avec son empreinte propre. Le retour à la v1.0.0 restaure fidèlement l'état initial, redémarre le conteneur et purge la v2.
 - **Preuve factuelle** :
-  1. Construction de `poc-alpha` v2.0.0 : nouvelle empreinte `sha256:d7e6054d631395a5acd3bda11ddf0e71ee24addfe4c2ffa6b85b719e2a998ffb`.
+  1. Construction de `poc-alpha` v2.0.0 : nouvelle empreinte `sha256:548ad740ae2c476e064ba8efb10e9d6108154fc51c345d2a4f6d09eb28b7a599`.
   2. Déploiement de la v2.0.0 et redémarrage conteneur : `CALIBRATION V2 UPGRADE` active dans `/app/config/hermes.yaml`.
   3. Déclenchement du retour arrière : `manager.rollback_tenant_artifact("poc-alpha", "1.0.0")`.
   4. Redémarrage conteneur validé (`container_restarted: true, container_healthy: true`).
