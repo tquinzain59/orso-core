@@ -82,11 +82,29 @@ class ProvisionRequest(BaseModel):
     env_vars: Optional[Dict[str, str]] = Field(default_factory=dict, description="Variables d'environnement spécifiques")
     custom_space_dir: Optional[str] = Field(None, description="Chemin d'un espace d'agents personnalisé spécifique")
     use_dedicated_space: Optional[bool] = Field(True, description="Active l'espace d'agents propre et isolé (KAN-58)")
+    artifact_version: Optional[str] = Field(None, description="Version d'artefact d'espace client à déployer (KAN-60)")
+    artifact_digest: Optional[str] = Field(None, description="Empreinte SHA-256 de l'artefact d'espace client (KAN-60)")
 
 
 class RollbackSpaceRequest(BaseModel):
     backup_path: Optional[str] = Field(None, description="Chemin d'un backup spécifique à restaurer. Si omis, restaure la baseline.")
     restart_container: Optional[bool] = Field(True, description="Redémarre le conteneur du client si actif.")
+
+
+class BuildArtifactRequest(BaseModel):
+    version: str = Field(..., description="Numéro de version de l'artefact (ex: 1.0.0, 2.0.0)")
+    source_space_dir: Optional[str] = Field(None, description="Dossier source spécifique (par défaut, l'espace actuel)")
+    author: Optional[str] = Field("Olympe API", description="Auteur ou déclencheur du build")
+
+
+class DeployArtifactRequest(BaseModel):
+    version: str = Field(..., description="Numéro de version de l'artefact à déployer")
+    restart_container: Optional[bool] = Field(True, description="Redémarre le conteneur après extraction")
+
+
+class RollbackArtifactRequest(BaseModel):
+    target_version: str = Field(..., description="Version antérieure cible pour le retour arrière")
+    restart_container: Optional[bool] = Field(True, description="Redémarre le conteneur après le rollback")
 
 
 class CreateTenantOpsRequest(BaseModel):
@@ -245,6 +263,8 @@ async def provision_tenant(req: ProvisionRequest, admin: Dict[str, Any] = Depend
         env_vars=req.env_vars,
         custom_space_dir=req.custom_space_dir,
         use_dedicated_space=True if req.use_dedicated_space is None else req.use_dedicated_space,
+        artifact_version=req.artifact_version,
+        artifact_digest=req.artifact_digest,
     )
     if not res.get("success"):
         err_code = res.get("error", "ERR_PROVISION_FAILED")
@@ -302,6 +322,73 @@ async def rollback_space(
     except Exception as e:
         _log.error("Échec du rollback pour %s: %s", tenant_slug, e)
         raise HTTPException(status_code=500, detail=f"Échec du retour arrière : {str(e)}")
+
+
+# ── Gestion des Artefacts d'Espace Client (KAN-60 / POC 3) ───────────────────
+
+@app.get("/api/olympe/ops/tenants/{tenant_slug}/artifacts")
+async def list_tenant_artifacts(tenant_slug: str, admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Liste tous les artefacts d'espace client pour un tenant (KAN-60 / CA1)."""
+    versions = manager.artifact_manager.list_artifact_versions(tenant_slug)
+    return {"tenant_slug": tenant_slug, "versions": versions, "count": len(versions)}
+
+
+@app.get("/api/olympe/ops/tenants/{tenant_slug}/artifacts/{version}")
+async def get_tenant_artifact(tenant_slug: str, version: str, admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Inspecte un artefact spécifique et son manifeste (KAN-60 / CA1, CA4)."""
+    manifest = manager.artifact_manager.get_artifact_manifest(tenant_slug, version)
+    if not manifest:
+        raise HTTPException(status_code=404, detail=f"Artefact {version} introuvable pour {tenant_slug}")
+    is_valid, err, _ = manager.artifact_manager.verify_artifact(tenant_slug, version)
+    return {
+        "manifest": manifest,
+        "is_valid": is_valid,
+        "verification_error": err,
+    }
+
+
+@app.post("/api/olympe/ops/tenants/{tenant_slug}/artifacts/build")
+async def build_tenant_artifact(tenant_slug: str, req: BuildArtifactRequest, admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Construit un artefact scellé et versionné depuis l'espace client (KAN-60 / CA1, CA4)."""
+    source_dir = req.source_space_dir or str(manager.get_tenant_space_dir(tenant_slug))
+    if not Path(source_dir).is_dir():
+        manager._initialize_tenant_space(tenant_slug, Path(source_dir))
+    try:
+        manifest = manager.artifact_manager.build_artifact(
+            tenant_slug=tenant_slug,
+            version=req.version,
+            source_dir=source_dir,
+            author=req.author or "Olympe API",
+        )
+        return {"success": True, "manifest": manifest}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/olympe/ops/tenants/{tenant_slug}/artifacts/deploy")
+async def deploy_tenant_artifact_route(tenant_slug: str, req: DeployArtifactRequest, admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Déploie une version d'artefact dans l'espace client et actualise le conteneur (KAN-60 / CA2)."""
+    res = manager.deploy_tenant_artifact(
+        tenant_slug=tenant_slug,
+        version=req.version,
+        restart_container=True if req.restart_container is None else req.restart_container,
+    )
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("message") or "Erreur lors du déploiement")
+    return res
+
+
+@app.post("/api/olympe/ops/tenants/{tenant_slug}/artifacts/rollback")
+async def rollback_tenant_artifact_route(tenant_slug: str, req: RollbackArtifactRequest, admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Exécute un retour arrière vers une version d'artefact antérieure (KAN-60 / CA3)."""
+    res = manager.rollback_tenant_artifact(
+        tenant_slug=tenant_slug,
+        target_version=req.target_version,
+        restart_container=True if req.restart_container is None else req.restart_container,
+    )
+    if not res.get("success"):
+        raise HTTPException(status_code=400, detail=res.get("message") or "Erreur lors du rollback")
+    return res
 
 
 @app.get("/api/olympe/telemetry/summary")
