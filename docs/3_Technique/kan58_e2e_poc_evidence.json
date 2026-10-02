@@ -1,0 +1,92 @@
+{
+  "ticket": "KAN-58",
+  "timestamp": "2026-10-02T09:04:19.292575+00:00",
+  "engine_image": "orso-core-orso-backend:latest",
+  "engine_digest": "sha256:41654b58b210207160a9dbb152576ac6530f2f4d5363d10f4d749f4de70b812d",
+  "ca1_no_shared_mounts": {
+    "passed": true,
+    "ab_shared_count": 0,
+    "ac_shared_count": 0,
+    "bc_shared_count": 0,
+    "illegal_common_mounts": [],
+    "mounts_by_container": {
+      "poc-alpha": [
+        "/app/data <- /Users/tquinzain/Documents/Dev Projects/orso-core/data/tenants_poc_kan58/poc-alpha",
+        "/app/config <- /Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-alpha/config",
+        "/app/skills <- /Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-alpha/skills",
+        "/app/profiles <- /Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-alpha/profiles",
+        "/app/data/hermes_home/profiles <- /Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-alpha/profiles",
+        "/home/orso/.hermes/profiles <- /Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-alpha/profiles"
+      ],
+      "poc-beta": [
+        "/home/orso/.hermes/profiles <- /Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-beta/profiles",
+        "/app/data <- /Users/tquinzain/Documents/Dev Projects/orso-core/data/tenants_poc_kan58/poc-beta",
+        "/app/config <- /Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-beta/config",
+        "/app/skills <- /Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-beta/skills",
+        "/app/profiles <- /Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-beta/profiles",
+        "/app/data/hermes_home/profiles <- /Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-beta/profiles"
+      ],
+      "poc-gamma": [
+        "/app/data <- /Users/tquinzain/Documents/Dev Projects/orso-core/data/tenants_poc_kan58/poc-gamma",
+        "/app/config <- /Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-gamma/config",
+        "/app/skills <- /Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-gamma/skills",
+        "/app/profiles <- /Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-gamma/profiles",
+        "/app/data/hermes_home/profiles <- /Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-gamma/profiles",
+        "/home/orso/.hermes/profiles <- /Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-gamma/profiles"
+      ]
+    }
+  },
+  "ca2_isolation_witness": {
+    "passed": true,
+    "witness_file": "witness_secret_alpha_kan58.txt",
+    "alpha_container_result": "FOUND_AND_VERIFIED",
+    "beta_container_result": "NOT_FOUND_STRICT",
+    "gamma_container_result": "NOT_FOUND_STRICT",
+    "beta_stderr": "cat: /app/skills/witness_secret_alpha_kan58.txt: No such file or directory",
+    "gamma_stderr": "cat: /app/skills/witness_secret_alpha_kan58.txt: No such file or directory"
+  },
+  "ca3_profiles_convergence": {
+    "passed": true,
+    "details": {
+      "poc-alpha": {
+        "passed": true,
+        "expected_source": "/Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-alpha/profiles",
+        "observed_mounts": {
+          "/app/profiles": "/Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-alpha/profiles",
+          "/app/data/hermes_home/profiles": "/Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-alpha/profiles",
+          "/home/orso/.hermes/profiles": "/Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-alpha/profiles"
+        },
+        "profiles_readable_in_container": true
+      },
+      "poc-beta": {
+        "passed": true,
+        "expected_source": "/Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-beta/profiles",
+        "observed_mounts": {
+          "/home/orso/.hermes/profiles": "/Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-beta/profiles",
+          "/app/profiles": "/Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-beta/profiles",
+          "/app/data/hermes_home/profiles": "/Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-beta/profiles"
+        },
+        "profiles_readable_in_container": true
+      },
+      "poc-gamma": {
+        "passed": true,
+        "expected_source": "/Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-gamma/profiles",
+        "observed_mounts": {
+          "/app/profiles": "/Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-gamma/profiles",
+          "/app/data/hermes_home/profiles": "/Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-gamma/profiles",
+          "/home/orso/.hermes/profiles": "/Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/poc-gamma/profiles"
+        },
+        "profiles_readable_in_container": true
+      }
+    }
+  },
+  "ca4_rollback_replay": {
+    "passed": true,
+    "backup_created": "/Users/tquinzain/Documents/Dev Projects/orso-core/data/spaces_poc_kan58/.backups/poc-alpha_v1_clean",
+    "rollback_mode": "backup_restore",
+    "alteration_detected_before_rollback": true,
+    "alteration_erased_after_rollback": true,
+    "container_healthy_post_rollback": true
+  },
+  "all_passed": true
+}

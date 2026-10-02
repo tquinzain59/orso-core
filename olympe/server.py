@@ -77,6 +77,8 @@ class ProvisionRequest(BaseModel):
     tenant_slug: str = Field(..., description="Slug normalisé du tenant (ex: financia-solutions)")
     image_name: Optional[str] = Field("orso-backend:latest", description="Image Docker à instancier")
     env_vars: Optional[Dict[str, str]] = Field(default_factory=dict, description="Variables d'environnement spécifiques")
+    custom_space_dir: Optional[str] = Field(None, description="Chemin d'un espace d'agents personnalisé spécifique")
+    use_dedicated_space: Optional[bool] = Field(True, description="Active l'espace d'agents propre et isolé (KAN-58)")
 
 
 class CreateTenantOpsRequest(BaseModel):
@@ -223,13 +225,15 @@ async def suspend_tenant(tenant_slug: str, actor: Dict[str, Any] = Depends(requi
 
 @app.post("/api/olympe/tenants/provision")
 async def provision_tenant(req: ProvisionRequest, admin: Dict[str, Any] = Depends(require_superadmin)):
-    """Provisionne un nouvel environnement conteneurisé dédié pour un client (strictement superadmin - KAN-40)."""
+    """Provisionne un nouvel environnement conteneurisé dédié pour un client (strictement superadmin - KAN-40 / KAN-58)."""
     _log.info("Provisioning d'un nouvel environnement par admin %s : %s (%s)", admin.get("email"), req.tenant_slug, req.tenant_id)
     res = manager.provision_tenant(
         tenant_id=req.tenant_id,
         tenant_slug=req.tenant_slug,
         image_name=req.image_name or "orso-backend:latest",
         env_vars=req.env_vars,
+        custom_space_dir=req.custom_space_dir,
+        use_dedicated_space=True if req.use_dedicated_space is None else req.use_dedicated_space,
     )
     if not res.get("success"):
         err_code = res.get("error", "ERR_PROVISION_FAILED")
@@ -242,6 +246,18 @@ async def provision_tenant(req: ProvisionRequest, admin: Dict[str, Any] = Depend
             detail=f"Provisioning refusé : {err_msg} [{err_code}] [mode={mode}] [action_taken={action_taken}]",
         )
     return res
+
+
+@app.post("/api/olympe/tenants/rollback-space/{tenant_slug}")
+async def rollback_space(tenant_slug: str, admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Procédure de retour arrière sur l'espace d'agents propre du client (CA4 / KAN-58)."""
+    _log.info("Demande de retour arrière sur l'espace client %s par admin %s", tenant_slug, admin.get("email"))
+    try:
+        res = manager.rollback_tenant_space(tenant_slug)
+        return res
+    except Exception as e:
+        _log.error("Échec du rollback pour %s: %s", tenant_slug, e)
+        raise HTTPException(status_code=500, detail=f"Échec du retour arrière : {str(e)}")
 
 
 @app.get("/api/olympe/telemetry/summary")

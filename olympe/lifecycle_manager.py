@@ -37,12 +37,125 @@ class DockerLifecycleManager:
         data_root: Optional[str] = None,
         supabase_url: Optional[str] = None,
         supabase_key: Optional[str] = None,
+        spaces_root: Optional[str] = None,
     ):
         self.network_name = network_name
         self.data_root = Path(data_root or os.environ.get("ORSO_DATA_ROOT", "./data/tenants")).resolve()
+        if spaces_root:
+            self.spaces_root = Path(spaces_root).resolve()
+        elif "ORSO_SPACES_ROOT" in os.environ:
+            self.spaces_root = Path(os.environ["ORSO_SPACES_ROOT"]).resolve()
+        else:
+            if data_root:
+                self.spaces_root = (Path(data_root) / "spaces").resolve()
+            else:
+                self.spaces_root = Path("./data/spaces").resolve()
         self.supabase_url = (supabase_url or os.environ.get("SUPABASE_URL", "")).rstrip("/")
         self.supabase_key = supabase_key or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
         self.has_docker = shutil.which("docker") is not None
+
+    def get_tenant_space_dir(self, tenant_slug: str) -> Path:
+        """Retourne le chemin vers le dossier d'espace d'agents propre au client (KAN-58)."""
+        return (self.spaces_root / tenant_slug).resolve()
+
+    def _initialize_tenant_space(
+        self,
+        tenant_slug: str,
+        target_space_dir: Path,
+        source_template_dir: Optional[Path] = None,
+    ) -> None:
+        """Initialise l'arborescence de l'espace d'agents propre au client (config, skills, profiles).
+        Garantit que chaque client dispose de sa propre copie isolée sans partage d'hôte (KAN-58).
+        """
+        target_space_dir.mkdir(parents=True, exist_ok=True)
+        project_root = Path(__file__).resolve().parent.parent
+
+        # 1. config
+        dest_config = target_space_dir / "config"
+        if not dest_config.exists():
+            src_config = (source_template_dir / "config") if source_template_dir else (project_root / "config")
+            if src_config.is_dir():
+                shutil.copytree(src_config, dest_config)
+            else:
+                dest_config.mkdir(parents=True, exist_ok=True)
+
+        # 2. skills
+        dest_skills = target_space_dir / "skills"
+        if not dest_skills.exists():
+            src_skills = (source_template_dir / "skills") if source_template_dir else (project_root / "skills")
+            if src_skills.is_dir():
+                shutil.copytree(src_skills, dest_skills)
+            else:
+                dest_skills.mkdir(parents=True, exist_ok=True)
+
+        # 3. profiles
+        dest_profiles = target_space_dir / "profiles"
+        if not dest_profiles.exists():
+            src_profiles = (source_template_dir / "profiles") if source_template_dir else (project_root / "profiles")
+            if src_profiles.is_dir():
+                shutil.copytree(src_profiles, dest_profiles)
+            else:
+                dest_profiles.mkdir(parents=True, exist_ok=True)
+
+    def backup_tenant_space(self, tenant_slug: str, backup_tag: Optional[str] = None) -> Path:
+        """Crée une sauvegarde horodatée de l'espace d'agents propre d'un client."""
+        space_dir = self.get_tenant_space_dir(tenant_slug)
+        if not space_dir.is_dir():
+            raise FileNotFoundError(f"Espace client introuvable : {space_dir}")
+        tag = backup_tag or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        backup_dir = self.spaces_root / ".backups" / f"{tenant_slug}_{tag}"
+        backup_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(space_dir, backup_dir)
+        _log.info("Sauvegarde de l'espace client créée : %s", backup_dir)
+        return backup_dir
+
+    def rollback_tenant_space(
+        self,
+        tenant_slug: str,
+        backup_path: Optional[Path] = None,
+        restart_container: bool = True,
+    ) -> Dict[str, Any]:
+        """Exécute la procédure de retour arrière sur l'espace d'agents d'un client (CA4).
+        Restaure la sauvegarde spécifiée ou réinitialise à l'état usine baseline.
+        """
+        space_dir = self.get_tenant_space_dir(tenant_slug)
+        project_root = Path(__file__).resolve().parent.parent
+
+        if backup_path and Path(backup_path).is_dir():
+            source_dir = Path(backup_path)
+            mode = "backup_restore"
+        else:
+            # Restauration baseline usine
+            source_dir = project_root
+            mode = "baseline_restore"
+
+        if space_dir.exists():
+            shutil.rmtree(space_dir)
+
+        self._initialize_tenant_space(
+            tenant_slug,
+            space_dir,
+            source_template_dir=source_dir if mode == "backup_restore" else None,
+        )
+
+        action_taken = False
+        if restart_container and self.has_docker:
+            container_name = normalize_container_name(tenant_slug)
+            status = self.get_tenant_status(tenant_slug)
+            if status.get("running"):
+                _log.info("Redémarrage du conteneur après rollback de l'espace : %s", container_name)
+                self._exec_docker(["restart", container_name], timeout=15.0)
+                action_taken = True
+
+        return {
+            "success": True,
+            "tenant_slug": tenant_slug,
+            "mode": mode,
+            "source_restored": str(source_dir),
+            "space_directory": str(space_dir),
+            "container_restarted": action_taken,
+            "message": f"Retour arrière de l'espace client '{tenant_slug}' exécuté avec succès ({mode}).",
+        }
 
     def _exec_docker(self, args: List[str], timeout: float = 15.0) -> subprocess.CompletedProcess:
         """Exécute une commande docker sécurisée avec timeout."""
@@ -314,6 +427,8 @@ class DockerLifecycleManager:
         require_digest: Optional[bool] = None,
         allow_floating_tag: bool = False,
         persona_hmac_key: Optional[str] = None,
+        custom_space_dir: Optional[str] = None,
+        use_dedicated_space: bool = True,
     ) -> Dict[str, Any]:
         """Provisionne un nouvel environnement client hermétique."""
         container_name = normalize_container_name(tenant_slug)
@@ -435,6 +550,8 @@ class DockerLifecycleManager:
                     ),
                 }
 
+            legacy_shared = not use_dedicated_space or os.environ.get("ORSO_LEGACY_SHARED_MOUNTS") == "1"
+            simulated_space_dir = str(Path(custom_space_dir).resolve() if custom_space_dir else self.get_tenant_space_dir(tenant_slug)) if not legacy_shared else None
             return {
                 "success": True,
                 "tenant_slug": tenant_slug,
@@ -446,6 +563,9 @@ class DockerLifecycleManager:
                 "image": target_image,
                 "digest": effective_digest or None,
                 "quotas": quotas or {},
+                "data_directory": str(tenant_data_dir),
+                "space_directory": simulated_space_dir,
+                "dedicated_space": not legacy_shared,
                 "message": "Provisioning simulé avec succès (mode simulé, aucune action conteneur physique).",
             }
 
@@ -489,12 +609,47 @@ class DockerLifecycleManager:
             if tenant_slug in ("clientx-orso",):
                 run_args.extend(["--label", "com.orso.sandbox=true"])
 
-        # Montages partagés de configuration et compétences si présents
+        # Montages de l'environnement client (fin des dossiers partagés KAN-58 / Document 27)
         project_root = Path(__file__).resolve().parent.parent
-        for shared_dir in ["config", "skills", "profiles"]:
-            p = project_root / shared_dir
-            if p.is_dir():
-                run_args.extend(["-v", f"{p}:/app/{shared_dir}:ro"])
+        legacy_shared = not use_dedicated_space or os.environ.get("ORSO_LEGACY_SHARED_MOUNTS") == "1"
+
+        if legacy_shared:
+            # Mode legacy de repli (partage des dossiers de l'hôte, déprécié KAN-58 / Document 27)
+            _log.warning("Provisioning avec montages partagés legacy pour %s", tenant_slug)
+            for shared_dir in ["config", "skills", "profiles"]:
+                p = project_root / shared_dir
+                if p.is_dir():
+                    run_args.extend(["-v", f"{p}:/app/{shared_dir}:ro"])
+            tenant_space_dir = None
+        else:
+            # Mode KAN-58 : Espace d'agents propre et hermétique à chaque client
+            tenant_space_dir = Path(custom_space_dir).resolve() if custom_space_dir else self.get_tenant_space_dir(tenant_slug)
+            self._initialize_tenant_space(tenant_slug, tenant_space_dir)
+
+            tenant_config_dir = tenant_space_dir / "config"
+            tenant_skills_dir = tenant_space_dir / "skills"
+            tenant_profiles_dir = tenant_space_dir / "profiles"
+
+            if tenant_config_dir.is_dir():
+                run_args.extend(["-v", f"{tenant_config_dir}:/app/config:ro"])
+            if tenant_skills_dir.is_dir():
+                run_args.extend(["-v", f"{tenant_skills_dir}:/app/skills:ro"])
+
+            # CA3 : Convergence des trois points de montage de profils vers une seule source par client
+            # 1. /app/profiles (racine de profils canonique)
+            # 2. /app/data/hermes_home/profiles (découverte Hermes multi-profils sur HERMES_HOME)
+            # 3. /home/orso/.hermes/profiles (chemin utilisateur conteneur orso)
+            if tenant_profiles_dir.is_dir():
+                run_args.extend([
+                    "-v", f"{tenant_profiles_dir}:/app/profiles:ro",
+                    "-v", f"{tenant_profiles_dir}:/app/data/hermes_home/profiles:ro",
+                    "-v", f"{tenant_profiles_dir}:/home/orso/.hermes/profiles:ro",
+                ])
+
+            run_args.extend([
+                "--label", "com.orso.space.type=dedicated",
+                "--label", f"com.orso.space.path={tenant_space_dir}",
+            ])
 
         for k, v in base_envs.items():
             run_args.extend(["-e", f"{k}={v}"])
@@ -532,6 +687,8 @@ class DockerLifecycleManager:
             "digest": effective_digest or None,
             "quotas": effective_quotas,
             "data_directory": str(tenant_data_dir),
+            "space_directory": str(tenant_space_dir) if tenant_space_dir else None,
+            "dedicated_space": not legacy_shared,
             "message": f"Conteneur {container_name} provisionné et démarré avec succès.",
         }
 
@@ -539,10 +696,14 @@ class DockerLifecycleManager:
         """Détruit proprement et de manière idempotente un conteneur client et son stockage (L3/CA2)."""
         container_name = normalize_container_name(tenant_slug)
         tenant_data_dir = self.data_root / tenant_slug
+        tenant_space_dir = self.get_tenant_space_dir(tenant_slug)
 
         if not self.has_docker:
-            if remove_data and tenant_data_dir.exists():
-                shutil.rmtree(tenant_data_dir, ignore_errors=True)
+            if remove_data:
+                if tenant_data_dir.exists():
+                    shutil.rmtree(tenant_data_dir, ignore_errors=True)
+                if tenant_space_dir.exists():
+                    shutil.rmtree(tenant_space_dir, ignore_errors=True)
             return {
                 "success": True,
                 "tenant_slug": tenant_slug,
@@ -557,9 +718,13 @@ class DockerLifecycleManager:
             _log.info("Arrêt et suppression forcée du conteneur : %s", container_name)
             self._exec_docker(["rm", "-f", container_name], timeout=15.0)
 
-        if remove_data and tenant_data_dir.exists():
-            _log.info("Suppression du répertoire de données client pour : %s", tenant_slug)
-            shutil.rmtree(tenant_data_dir, ignore_errors=True)
+        if remove_data:
+            if tenant_data_dir.exists():
+                _log.info("Suppression du répertoire de données client pour : %s", tenant_slug)
+                shutil.rmtree(tenant_data_dir, ignore_errors=True)
+            if tenant_space_dir.exists():
+                _log.info("Suppression du répertoire d'espace client pour : %s", tenant_slug)
+                shutil.rmtree(tenant_space_dir, ignore_errors=True)
 
         self._remove_tenant_instance_record(container_name)
 
