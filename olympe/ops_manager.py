@@ -674,12 +674,14 @@ class OpsManager:
         method: str = "GET",
         payload: Optional[dict] = None,
         extra_headers: Optional[Dict[str, str]] = None,
+        raise_on_error: bool = False,
     ) -> Optional[Any]:
         """Exécute un appel HTTP authentifié vers l'API PostgREST de Supabase.
 
         Args:
             extra_headers: En-têtes additionnels qui surchargent les valeurs par défaut
                            (ex. ``{"Prefer": "resolution=merge-duplicates"}`` pour un UPSERT).
+            raise_on_error: Si True, lève l'exception HTTPError en cas d'échec au lieu de retourner None.
         """
         if not self.supabase_url or not self.supabase_key:
             return None
@@ -700,10 +702,14 @@ class OpsManager:
         req = urllib.request.Request(url, data=data_bytes, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=5.0) as resp:
-                return json.loads(resp.read().decode("utf-8"))
+                raw = resp.read().decode("utf-8")
+                return json.loads(raw) if raw else {}
         except Exception as e:
             _log.warning("Échec requête Supabase (%s %s): %s", method, path, e)
+            if raise_on_error:
+                raise
             return None
+
 
     def _fetch_supabase_auth_users(self) -> Dict[str, str]:
         """Récupère la table de correspondance user_id -> email via l'API Admin Supabase (avec cache TTL 60s)."""
@@ -1474,6 +1480,7 @@ class OpsManager:
                     self._query_supabase(f"tenant_instances?tenant_id=eq.{tenant_id}", method="PATCH", payload={"agents_enabled": new_agents})
 
         # ── Persistance Supabase : PATCH si existant, sinon POST ────────────
+        sub_id = None
         if self.supabase_url and self.supabase_key:
             sub_payload = {
                 "tenant_id": tenant_id,
@@ -1481,23 +1488,45 @@ class OpsManager:
                 "monthly_price_ht": pricing["price_ht"],
                 "status": status.upper() if status else "ACTIVE",
                 "agents_count": pricing.get("max_agents", 1),
+                "updated_at": _format_timestamp(),
             }
-            existing = self._query_supabase(f"subscriptions?tenant_id=eq.{tenant_id}&select=id")
+            existing = self._query_supabase(f"subscriptions?tenant_id=eq.{tenant_id}&status=eq.ACTIVE&select=id,tier_id")
             if existing and isinstance(existing, list) and len(existing) > 0:
+                sub_id = existing[0]["id"]
                 self._query_supabase(
-                    f"subscriptions?tenant_id=eq.{tenant_id}",
+                    f"subscriptions?id=eq.{sub_id}",
                     method="PATCH",
                     payload=sub_payload,
                 )
             else:
-                self._query_supabase(
+                created = self._query_supabase(
                     "subscriptions",
                     method="POST",
                     payload=sub_payload,
                 )
+                if created and isinstance(created, list) and len(created) > 0:
+                    sub_id = created[0].get("id")
+
+            # Traçabilité d'audit dans public.audit_logs (CA3 KAN-87)
+            self._query_supabase(
+                "audit_logs",
+                method="POST",
+                payload={
+                    "tenant_id": tenant_id,
+                    "actor_email": "ops@orso-agents.fr",
+                    "action": "SUBSCRIPTION_UPDATED",
+                    "payload": {
+                        "subscription_id": sub_id,
+                        "tier_id": tier_id,
+                        "price_ht": pricing["price_ht"],
+                        "status": status,
+                    },
+                    "created_at": _format_timestamp(),
+                },
+            )
             _log.info(
-                "Persistance abonnement Supabase pour tenant %s : tier=%s status=%s",
-                tenant_id, tier_id, status,
+                "Persistance abonnement Supabase pour tenant %s : tier=%s status=%s sub_id=%s",
+                tenant_id, tier_id, status, sub_id,
             )
 
         return {
@@ -1506,6 +1535,74 @@ class OpsManager:
             "tier_id": tier_id,
             "price_ht": pricing["price_ht"],
             "status": status,
+        }
+
+    def create_tenant_subscription(
+        self,
+        tenant_id: str,
+        tier_id: str,
+        actor: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Crée un premier abonnement pour un tenant. Refuse explicitement si un abonnement actif existe déjà (KAN-87)."""
+        pricing = TIER_PRICING.get(tier_id, TIER_PRICING["custom"])
+        actor_email = (actor or {}).get("email") or (actor or {}).get("actor") or "ops@orso-agents.fr"
+
+        if self.supabase_url and self.supabase_key:
+            existing = self._query_supabase(
+                f"subscriptions?tenant_id=eq.{tenant_id}&status=eq.ACTIVE&select=id,tier_id,monthly_price_ht"
+            )
+            if existing and isinstance(existing, list) and len(existing) > 0:
+                _log.warning(
+                    "[SUBSCRIPTION_REFUSED] Tentative de création d'un second abonnement actif pour tenant %s",
+                    tenant_id,
+                )
+                return {
+                    "success": False,
+                    "code": "ERR_SUBSCRIPTION_ALREADY_ACTIVE",
+                    "message": "Un abonnement actif existe déjà pour cette organisation. Veuillez utiliser la mise à jour.",
+                    "existing_subscription": existing[0],
+                }
+
+        sub_payload = {
+            "tenant_id": tenant_id,
+            "tier_id": tier_id,
+            "monthly_price_ht": pricing["price_ht"],
+            "status": "ACTIVE",
+            "agents_count": pricing.get("max_agents", 1),
+            "created_at": _format_timestamp(),
+            "updated_at": _format_timestamp(),
+        }
+
+        created_sub = None
+        if self.supabase_url and self.supabase_key:
+            res = self._query_supabase("subscriptions", method="POST", payload=sub_payload)
+            if res and isinstance(res, list) and len(res) > 0:
+                created_sub = res[0]
+
+            self._query_supabase(
+                "audit_logs",
+                method="POST",
+                payload={
+                    "tenant_id": tenant_id,
+                    "actor_email": actor_email,
+                    "action": "SUBSCRIPTION_CREATED",
+                    "payload": {
+                        "subscription_id": (created_sub or {}).get("id"),
+                        "tier_id": tier_id,
+                        "monthly_price_ht": pricing["price_ht"],
+                        "status": "ACTIVE",
+                    },
+                    "created_at": _format_timestamp(),
+                },
+            )
+
+        return {
+            "success": True,
+            "tenant_id": tenant_id,
+            "tier_id": tier_id,
+            "price_ht": pricing["price_ht"],
+            "status": "active",
+            "subscription": created_sub or sub_payload,
         }
 
     def get_stats(self) -> Dict[str, Any]:
@@ -2015,6 +2112,7 @@ class OpsManager:
                 env_result = "error"
 
         # ── 6. Synchronisation de l'état en base (Supabase) ou en mémoire ────
+        db_write_errors = []
         if self.supabase_url and self.supabase_key and matched_tenant_id:
             try:
                 sub_patch = {"status": effective_status.upper()}
@@ -2025,14 +2123,18 @@ class OpsManager:
                 if effective_tier_id:
                     sub_patch["tier_id"] = effective_tier_id
                     sub_patch["monthly_price_ht"] = TIER_PRICING.get(effective_tier_id, {}).get("price_ht", 99.00)
-                self._query_supabase(f"subscriptions?tenant_id=eq.{matched_tenant_id}", method="PATCH", payload=sub_patch)
+                sub_res = self._query_supabase(f"subscriptions?tenant_id=eq.{matched_tenant_id}", method="PATCH", payload=sub_patch)
+                if sub_res is None:
+                    db_write_errors.append("Échec de mise à jour de subscriptions dans Supabase")
 
                 if env_result in ("active", "suspended"):
                     inst_patch = {
                         "environment_status": "active" if env_result == "active" else "inactive",
                         "status": "ready" if env_result == "active" else "sleeping",
                     }
-                    self._query_supabase(f"tenant_instances?tenant_id=eq.{matched_tenant_id}", method="PATCH", payload=inst_patch)
+                    inst_res = self._query_supabase(f"tenant_instances?tenant_id=eq.{matched_tenant_id}", method="PATCH", payload=inst_patch)
+                    if inst_res is None:
+                        db_write_errors.append("Échec de mise à jour de tenant_instances dans Supabase")
 
                 if event_type == "invoice.payment_succeeded":
                     inv_id = data_obj.get("id")
@@ -2051,9 +2153,14 @@ class OpsManager:
                         "date": _format_timestamp(),
                         "pdf_url": pdf_url,
                     }
-                    self._query_supabase("invoices", method="POST", payload=inv_payload)
+                    inv_res = self._query_supabase("invoices", method="POST", payload=inv_payload)
+                    if inv_res is None:
+                        err = f"Échec d'écriture dans public.invoices pour la facture {inv_id}"
+                        db_write_errors.append(err)
+                        _log.critical("[DATABASE_ERROR] %s (table absente ou erreur base)", err)
             except Exception as e:
-                _log.warning("Erreur synchronisation Supabase post-webhook: %s", e)
+                db_write_errors.append(f"Exception synchronisation Supabase post-webhook: {e}")
+                _log.critical("[DATABASE_ERROR] Exception synchronisation Supabase post-webhook: %s", e)
 
         # Synchronisation mémoire si présent
         if matched_sub_dict is not None:
@@ -2099,34 +2206,42 @@ class OpsManager:
         self._processed_events[event_id] = processed_entry
 
         if self.supabase_url and self.supabase_key:
-            try:
-                self._query_supabase("processed_webhook_events", method="POST", payload=processed_entry)
-            except Exception:
-                pass
+            proc_res = self._query_supabase("processed_webhook_events", method="POST", payload=processed_entry)
+            if proc_res is None:
+                err = f"Échec d'écriture dans public.processed_webhook_events pour l'événement {event_id}"
+                db_write_errors.append(err)
+                _log.critical("[DATABASE_ERROR] %s (table absente ou erreur base)", err)
 
         # ── 8. Consignation dans le journal de livraison ────────────────────
+        delivery_status = "processed" if not db_write_errors else "db_write_failed"
         delivery_record = {
             "id": event_id,
             "type": event_type,
             "received_at": _format_timestamp(),
-            "status": "processed",
+            "status": delivery_status,
             "customer_id": cus_id,
             "subscription_id": sub_id,
             "tenant_slug": matched_slug,
             "container_name": container_name,
-            "summary": f"Événement {event_type} traité avec succès pour {matched_slug}",
+            "summary": (
+                f"Événement {event_type} traité avec succès pour {matched_slug}"
+                if not db_write_errors
+                else f"Événement {event_type} traité en mémoire mais échec d'écriture en base : {'; '.join(db_write_errors)}"
+            ),
         }
+        if db_write_errors:
+            delivery_record["db_errors"] = db_write_errors
         self._webhook_deliveries.append(delivery_record)
 
         self.record_audit_event(
             actor={"actor": "stripe-webhook", "role": "system"},
             action=f"webhook:{event_type}",
             target=matched_slug,
-            details={"event_id": event_id, "status": effective_status, "container": container_name},
+            details={"event_id": event_id, "status": effective_status, "container": container_name, "db_write_errors": db_write_errors},
         )
 
-        return {
-            "status": "processed",
+        res = {
+            "status": "processed" if not db_write_errors else "db_write_failed",
             "type": event_type,
             "event_id": event_id,
             "subscription_id": sub_id,
@@ -2134,6 +2249,10 @@ class OpsManager:
             "container_name": container_name,
             "environment_status": env_result,
         }
+        if db_write_errors:
+            res["db_errors"] = db_write_errors
+            res["message"] = f"Échec de persistance en base de données : {'; '.join(db_write_errors)}"
+        return res
 
     def list_webhook_deliveries(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Retourne l'historique chronologique des événements Webhook reçus (L5/CA6)."""
@@ -2146,7 +2265,7 @@ class OpsManager:
         target: str,
         details: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Enregistre un événement dans le journal d'audit de sécurité (CA7)."""
+        """Enregistre un événement dans le journal d'audit de sécurité (CA7) et en base Supabase (KAN-87)."""
         actor_name = actor.get("actor") or actor.get("email") or "unknown"
         actor_role = actor.get("role") or "unknown"
         event = {
@@ -2159,6 +2278,23 @@ class OpsManager:
         }
         self._audit_log.append(event)
         _log.info("[OPS_AUDIT] [%s] %s -> Action: %s | Target: %s", actor_role.upper(), actor_name, action, target)
+
+        if self.supabase_url and self.supabase_key:
+            target_tenant_id = target if (target and len(target) == 36 and "-" in target) else None
+            try:
+                self._query_supabase(
+                    "audit_logs",
+                    method="POST",
+                    payload={
+                        "tenant_id": target_tenant_id,
+                        "actor_email": actor_name,
+                        "action": action,
+                        "payload": {"target": target, "role": actor_role, "details": details or {}},
+                        "created_at": _format_timestamp(),
+                    },
+                )
+            except Exception as e:
+                _log.debug("Notice écriture audit_logs Supabase: %s", e)
 
     def get_audit_events(self, limit: int = 100) -> List[Dict[str, Any]]:
         """Retourne le journal d'audit des actions administratives et machine (CA7)."""

@@ -544,6 +544,26 @@ async def update_subscription(tenant_id: str, req: UpdateSubscriptionRequest, ad
     return res
 
 
+@app.post("/api/olympe/ops/tenants/{tenant_id}/subscription/create")
+async def create_subscription_endpoint(tenant_id: str, req: UpdateSubscriptionRequest, admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Crée un nouvel abonnement actif pour un tenant, en refusant formellement s'il existe déjà un abonnement actif (KAN-87 CA2)."""
+    res = ops_manager.create_tenant_subscription(
+        tenant_id=tenant_id,
+        tier_id=req.tier_id,
+        actor=admin,
+    )
+    if not res.get("success") and res.get("code") == "ERR_SUBSCRIPTION_ALREADY_ACTIVE":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "ERR_SUBSCRIPTION_ALREADY_ACTIVE",
+                "message": res.get("message"),
+                "existing_subscription": res.get("existing_subscription"),
+            },
+        )
+    return res
+
+
 @app.get("/api/olympe/ops/tenants/{tenant_id}/users")
 async def list_tenant_users(tenant_id: str, admin: Dict[str, Any] = Depends(require_superadmin)):
     """Retourne la liste des utilisateurs d'un client (strictement superadmin - CA3)."""
@@ -614,7 +634,11 @@ async def stripe_webhook(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Payload JSON invalide")
 
-    return ops_manager.handle_stripe_webhook(payload)
+    res = ops_manager.handle_stripe_webhook(payload)
+    if isinstance(res, dict) and res.get("status") == "db_write_failed":
+        _log.error("[WEBHOOK_PERSISTENCE_FAILED] Rejet HTTP 502 : échec d'écriture en base pour l'événement %s: %s", res.get("event_id"), res.get("db_errors"))
+        return JSONResponse(status_code=502, content=res)
+    return res
 
 
 @app.get("/api/olympe/ops/webhooks/deliveries")

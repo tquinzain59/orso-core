@@ -2908,33 +2908,106 @@ async def update_client_subscription(
         except Exception as e:
             _log.warning("Notice mise à jour Stripe subscription: %s", e)
 
-    # 2. Persistance dans Supabase (subscriptions & tenant_instances)
+    # 2. Persistance dans Supabase (subscriptions & tenant_instances) & Audit Log (KAN-87)
     supabase_url = os.environ.get("SUPABASE_URL", "").strip()
     service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
     if supabase_url and service_key and tenant_id:
+        sub_id = None
+        previous_tier = None
         try:
-            sub_payload = json.dumps({
-                "tenant_id": tenant_id,
-                "tier_id": req.tier_id,
-                "monthly_price_ht": tier_config["price_ht"],
-                "agents_count": tier_config["max_agents"],
-                "status": "ACTIVE",
-                "updated_at": datetime.now().isoformat() + "Z",
-            }).encode("utf-8")
-            sub_req = urllib.request.Request(
-                f"{supabase_url}/rest/v1/subscriptions",
-                data=sub_payload,
+            # Vérifier l'abonnement actif existant pour éviter les doublons (KAN-87)
+            check_req = urllib.request.Request(
+                f"{supabase_url}/rest/v1/subscriptions?tenant_id=eq.{tenant_id}&status=eq.ACTIVE&select=id,tier_id,monthly_price_ht",
                 headers={
                     "apikey": service_key,
                     "Authorization": f"Bearer {service_key}",
                     "Content-Type": "application/json",
-                    "Prefer": "resolution=merge-duplicates",
+                },
+                method="GET",
+            )
+            raw_check = await asyncio.to_thread(_sync_http_request, check_req, 3.0)
+            existing_subs = json.loads(raw_check) if raw_check else []
+
+            if existing_subs and isinstance(existing_subs, list) and len(existing_subs) > 0:
+                sub_id = existing_subs[0]["id"]
+                previous_tier = existing_subs[0].get("tier_id")
+                # Mise à jour de la ligne active existante (PATCH sur ID)
+                patch_payload = json.dumps({
+                    "tier_id": req.tier_id,
+                    "monthly_price_ht": tier_config["price_ht"],
+                    "agents_count": tier_config["max_agents"],
+                    "updated_at": datetime.now().isoformat() + "Z",
+                }).encode("utf-8")
+                patch_req = urllib.request.Request(
+                    f"{supabase_url}/rest/v1/subscriptions?id=eq.{sub_id}",
+                    data=patch_payload,
+                    headers={
+                        "apikey": service_key,
+                        "Authorization": f"Bearer {service_key}",
+                        "Content-Type": "application/json",
+                        "Prefer": "return=representation",
+                    },
+                    method="PATCH",
+                )
+                await asyncio.to_thread(_sync_http_request, patch_req, 3.0)
+                _log.info("Abonnement Supabase mis à jour (%s) pour tenant %s : %s", sub_id, tenant_id, req.tier_id)
+            else:
+                # Création si aucun abonnement actif
+                create_payload = json.dumps({
+                    "tenant_id": tenant_id,
+                    "tier_id": req.tier_id,
+                    "monthly_price_ht": tier_config["price_ht"],
+                    "agents_count": tier_config["max_agents"],
+                    "status": "ACTIVE",
+                    "created_at": datetime.now().isoformat() + "Z",
+                    "updated_at": datetime.now().isoformat() + "Z",
+                }).encode("utf-8")
+                create_req = urllib.request.Request(
+                    f"{supabase_url}/rest/v1/subscriptions",
+                    data=create_payload,
+                    headers={
+                        "apikey": service_key,
+                        "Authorization": f"Bearer {service_key}",
+                        "Content-Type": "application/json",
+                        "Prefer": "return=representation",
+                    },
+                    method="POST",
+                )
+                raw_created = await asyncio.to_thread(_sync_http_request, create_req, 3.0)
+                if raw_created:
+                    created_data = json.loads(raw_created)
+                    if isinstance(created_data, list) and len(created_data) > 0:
+                        sub_id = created_data[0].get("id")
+                _log.info("Nouvel abonnement Supabase créé (%s) pour tenant %s : %s", sub_id, tenant_id, req.tier_id)
+
+            # Traçabilité dans public.audit_logs (CA3 KAN-87)
+            audit_payload = json.dumps({
+                "tenant_id": tenant_id,
+                "actor_email": user_email,
+                "action": "SUBSCRIPTION_UPDATED" if previous_tier else "SUBSCRIPTION_CREATED",
+                "payload": {
+                    "subscription_id": sub_id,
+                    "previous_tier": previous_tier,
+                    "new_tier": req.tier_id,
+                    "monthly_price_ht": tier_config["price_ht"],
+                    "agents_count": tier_config["max_agents"],
+                    "timestamp": datetime.now().isoformat() + "Z",
+                },
+                "created_at": datetime.now().isoformat() + "Z",
+            }).encode("utf-8")
+            audit_req = urllib.request.Request(
+                f"{supabase_url}/rest/v1/audit_logs",
+                data=audit_payload,
+                headers={
+                    "apikey": service_key,
+                    "Authorization": f"Bearer {service_key}",
+                    "Content-Type": "application/json",
                 },
                 method="POST",
             )
-            await asyncio.to_thread(_sync_http_request, sub_req, 3.0)
+            await asyncio.to_thread(_sync_http_request, audit_req, 3.0)
         except Exception as e:
-            _log.debug("Notice enregistrement Supabase subscription: %s", e)
+            _log.warning("Notice enregistrement Supabase subscription / audit_logs: %s", e)
 
         # Ajustement automatique des agents activés si nécessaire
         all_agent_ids = ["jerome", "lucas", "clara", "victor"]
