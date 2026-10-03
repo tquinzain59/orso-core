@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import time
 import uuid
 import urllib.error
@@ -1813,6 +1814,102 @@ def _extract_action_card(text: str, agent_id: str) -> tuple[str, Optional[Dict[s
     return cleaned_text.strip(), card_data
 
 
+# ── Gestion et Étanchéité des Sessions UI Client (KAN-86) ───────────────────
+
+def _get_client_sessions_db_path() -> Path:
+    """Détermine l'emplacement de la base de contrôle des sessions client."""
+    data_dir = PROJECT_ROOT / "data"
+    if data_dir.is_dir() and os.access(data_dir, os.W_OK):
+        return data_dir / "client_chat_sessions.db"
+    home_dir = Path.home() / ".hermes"
+    home_dir.mkdir(parents=True, exist_ok=True)
+    return home_dir / "client_chat_sessions.db"
+
+
+def _init_client_sessions_db() -> None:
+    """Initialise la table de registre des sessions client si elle n'existe pas."""
+    db_path = _get_client_sessions_db_path()
+    with sqlite3.connect(str(db_path), timeout=15.0) as conn:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS client_chat_sessions (
+                session_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                last_activity_at REAL NOT NULL
+            );"""
+        )
+        conn.execute(
+            """CREATE INDEX IF NOT EXISTS idx_client_sessions_lookup
+               ON client_chat_sessions(tenant_id, user_id, agent_id);"""
+        )
+        conn.commit()
+
+
+def _verify_and_bind_client_session(
+    session_id: str,
+    tenant_id: str,
+    user_id: str,
+    agent_id: str,
+) -> None:
+    """Valide l'identifiant de session et garantit l'étanchéité tenant / utilisateur / agent (CA5, CA6, CA7)."""
+    cleaned_sid = (session_id or "").strip()
+    if not cleaned_sid:
+        raise HTTPException(
+            status_code=400,
+            detail="Identifiant de session manquant ou invalide. Une session valide est requise.",
+        )
+
+    try:
+        _init_client_sessions_db()
+        db_path = _get_client_sessions_db_path()
+        with sqlite3.connect(str(db_path), timeout=15.0) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT tenant_id, user_id, agent_id FROM client_chat_sessions WHERE session_id = ?",
+                (cleaned_sid,),
+            )
+            row = cursor.fetchone()
+            if row is not None:
+                existing_tenant, existing_user, existing_agent = row[0], row[1], row[2]
+                if existing_tenant != tenant_id or existing_user != user_id:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Accès refusé : la session demandée n'appartient pas à cet utilisateur ou à cet espace client.",
+                    )
+                if existing_agent != agent_id:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Incohérence d'agent : la session '{cleaned_sid}' est liée à l'agent '{existing_agent}' "
+                            f"et ne peut pas être utilisée avec l'agent '{agent_id}'."
+                        ),
+                    )
+                cursor.execute(
+                    "UPDATE client_chat_sessions SET last_activity_at = ? WHERE session_id = ?",
+                    (time.time(), cleaned_sid),
+                )
+                conn.commit()
+            else:
+                now = time.time()
+                cursor.execute(
+                    """INSERT INTO client_chat_sessions
+                       (session_id, tenant_id, user_id, agent_id, created_at, last_activity_at)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (cleaned_sid, tenant_id, user_id, agent_id, now, now),
+                )
+                conn.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        _log.error("Erreur vérification session client: %s", e)
+        raise HTTPException(
+            status_code=500,
+            detail="Erreur interne de contrôle de session : Registre d'étanchéité indisponible.",
+        ) from e
+
+
 # ── Moteur d'Inférence et de Streaming SSE ──────────────────────────────────
 
 async def _chat_stream_generator(
@@ -1881,6 +1978,7 @@ async def _chat_stream_generator(
             token = None
             try:
                 from hermes_constants import set_hermes_home_override, reset_hermes_home_override
+                from hermes_state import SessionDB
                 profile_dir = _find_profile_dir(agent_id)
                 if profile_dir and profile_dir.is_dir() and os.access(profile_dir, os.W_OK):
                     agent_home = profile_dir.resolve()
@@ -1888,14 +1986,21 @@ async def _chat_stream_generator(
                     agent_home = (PROJECT_ROOT / "data" / "agents" / agent_id).resolve()
                     agent_home.mkdir(parents=True, exist_ok=True)
                 token = set_hermes_home_override(str(agent_home))
+                sdb = SessionDB(agent_home / "state.db")
+                prior_messages = sdb.get_messages_as_conversation(session_id) or []
                 agent = AIAgent(
                     model=configured_model,
                     provider=configured_provider,
                     ephemeral_system_prompt=system_instruction,
                     session_id=session_id,
+                    session_db=sdb,
                     quiet_mode=True,
                 )
-                res = agent.run_conversation(user_message=prompt, stream_callback=stream_cb)
+                res = agent.run_conversation(
+                    user_message=prompt,
+                    conversation_history=prior_messages,
+                    stream_callback=stream_cb,
+                )
                 resp = res.get("final_response", "")
                 if "can't reach the model provider" in resp:
                     return None
@@ -1920,14 +2025,14 @@ async def _chat_stream_generator(
             if chunk is None:
                 break
             full_response_text += chunk
-            yield f"event: delta\ndata: {json.dumps({'content': chunk})}\n\n"
+            yield f"event: delta\ndata: {json.dumps({'content': chunk}, ensure_ascii=False)}\n\n"
             await asyncio.sleep(0.005)
 
         agent_result = await agent_future
         if agent_result and not full_response_text:
             if "can't reach the model provider" not in agent_result:
                 full_response_text = agent_result
-                yield f"event: delta\ndata: {json.dumps({'content': agent_result})}\n\n"
+                yield f"event: delta\ndata: {json.dumps({'content': agent_result}, ensure_ascii=False)}\n\n"
 
         if full_response_text.strip() and "can't reach the model provider" not in full_response_text:
             llm_invoked = True
@@ -1987,17 +2092,34 @@ async def _chat_stream_generator(
 
         for part in reply_parts:
             full_response_text += part
-            yield f"event: delta\ndata: {json.dumps({'content': part})}\n\n"
+            yield f"event: delta\ndata: {json.dumps({'content': part}, ensure_ascii=False)}\n\n"
             await asyncio.sleep(0.04)
 
     # 5. Détection et émission d'une Carte d'Action interactive si applicable
     clean_text, action_card = _extract_action_card(full_response_text, agent_id)
     if action_card:
-        yield f"event: action_card\ndata: {json.dumps(action_card)}\n\n"
+        yield f"event: action_card\ndata: {json.dumps(action_card, ensure_ascii=False)}\n\n"
         await asyncio.sleep(0.01)
 
+    # Enregistrement pérenne du tour dans SessionDB en mode résilient (CA2)
+    if not llm_invoked and clean_text:
+        try:
+            from hermes_state import SessionDB
+            profile_dir = _find_profile_dir(agent_id)
+            if profile_dir and profile_dir.is_dir() and os.access(profile_dir, os.W_OK):
+                agent_home = profile_dir.resolve()
+            else:
+                agent_home = (PROJECT_ROOT / "data" / "agents" / agent_id).resolve()
+                agent_home.mkdir(parents=True, exist_ok=True)
+            db = SessionDB(agent_home / "state.db")
+            db.create_session(session_id, source="client_ui", model="resilient")
+            db.append_message(session_id, "user", {"content": prompt})
+            db.append_message(session_id, "assistant", {"content": clean_text})
+        except Exception as save_err:
+            _log.warning("Impossible d'enregistrer le tour résilient dans SessionDB: %s", save_err)
+
     # 6. Événement de fin avec le texte consolidé
-    yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'full_text': clean_text})}\n\n"
+    yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'full_text': clean_text}, ensure_ascii=False)}\n\n"
 
 
 @router.post("/api/client/chat")
@@ -2005,10 +2127,29 @@ async def client_chat_endpoint(
     req: ChatRequest,
     auth: Dict[str, Any] = Depends(verify_client_access),
 ):
-    """Endpoint de chat multi-agents avec streaming SSE en temps réel pour l'UI Client."""
-    sid = req.session_id or f"session-{int(time.time())}-{uuid.uuid4().hex[:6]}"
+    """Endpoint de chat multi-agents avec streaming SSE en temps réel pour l'UI Client.
+    Exige obligatoirement un session_id valide et refuse tout repli silencieux (CA6).
+    """
+    cleaned_sid = (req.session_id or "").strip()
+    if not cleaned_sid:
+        raise HTTPException(
+            status_code=400,
+            detail="Identifiant de session manquant ou invalide. Une session valide est requise.",
+        )
+
+    user_id = str(auth.get("sub") or auth.get("user_id") or "anonymous").strip()
+    tenant = auth.get("tenant") or {}
+    tenant_id = str(tenant.get("tenant_id") or tenant.get("tenant_slug") or os.environ.get("ORSO_CLIENT_ID", "default")).strip()
+
+    _verify_and_bind_client_session(
+        session_id=cleaned_sid,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        agent_id=req.agent_id,
+    )
+
     return StreamingResponse(
-        _chat_stream_generator(agent_id=req.agent_id, prompt=req.message, session_id=sid),
+        _chat_stream_generator(agent_id=req.agent_id, prompt=req.message, session_id=cleaned_sid),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -2016,6 +2157,62 @@ async def client_chat_endpoint(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.get("/api/client/chat/messages")
+async def get_client_session_messages(
+    session_id: str,
+    agent_id: str = "jerome",
+    auth: Dict[str, Any] = Depends(verify_client_access),
+):
+    """Retourne l'historique complet des messages d'une session client depuis le magasin du moteur (CA2)."""
+    cleaned_sid = (session_id or "").strip()
+    if not cleaned_sid:
+        raise HTTPException(
+            status_code=400,
+            detail="Identifiant de session manquant ou invalide. Une session valide est requise.",
+        )
+
+    user_id = str(auth.get("sub") or auth.get("user_id") or "anonymous").strip()
+    tenant = auth.get("tenant") or {}
+    tenant_id = str(tenant.get("tenant_id") or tenant.get("tenant_slug") or os.environ.get("ORSO_CLIENT_ID", "default")).strip()
+
+    _verify_and_bind_client_session(
+        session_id=cleaned_sid,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        agent_id=agent_id,
+    )
+
+    profile_dir = _find_profile_dir(agent_id)
+    if profile_dir and profile_dir.is_dir() and os.access(profile_dir, os.W_OK):
+        agent_home = profile_dir.resolve()
+    else:
+        agent_home = (PROJECT_ROOT / "data" / "agents" / agent_id).resolve()
+
+    state_db_file = agent_home / "state.db"
+    if not state_db_file.exists():
+        return {"session_id": cleaned_sid, "agent_id": agent_id, "messages": [], "count": 0}
+
+    try:
+        from hermes_state import SessionDB
+        sdb = SessionDB(state_db_file)
+        raw_msgs = sdb.get_messages_as_conversation(cleaned_sid) or []
+        formatted = []
+        for m in raw_msgs:
+            c = m.get("content")
+            if isinstance(c, dict):
+                c = c.get("content", "")
+            formatted.append({"role": m.get("role"), "content": c})
+        return {
+            "session_id": cleaned_sid,
+            "agent_id": agent_id,
+            "messages": formatted,
+            "count": len(formatted),
+        }
+    except Exception as e:
+        _log.warning("Erreur consultation messages session %s: %s", cleaned_sid, e)
+        return {"session_id": cleaned_sid, "agent_id": agent_id, "messages": [], "count": 0}
 
 
 # ── Endpoint d'exécution des Actions (1-Click) ──────────────────────────────

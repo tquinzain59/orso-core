@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Agent, AgentId, ChatMessage, ActionCardData } from '@/types';
 import { ORSO_AGENTS } from '@/lib/data';
-import { sendUserPrompt, checkBackendHealth } from '@/lib/api';
+import { sendUserPrompt, checkBackendHealth, getStoredUser } from '@/lib/api';
 import { ActionCard } from '@/components/ActionCard';
 import { QuickActions } from '@/components/QuickActions';
 import {
@@ -15,10 +15,29 @@ interface ChatViewProps {
   availableAgents?: Agent[];
 }
 
+function getSessionStorageKey(agentId: string): string {
+  const user = getStoredUser();
+  const userId = user?.id || user?.sub || user?.email || 'default';
+  const tenantSlug = user?.tenant?.tenant_slug || user?.tenant_slug || 'default';
+  return `orso_session_${tenantSlug}_${userId}_${agentId}`;
+}
+
+function getMessagesStorageKey(sessionId: string): string {
+  return `orso_messages_${sessionId}`;
+}
+
+function generateNewSessionId(agentId: string): string {
+  const user = getStoredUser();
+  const userId = (user?.id || user?.sub || user?.email || 'user').toString().replace(/[^a-zA-Z0-9_-]/g, '_');
+  const rand = Math.random().toString(36).substring(2, 10);
+  return `session_${agentId}_${userId}_${Date.now()}_${rand}`;
+}
+
 export const ChatView: React.FC<ChatViewProps> = ({ activeAgentId, availableAgents }) => {
   const agentsList = availableAgents && availableAgents.length > 0 ? availableAgents : ORSO_AGENTS;
   const currentAgent = agentsList.find((a) => a.id === activeAgentId) || agentsList[0] || ORSO_AGENTS[0];
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string>('');
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [streamingText, setStreamingText] = useState('');
@@ -34,9 +53,33 @@ export const ChatView: React.FC<ChatViewProps> = ({ activeAgentId, availableAgen
     return () => clearInterval(interval);
   }, []);
 
-  // Initialize or reload conversation when active agent changes
+  // Initialize or reload conversation when active agent changes (survives page reload - CA3)
   useEffect(() => {
-    setMessages([]);
+    const key = getSessionStorageKey(activeAgentId);
+    let sid = localStorage.getItem(key);
+    if (!sid) {
+      sid = generateNewSessionId(activeAgentId);
+      localStorage.setItem(key, sid);
+    }
+    setCurrentSessionId(sid);
+
+    // Recharger les messages de la conversation active pour cet agent
+    const saved = localStorage.getItem(getMessagesStorageKey(sid));
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          setMessages(parsed);
+        } else {
+          setMessages([]);
+        }
+      } catch {
+        setMessages([]);
+      }
+    } else {
+      setMessages([]);
+    }
+
     setStreamingText('');
     setIsLoading(false);
   }, [activeAgentId]);
@@ -54,6 +97,13 @@ export const ChatView: React.FC<ChatViewProps> = ({ activeAgentId, availableAgen
     const prompt = (textToSend || inputText).trim();
     if (!prompt || isLoading) return;
 
+    let sid = currentSessionId;
+    if (!sid) {
+      sid = generateNewSessionId(activeAgentId);
+      localStorage.setItem(getSessionStorageKey(activeAgentId), sid);
+      setCurrentSessionId(sid);
+    }
+
     setInputText('');
     const userTimestamp = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
     const userMsg: ChatMessage = {
@@ -64,18 +114,42 @@ export const ChatView: React.FC<ChatViewProps> = ({ activeAgentId, availableAgen
       timestamp: userTimestamp,
     };
 
-    setMessages((prev) => [...prev, userMsg]);
+    const updatedWithUser = [...messages, userMsg];
+    setMessages(updatedWithUser);
+    localStorage.setItem(getMessagesStorageKey(sid), JSON.stringify(updatedWithUser));
+
     setIsLoading(true);
     setStreamingText('');
 
     try {
-      const assistantMsg = await sendUserPrompt(activeAgentId, prompt, (delta) => {
-        setStreamingText(delta);
+      const assistantMsg = await sendUserPrompt(
+        activeAgentId,
+        prompt,
+        (delta) => {
+          setStreamingText(delta);
+        },
+        sid
+      );
+      setMessages((prev) => {
+        const next = [...prev, assistantMsg];
+        localStorage.setItem(getMessagesStorageKey(sid), JSON.stringify(next));
+        return next;
       });
-      setMessages((prev) => [...prev, assistantMsg]);
       setStreamingText('');
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      console.error("Erreur lors de l'envoi du message :", err);
+      const errorMsg: ChatMessage = {
+        id: `err-${Date.now()}`,
+        agentId: activeAgentId,
+        role: 'assistant',
+        content: `⚠️ Erreur : ${err?.message || "Impossible de joindre l'agent."}`,
+        timestamp: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
+      };
+      setMessages((prev) => {
+        const next = [...prev, errorMsg];
+        localStorage.setItem(getMessagesStorageKey(sid), JSON.stringify(next));
+        return next;
+      });
     } finally {
       setIsLoading(false);
     }
@@ -89,14 +163,19 @@ export const ChatView: React.FC<ChatViewProps> = ({ activeAgentId, availableAgen
   };
 
   const handleResetChat = () => {
+    // CA4: Le bouton Nouvelle discussion ouvre une nouvelle session différente
+    // sans détruire la précédente, qui reste dans le magasin du moteur
+    const newSid = generateNewSessionId(activeAgentId);
+    localStorage.setItem(getSessionStorageKey(activeAgentId), newSid);
+    setCurrentSessionId(newSid);
     setMessages([]);
     setStreamingText('');
     setIsLoading(false);
   };
 
   const handleUpdateActionStatus = (actionId: string, status: ActionCardData['status'], feedback?: string) => {
-    setMessages((prev) =>
-      prev.map((msg) => {
+    setMessages((prev) => {
+      const updated = prev.map((msg) => {
         if (msg.actionCard && msg.actionCard.id === actionId) {
           return {
             ...msg,
@@ -108,8 +187,12 @@ export const ChatView: React.FC<ChatViewProps> = ({ activeAgentId, availableAgen
           };
         }
         return msg;
-      })
-    );
+      });
+      if (currentSessionId) {
+        localStorage.setItem(getMessagesStorageKey(currentSessionId), JSON.stringify(updated));
+      }
+      return updated;
+    });
   };
 
   return (

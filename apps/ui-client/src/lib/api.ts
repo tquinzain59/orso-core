@@ -298,6 +298,10 @@ export async function sendUserPrompt(
   sessionId?: string
 ): Promise<ChatMessage> {
   const timestamp = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  const cleanSessionId = (sessionId || '').trim();
+  if (!cleanSessionId) {
+    throw new Error("Identifiant de session manquant ou invalide. Une session active est requise.");
+  }
 
   // 1. Tenter le streaming direct via le backend FastAPI /api/client/chat
   try {
@@ -312,14 +316,21 @@ export async function sendUserPrompt(
       body: JSON.stringify({
         agent_id: agentId,
         message: prompt,
-        session_id: sessionId || `client-session-${Date.now()}`,
+        session_id: cleanSessionId,
       }),
     });
 
     if (!response.ok) {
       console.error(`Erreur HTTP backend /api/client/chat: ${response.status} ${response.statusText}`);
       const errText = await response.text().catch(() => '');
-      console.error('Corps de l\'erreur backend:', errText);
+      let detailMsg = `Erreur backend (${response.status}): ${response.statusText}`;
+      try {
+        const parsed = JSON.parse(errText);
+        if (parsed.detail) detailMsg = parsed.detail;
+      } catch {
+        if (errText) detailMsg = errText;
+      }
+      throw new Error(detailMsg);
     } else if (response.body) {
       const reader = response.body.getReader();
       const decoder = new TextDecoder('utf-8');
@@ -488,6 +499,24 @@ export async function executeClientAction(
     return { success: true, message: `Relance reportée de 7 jours (${now})` };
   }
   return { success: true, message: `Action prise en compte (${now})` };
+}
+
+export async function getSessionMessages(
+  agentId: AgentId,
+  sessionId: string
+): Promise<{ session_id: string; agent_id: string; messages: { role: 'user' | 'assistant'; content: string }[]; count: number }> {
+  const base = getApiBaseUrl();
+  const res = await fetch(`${base}/api/client/chat/messages?agent_id=${encodeURIComponent(agentId)}&session_id=${encodeURIComponent(sessionId)}`, {
+    headers: {
+      'Accept': 'application/json',
+      ...getAuthHeaders(),
+    },
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Erreur récupération messages (${res.status}): ${errText || res.statusText}`);
+  }
+  return res.json();
 }
 
 // ── Données Client en Base (Agents, Intégrations, Canaux) ───────────────────
