@@ -8,6 +8,18 @@
 
 BEGIN;
 
+-- 0. Assainissement préalable : basculer les doublons résiduels en CANCELED
+-- On conserve l'abonnement actif le plus ancien par tenant (ou celui de référence)
+UPDATE public.subscriptions s
+SET status = 'CANCELED', updated_at = NOW()
+WHERE s.status IN ('ACTIVE', 'TRIALING')
+  AND s.id NOT IN (
+    SELECT DISTINCT ON (tenant_id) id
+    FROM public.subscriptions
+    WHERE status IN ('ACTIVE', 'TRIALING')
+    ORDER BY tenant_id, created_at ASC
+  );
+
 -- 1. Index d'unicité partiel pour garantir au plus un abonnement ACTIVE par tenant
 CREATE UNIQUE INDEX IF NOT EXISTS uq_subscriptions_active_tenant
     ON public.subscriptions (tenant_id)
