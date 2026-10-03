@@ -244,11 +244,22 @@ def test_client_chat_endpoint_stream_auth(monkeypatch):
     res = client.post("/api/client/chat", json=payload)
     assert res.status_code == 401
 
-    # Avec jeton valide -> 200
     token = _make_test_jwt(tenant_id="tenant-123")
-    res_ok = client.post(
+
+    # Avec jeton valide mais sans session_id -> 400 (CA6 KAN-86)
+    res_no_session = client.post(
         "/api/client/chat",
         json=payload,
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res_no_session.status_code == 400
+    assert "session" in res_no_session.json()["detail"].lower()
+
+    # Avec jeton valide et session_id valide -> 200
+    payload_with_session = {**payload, "session_id": "session-test-stream-123"}
+    res_ok = client.post(
+        "/api/client/chat",
+        json=payload_with_session,
         headers={"Authorization": f"Bearer {token}"},
     )
     assert res_ok.status_code == 200
