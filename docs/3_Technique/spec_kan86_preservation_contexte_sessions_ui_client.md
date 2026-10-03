@@ -16,7 +16,7 @@ Lors d'un test utilisateur de l'interface client Orso dans l'espace **Financia S
 
 ### Cause racine identifiée : Deux replis silencieux superposés
 1. **Absence d'identifiant côté UI** : `apps/ui-client/src/pages/ChatView.tsx` appelait `sendUserPrompt(activeAgentId, prompt, onDelta)` sans fournir de 4ème paramètre `sessionId`.
-2. **Génération éphémère côté client** : Faute d'identifiant, `apps/ui-client/src/lib/api.ts` générait `session_id: sessionId || \`client-session-\${Date.now()}\``. Deux messages consécutifs ne pouvaient donc jamais partager le même identifiant.
+2. **Génération éphémère côté client** : Faute d'identifiant, `apps/ui-client/src/lib/api.ts` générait `session_id: sessionId || \`client-session-${Date.now()}\``. Deux messages consécutifs ne pouvaient donc jamais partager le même identifiant.
 3. **Génération éphémère côté serveur** : Le point d'entrée FastAPI `hermes_cli/web_routers/client_ui.py` appliquait un second repli : `sid = req.session_id or f"session-{int(time.time())}-{uuid.uuid4().hex[:6]}"`.
 
 Les messages n'échouaient jamais, mais chaque tour ouvrait une session neuve sans mémoire.
@@ -40,6 +40,7 @@ La correction s'effectue strictement aux bords :
    - Aucun identifiant de session n'est jamais fabriqué sur le serveur.
    - **Registre d'étanchéité multi-tenant et inter-utilisateurs (`client_chat_sessions.db`)** :
      - Table `client_chat_sessions` enregistrant `(session_id, tenant_id, user_id, agent_id, created_at, last_activity_at)`.
+     - **Comportement Fail-Closed** : Toute anomalie ou indisponibilité du registre SQLite lève immédiatement une exception HTTP 500 (`detail: "Erreur interne de contrôle de session : Registre d'étanchéité indisponible."`) bloquant toute fuite potentielle.
      - Rejet **HTTP 403 Forbidden** si un utilisateur d'un autre tenant ou un autre utilisateur du même tenant tente d'utiliser une session existante.
      - Rejet **HTTP 400 Bad Request** en cas d'incohérence d'agent (ex: session créée pour Jérôme soumise à Lucas).
    - Persistance automatique des tours de dialogue dans le magasin `SessionDB` (`state.db`) sous `session_id`, garantissant la réhydratation du contexte au tour suivant.
@@ -47,15 +48,23 @@ La correction s'effectue strictement aux bords :
 
 ---
 
-## 3. Matrice des Critères d'Acceptation (CA1 à CA8)
+## 3. Matrice des Critères d'Acceptation (CA1 à CA8) + Sécurité Fail-Closed
 
 | Critère | Description | Preuve / Validation |
 | :--- | :--- | :--- |
-| **CA1** | Continuité contextuelle au fil des tours dans une même session | Validé dans `test_ca1_and_ca2_conversation_continuity_and_persistence` : le 2ème tour intègre le contexte du 1er tour sans répétition. |
+| **CA1** | Continuité contextuelle au fil des tours dans une même session | Validé dans `test_ca1_and_ca2_conversation_continuity_and_persistence` : le 2ème tour intègre le contexte du 1er tour sans répétition via le moteur réel `AIAgent`. |
 | **CA2** | Messages d'une même session portant le même identifiant côté moteur | Validé dans `test_ca1_and_ca2_conversation_continuity_and_persistence` : lecture de 4 messages dans `SessionDB` sous le même `session_id`. |
 | **CA3** | Persistance après rechargement de page | Validé dans `test_ca3_page_reload_persistence_and_resume` : rejeu après rechargement avec le même `session_id` préservé. |
 | **CA4** | "Nouvelle discussion" crée une session neuve et préserve l'ancienne | Validé dans `test_ca4_new_discussion_mints_different_session_preserving_previous` : 2 sessions distinctes dans `SessionDB`, antécédent intact. |
 | **CA5** | Étanchéité inter-agents (Jérôme vs Lucas) | Validé dans `test_ca5_agent_isolation_no_shared_session` : rejet HTTP 400 Incohérence d'agent si Lucas tente d'utiliser la session de Jérôme. |
 | **CA6** | Rejet explicite sans session valide (0 repli silencieux serveur) | Validé dans `test_ca6_rejection_without_valid_session` : rejet HTTP 400 immédiat si `session_id` est absent ou vide. |
 | **CA7** | Étanchéité multi-comptes et multi-tenants | Validé dans `test_ca7_multi_user_and_multi_tenant_isolation` : rejet HTTP 403 Forbidden sur toute tentative de reprise illégitime. |
-| **CA8** | Rejeu du scénario exact du constat (Giallo 13h42 -> 13h53) | Validé dans `test_ca8_exact_reported_scenario_giallo_15min_recall` : rappel des 4 entités sans message d'oubli. |
+| **CA8** | Rejeu du scénario exact du constat (Giallo 13h42 -> 13h53) | Validé dans `test_ca8_exact_reported_scenario_giallo_15min_recall` : rappel des 4 entités sans message d'oubli via moteur `AIAgent`. |
+| **Fail-Closed** | Registre d'étanchéité défaillant bloque hermétiquement (HTTP 500) | Validé dans `test_fail_closed_on_session_db_error` : blocage immédiat en écriture (POST) et en lecture (GET) en cas d'erreur SQLite. |
+
+---
+
+## 4. Publication & Références
+
+- **Page Confluence** : [Spécification Technique KAN-86 (Espace Orsoagents)](https://orso-agents.atlassian.net/wiki/spaces/Orsoagents/pages/7471234)
+- **Suite de tests automatisés** : `tests/hermes_cli/test_client_ui_sessions_kan86.py` (8/8 tests réussis en 6.9s).

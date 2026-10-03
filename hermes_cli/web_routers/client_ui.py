@@ -1829,25 +1829,22 @@ def _get_client_sessions_db_path() -> Path:
 def _init_client_sessions_db() -> None:
     """Initialise la table de registre des sessions client si elle n'existe pas."""
     db_path = _get_client_sessions_db_path()
-    try:
-        with sqlite3.connect(str(db_path), timeout=15.0) as conn:
-            conn.execute(
-                """CREATE TABLE IF NOT EXISTS client_chat_sessions (
-                    session_id TEXT PRIMARY KEY,
-                    tenant_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    agent_id TEXT NOT NULL,
-                    created_at REAL NOT NULL,
-                    last_activity_at REAL NOT NULL
-                );"""
-            )
-            conn.execute(
-                """CREATE INDEX IF NOT EXISTS idx_client_sessions_lookup
-                   ON client_chat_sessions(tenant_id, user_id, agent_id);"""
-            )
-            conn.commit()
-    except Exception as e:
-        _log.warning("Erreur initialisation base client_chat_sessions: %s", e)
+    with sqlite3.connect(str(db_path), timeout=15.0) as conn:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS client_chat_sessions (
+                session_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                last_activity_at REAL NOT NULL
+            );"""
+        )
+        conn.execute(
+            """CREATE INDEX IF NOT EXISTS idx_client_sessions_lookup
+               ON client_chat_sessions(tenant_id, user_id, agent_id);"""
+        )
+        conn.commit()
 
 
 def _verify_and_bind_client_session(
@@ -1864,9 +1861,9 @@ def _verify_and_bind_client_session(
             detail="Identifiant de session manquant ou invalide. Une session valide est requise.",
         )
 
-    _init_client_sessions_db()
-    db_path = _get_client_sessions_db_path()
     try:
+        _init_client_sessions_db()
+        db_path = _get_client_sessions_db_path()
         with sqlite3.connect(str(db_path), timeout=15.0) as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -1907,6 +1904,10 @@ def _verify_and_bind_client_session(
         raise
     except Exception as e:
         _log.error("Erreur vérification session client: %s", e)
+        raise HTTPException(
+            status_code=500,
+            detail="Erreur interne de contrôle de session : Registre d'étanchéité indisponible.",
+        ) from e
 
 
 # ── Moteur d'Inférence et de Streaming SSE ──────────────────────────────────
@@ -1977,6 +1978,7 @@ async def _chat_stream_generator(
             token = None
             try:
                 from hermes_constants import set_hermes_home_override, reset_hermes_home_override
+                from hermes_state import SessionDB
                 profile_dir = _find_profile_dir(agent_id)
                 if profile_dir and profile_dir.is_dir() and os.access(profile_dir, os.W_OK):
                     agent_home = profile_dir.resolve()
@@ -1984,14 +1986,21 @@ async def _chat_stream_generator(
                     agent_home = (PROJECT_ROOT / "data" / "agents" / agent_id).resolve()
                     agent_home.mkdir(parents=True, exist_ok=True)
                 token = set_hermes_home_override(str(agent_home))
+                sdb = SessionDB(agent_home / "state.db")
+                prior_messages = sdb.get_messages_as_conversation(session_id) or []
                 agent = AIAgent(
                     model=configured_model,
                     provider=configured_provider,
                     ephemeral_system_prompt=system_instruction,
                     session_id=session_id,
+                    session_db=sdb,
                     quiet_mode=True,
                 )
-                res = agent.run_conversation(user_message=prompt, stream_callback=stream_cb)
+                res = agent.run_conversation(
+                    user_message=prompt,
+                    conversation_history=prior_messages,
+                    stream_callback=stream_cb,
+                )
                 resp = res.get("final_response", "")
                 if "can't reach the model provider" in resp:
                     return None
@@ -2036,47 +2045,8 @@ async def _chat_stream_generator(
     # 4. Mode résilient / Métier si le LLM n'a pas pu être interrogé en direct
     if not llm_invoked:
         norm = prompt.lower()
-
-        # Sondage de l'historique de la session pour la continuité contextuelle résiliente
-        prior_messages: List[Dict[str, Any]] = []
-        try:
-            from hermes_state import SessionDB
-            profile_dir = _find_profile_dir(agent_id)
-            if profile_dir and profile_dir.is_dir() and os.access(profile_dir, os.W_OK):
-                agent_home = profile_dir.resolve()
-            else:
-                agent_home = (PROJECT_ROOT / "data" / "agents" / agent_id).resolve()
-            state_db_file = agent_home / "state.db"
-            if state_db_file.exists():
-                sdb = SessionDB(state_db_file)
-                prior_messages = sdb.get_messages_as_conversation(session_id) or []
-        except Exception:
-            prior_messages = []
-
-        # Détection du contexte antérieur dans la même session (CA1 / CA8)
-        prior_mentions_giallo = any(
-            "giallo" in str(m.get("content", "")).lower() for m in prior_messages
-        )
-
         if agent_id == "jerome":
-            if "giallo" in norm:
-                reply_parts = [
-                    "Voici les informations sur les entreprises correspondant à **Giallo** :\n\n",
-                    "1. **GIALLO NORD** — Sainghin-en-Mélantois (59) : Facturation saine, encours 12 400 €\n",
-                    "2. **GIALLO SUD-OUEST** — Sault-de-Navailles (64) : Retard 12 jours, 3 200 €\n",
-                    "3. **GIALLO PARIS EST** — Kremlin-Bicêtre (94) : Retard 28 jours, 8 900 € (Relance recommandée)\n",
-                    "4. **GIALLO ÎLE-DE-FRANCE** — Meudon (92) : Facture échue sous 48h, 4 100 €\n\n",
-                    "Laquelle de ces 4 entités vous intéresse-t-elle pour un suivi approfondi ?",
-                ]
-            elif prior_mentions_giallo and any(
-                w in norm for w in ["retrouve", "retrouver", "rappel", "échange", "précédent", "historique", "laquelle", "deuxième", "première"]
-            ):
-                reply_parts = [
-                    "Je retrouve bien notre échange précédent dans cette session au sujet de votre demande sur **Giallo** :\n\n",
-                    "Nous avions identifié les 4 sociétés (Sainghin-en-Mélantois 59, Sault-de-Navailles 64, Kremlin-Bicêtre 94 et Meudon 92).\n\n",
-                    "Je suis prêt à relancer ou auditer l'entité de votre choix dès votre confirmation.",
-                ]
-            elif "balance" in norm or "retard" in norm or "trésorerie" in norm or "impayé" in norm:
+            if "balance" in norm or "retard" in norm or "trésorerie" in norm or "impayé" in norm:
                 reply_parts = [
                     "Je m'en occupe tout de suite ! J'ai analysé l'état de votre trésorerie et de vos factures clients :\n\n",
                     "• **Non échues (à venir)** : 48 250 € (18 factures saines)\n",
