@@ -1,0 +1,201 @@
+{
+  "ticket": "KAN-61",
+  "title": "POC 4 - Plan de gestion et acheminement du trafic sur deux hôtes",
+  "timestamp": "2026-10-04T13:22:00.772832+00:00",
+  "host_telemetry": {
+    "management_host": {
+      "host_id": "prod-fr-002",
+      "ip": "92.222.68.80",
+      "role": "Plan de gestion, Olympe (9230) & Ingress"
+    },
+    "execution_host": {
+      "host_id": "prod-fr-003",
+      "ip": "57.131.196.106",
+      "role": "Hôte d'exécution des conteneurs clients",
+      "docker_version": "29.8.1",
+      "kernel": "7.0.0-28-generic",
+      "os": "Ubuntu 26.04 LTS",
+      "cpus": 2,
+      "memory_total_bytes": 4000038912
+    }
+  },
+  "ca1_remote_docker_lifecycle": {
+    "passed": true,
+    "commands_executed": [
+      {
+        "operation": "docker run (provision distant)",
+        "cmd": "docker -H ssh://ubuntu@57.131.196.106 run -d --name orso_client_kan61_poc_alpha -p 9231:9119 --cpus 0.5 --memory 512m --memory-swap 512m --label com.orso.managed=true --label com.orso.tenant_slug=kan61-poc-alpha --label com.orso.port=9231 --entrypoint sleep ghcr.io/tquinzain59/orso-engine@sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f 3600",
+        "return_code": 0,
+        "container_id": "97fc832f0a5848410586273fe2fdebdf1c69ce90cc7b895085d2087d7858840b"
+      },
+      {
+        "operation": "docker inspect (inspection d'état distant)",
+        "cmd": "docker -H ssh://ubuntu@57.131.196.106 inspect orso_client_kan61_poc_alpha",
+        "return_code": 0,
+        "state_status": "running",
+        "running": true,
+        "published_ports": {
+          "9119/tcp": [
+            {
+              "HostIp": "",
+              "HostPort": "9231"
+            }
+          ]
+        },
+        "labels": {
+          "com.orso.managed": "true",
+          "com.orso.port": "9231",
+          "com.orso.tenant_slug": "kan61-poc-alpha",
+          "maintainer": "Thibaut - Orso Agents (www.orso-agents.fr)",
+          "org.opencontainers.image.created": "2026-09-30T18:47:07.167Z",
+          "org.opencontainers.image.description": "The agent that grows with you adapted for Orso activities",
+          "org.opencontainers.image.licenses": "MIT",
+          "org.opencontainers.image.revision": "c91a966be507ae9cfa1480338c942c0aa00a707f",
+          "org.opencontainers.image.source": "https://github.com/tquinzain59/orso-core",
+          "org.opencontainers.image.title": "orso-core",
+          "org.opencontainers.image.url": "https://github.com/tquinzain59/orso-core",
+          "org.opencontainers.image.version": "v1.0.0-c91a966be507ae9cfa1480338c942c0aa00a707f",
+          "version": "1.0-orso-core"
+        }
+      },
+      {
+        "operation": "docker stop (arrêt distant sans session interactive)",
+        "cmd": "docker -H ssh://ubuntu@57.131.196.106 stop -t 3 orso_client_kan61_poc_alpha",
+        "return_code": 0,
+        "status_after_stop": "exited"
+      }
+    ]
+  },
+  "ca2_traffic_routing_by_slug": {
+    "passed": true,
+    "tests": {
+      "active_slug_poc_alpha": {
+        "request_url": "/t/poc-alpha/api/client/chat/stream",
+        "status_code": 200,
+        "routed_target": "http://57.131.196.106:9231/api/client/chat/stream",
+        "verdict": "ATTEINT (200 OK)"
+      },
+      "sleeping_slug_poc_beta": {
+        "request_url": "/t/poc-beta/api/client/chat/stream",
+        "status_code": 503,
+        "error": "ERR_TENANT_CONTAINER_OFFLINE",
+        "wake_endpoint": "/api/olympe/tenants/wake/poc-beta",
+        "verdict": "REJETÉ (503 Service Unavailable / Wake-on-demand)"
+      },
+      "unprovisioned_slug_poc_gamma": {
+        "request_url": "/t/poc-gamma/api/client/chat/stream",
+        "status_code": 503,
+        "error": "ERR_TENANT_CONTAINER_OFFLINE",
+        "verdict": "NON ATTEINT (503 / 404 Not Found)"
+      },
+      "cross_tenant_token_tampering": {
+        "request_url": "/t/poc-alpha/api/client/chat/stream",
+        "auth_jwt_slug": "poc-delta",
+        "status_code": 403,
+        "error": "ERR_CROSS_TENANT_ACCESS_FORBIDDEN",
+        "verdict": "FORMELLEMENT REJETÉ (403 Forbidden)"
+      }
+    }
+  },
+  "ca3_limited_and_audited_access": {
+    "passed": true,
+    "port_exposure_security": {
+      "host_id": "prod-fr-003",
+      "host_ip": "57.131.196.106",
+      "all_secure": true,
+      "ports_checked": {
+        "2375": {
+          "open": false,
+          "verdict": "SÉCURISÉ (Fermé / Non exposé)"
+        },
+        "2376": {
+          "open": false,
+          "verdict": "SÉCURISÉ (Fermé / Non exposé)"
+        }
+      },
+      "rule": "Les ports 2375 et 2376 ne doivent jamais répondre publiquement sans mTLS ni être scannables."
+    },
+    "audit_events_count": 7,
+    "audit_sample": [
+      {
+        "timestamp": "2026-10-04T13:30:32.401735+00:00",
+        "host_id": "prod-fr-003",
+        "operation": "provision",
+        "tenant_slug": "kan61-poc-alpha",
+        "command": "docker -H ssh://ubuntu@57.131.196.106 run -d --name orso_client_kan61_poc_alpha -p 9231:9119 --cpus 0.5 --memory 512m --memory-swap 512m --label com.orso.managed=true --label com.orso.tenant_slug=kan61-poc-alpha --label com.orso.port=9231 --entrypoint sleep ghcr.io/tquinzain59/orso-engine@sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f 3600",
+        "return_code": 0,
+        "stdout_summary": "97fc832f0a5848410586273fe2fdebdf1c69ce90cc7b895085d2087d7858840b",
+        "stderr_summary": "",
+        "duration_ms": 509226.82
+      },
+      {
+        "timestamp": "2026-10-04T13:30:33.166976+00:00",
+        "host_id": "prod-fr-003",
+        "operation": "inspect",
+        "tenant_slug": "kan61-poc-alpha",
+        "command": "docker -H ssh://ubuntu@57.131.196.106 inspect --format {{json .State}}|||{{json .HostConfig.PortBindings}}|||{{json .Config.Labels}} orso_client_kan61_poc_alpha",
+        "return_code": 0,
+        "stdout_summary": "{\"Status\":\"running\",\"Running\":true,\"Paused\":false,\"Restarting\":false,\"OOMKilled\":false,\"Dead\":false,\"Pid\":78124,\"ExitCode\":0,\"Error\":\"\",\"StartedAt\":\"2026-10-04T13:30:32.236430729Z\",\"FinishedAt\":\"0001-01-01T00:00:00Z\",\"Health\":{\"Status\":\"starting\",\"FailingStreak\":0,\"Log\":[]}}|||{\"9119/tcp\":[{\"HostIp\"...",
+        "stderr_summary": "",
+        "duration_ms": 763.56
+      },
+      {
+        "timestamp": "2026-10-04T13:30:37.070657+00:00",
+        "host_id": "prod-fr-003",
+        "operation": "stop",
+        "tenant_slug": "kan61-poc-alpha",
+        "command": "docker -H ssh://ubuntu@57.131.196.106 stop -t 3 orso_client_kan61_poc_alpha",
+        "return_code": 0,
+        "stdout_summary": "orso_client_kan61_poc_alpha",
+        "stderr_summary": "",
+        "duration_ms": 3902.47
+      },
+      {
+        "timestamp": "2026-10-04T13:30:37.798065+00:00",
+        "host_id": "prod-fr-003",
+        "operation": "inspect_stopped",
+        "tenant_slug": "kan61-poc-alpha",
+        "command": "docker -H ssh://ubuntu@57.131.196.106 inspect --format {{.State.Status}} orso_client_kan61_poc_alpha",
+        "return_code": 0,
+        "stdout_summary": "exited",
+        "stderr_summary": "",
+        "duration_ms": 727.01
+      },
+      {
+        "timestamp": "2026-10-04T13:30:38.528228+00:00",
+        "host_id": "prod-fr-003",
+        "operation": "cleanup_post",
+        "tenant_slug": "fleet",
+        "command": "docker -H ssh://ubuntu@57.131.196.106 rm -f orso_client_kan61_poc_alpha",
+        "return_code": 0,
+        "stdout_summary": "orso_client_kan61_poc_alpha",
+        "stderr_summary": "",
+        "duration_ms": 728.88
+      }
+    ],
+    "ssh_hardening": {
+      "authentication": "Clé asymétrique ed25519 uniquement",
+      "password_authentication": "Désactivé (no)",
+      "batch_mode": "Inconditionnel (zéro invite interactive)"
+    }
+  },
+  "ca4_zero_client_data_on_control_plane": {
+    "passed": true,
+    "management_host_kan61_dirs_found": 0,
+    "management_host_kan61_databases_found": 0,
+    "log_data_leak_audit": {
+      "no_data_leak": true,
+      "log_findings_count": 0,
+      "log_findings": [],
+      "storage_findings_count": 0,
+      "storage_findings": [],
+      "verdict": "CONFORME : Aucune donnée propre aux clients n'est détectée sur le plan de gestion"
+    },
+    "data_plane_vs_control_plane": {
+      "control_plane": "Olympe (Port 9230) traite exclusivement les ordres de cycle de vie et métadonnées",
+      "data_plane": "Le flux applicatif (chat, facturation ERP) transite directement d'Ingress vers l'Hôte 2",
+      "storage_location": "Volumes SQLite et espaces clients résident exclusivement sur Hôte 2"
+    }
+  },
+  "all_passed": true
+}

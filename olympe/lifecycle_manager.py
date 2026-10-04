@@ -154,8 +154,12 @@ class DockerLifecycleManager:
         host_max_containers: Optional[int] = None,
         host_flavor: Optional[str] = None,
         artifacts_root: Optional[str] = None,
+        remote_host: Optional[str] = None,
+        remote_manager: Optional[Any] = None,
     ):
         self.network_name = network_name
+        self.remote_host = remote_host or os.environ.get("ORSO_REMOTE_DOCKER_HOST") or None
+        self.remote_manager = remote_manager
         self.data_root = Path(data_root or os.environ.get("ORSO_DATA_ROOT", "./data/tenants")).resolve()
         if spaces_root:
             self.spaces_root = Path(spaces_root).resolve()
@@ -560,17 +564,34 @@ class DockerLifecycleManager:
             res["message"] = f"Retour arrière vers l'artefact {target_version} exécuté avec succès pour {tenant_slug}."
         return res
 
-    def _exec_docker(self, args: List[str], timeout: float = 15.0) -> subprocess.CompletedProcess:
-        """Exécute une commande docker sécurisée avec timeout."""
+    def _exec_docker(
+        self,
+        args: List[str],
+        timeout: float = 15.0,
+    ) -> subprocess.CompletedProcess:
+        """Exécute une commande docker sécurisée avec timeout, en local ou sur hôte distant (KAN-61)."""
         if not self.has_docker:
             raise RuntimeError("Le binaire Docker n'est pas accessible sur le système hôte.")
-        cmd = ["docker"] + args
+
+        if self.remote_manager:
+            return self.remote_manager.exec_docker(
+                args=args,
+                timeout=timeout,
+            )
+
+        cmd = ["docker"]
+        if self.remote_host:
+            cmd.extend(["-H", self.remote_host])
+        cmd.extend(args)
+
         return subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=timeout,
             check=False,
+            encoding="utf-8",
+            errors="replace",
         )
 
     def get_host_allocated_resources(self) -> Dict[str, Any]:
@@ -1013,6 +1034,7 @@ class DockerLifecycleManager:
         use_dedicated_space: bool = True,
         artifact_version: Optional[str] = None,
         artifact_digest: Optional[str] = None,
+        tenant_port: Optional[int] = None,
     ) -> Dict[str, Any]:
         container_name = normalize_container_name(tenant_slug)
 
@@ -1261,6 +1283,21 @@ class DockerLifecycleManager:
         if tenant_slug in ("clientx-orso",):
             run_args.extend(["--label", "com.orso.sandbox=true"])
 
+        # Port applicatif client (KAN-61 / Acheminement multi-hôtes)
+        effective_port = tenant_port
+        if not effective_port and self.remote_manager:
+            try:
+                effective_port = self.remote_manager.allocate_tenant_port(tenant_slug)
+            except Exception:
+                pass
+        if effective_port:
+            run_args.extend([
+                "-p", f"{effective_port}:9119",
+                "--label", f"com.orso.port={effective_port}",
+            ])
+            if self.remote_manager:
+                self.remote_manager.register_tenant_route(tenant_slug, port=effective_port, status="active")
+
         # Montages de l'environnement client (fin des dossiers partagés KAN-58 / Document 27)
         project_root = Path(__file__).resolve().parent.parent
         legacy_shared = not use_dedicated_space or os.environ.get("ORSO_LEGACY_SHARED_MOUNTS") == "1"
@@ -1425,6 +1462,9 @@ class DockerLifecycleManager:
         if status_info.get("status") != "not_found":
             _log.info("Arrêt et suppression forcée du conteneur : %s", container_name)
             self._exec_docker(["rm", "-f", container_name], timeout=15.0)
+
+        if self.remote_manager:
+            self.remote_manager.unregister_tenant_route(tenant_slug)
 
         if remove_data:
             if tenant_data_dir.exists():
