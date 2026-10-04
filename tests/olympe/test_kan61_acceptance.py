@@ -125,11 +125,15 @@ def test_kan61_ca1_remote_docker_non_interactive_lifecycle(remote_manager):
         assert cmd[2] == "ssh://ubuntu@57.131.196.106"
 
 
-# ─── CA2 : ACHEMINEMENT ÉTANCHE DES REQUÊTES PAR SLUG ─────────────────────────
+# ─── CA2 : TABLE DE ROUTAGE ET DÉCISION D'AUTORISATION PAR SLUG (AMENDEMENT 04/10) ────
 
 def test_kan61_ca2_traffic_routing_by_slug_and_rejection(remote_manager):
-    """CA2 : Une requête pour un slug atteint son espace, et une requête pour un autre slug ne l'atteint pas."""
-    # 1. Enregistrement d'une route active pour poc-alpha
+    """CA2 : Le plan de gestion associe chaque espace à un slug et refuse tout autre slug (table de routage et décisions brutes)."""
+    # 1. Lecture de la table de routage avant enregistrement
+    table_before = remote_manager.get_routing_table()
+    assert len(table_before) == 0
+
+    # 2. Enregistrement d'une route active pour poc-alpha
     route_alpha = remote_manager.register_tenant_route(
         tenant_slug="poc-alpha",
         port=9231,
@@ -138,37 +142,29 @@ def test_kan61_ca2_traffic_routing_by_slug_and_rejection(remote_manager):
     assert route_alpha["port"] == 9231
     assert route_alpha["target_url"] == "http://57.131.196.106:9231"
 
-    # 2. Requête vers poc-alpha valide : autorisée et acheminée vers son port
-    req_alpha = remote_manager.route_client_request(
-        tenant_slug="poc-alpha",
-        path="/api/client/chat/stream",
-        auth_jwt_slug="poc-alpha",
-    )
-    assert req_alpha["allowed"] is True
-    assert req_alpha["status_code"] == 200
-    assert req_alpha["port"] == 9231
-    assert req_alpha["routed_target"] == "http://57.131.196.106:9231/api/client/chat/stream"
+    # Lecture de la table après enregistrement
+    table_after = remote_manager.get_routing_table()
+    assert len(table_after) == 1
+    assert "poc-alpha" in table_after
 
-    # 3. Requête vers un slug inexistant / non provisionné : rejet explicite 503 (Wake-on-demand)
-    req_unknown = remote_manager.route_client_request(
-        tenant_slug="poc-inexistant",
-        path="/api/client/chat/stream",
-    )
-    assert req_unknown["allowed"] is False
-    assert req_unknown["status_code"] == 503
-    assert req_unknown["error"] == "ERR_TENANT_CONTAINER_OFFLINE"
-    assert "/api/olympe/tenants/wake/poc-inexistant" in req_unknown["wake_endpoint"]
+    # 3. Décision d'autorisation brute pour l'espace actif (poc-alpha)
+    decision_active = remote_manager.authorize_and_resolve_slug("poc-alpha")
+    assert decision_active["allowed"] is True
+    assert decision_active["decision"] == "ACCEPT"
+    assert decision_active["status"] == "AUTHORIZED"
+    assert decision_active["port"] == 9231
+    assert decision_active["routed_target"] == "http://57.131.196.106:9231"
 
-    # 4. Requête cross-tenant (tentative d'atteindre poc-alpha avec le jeton de poc-beta) : 403 Forbidden
-    req_cross = remote_manager.route_client_request(
-        tenant_slug="poc-alpha",
-        path="/api/client/chat/stream",
-        auth_jwt_slug="poc-beta",
-    )
-    assert req_cross["allowed"] is False
-    assert req_cross["status_code"] == 403
-    assert req_cross["error"] == "ERR_CROSS_TENANT_ACCESS_FORBIDDEN"
-    assert req_cross["routed_target"] is None
+    # 4. Décision d'autorisation brute pour un slug non provisionné (poc-inconnu) : rejet explicite
+    decision_unknown = remote_manager.authorize_and_resolve_slug("poc-inconnu")
+    assert decision_unknown["allowed"] is False
+    assert decision_unknown["decision"] == "REJECT"
+    assert decision_unknown["status"] == "REJECTED_UNPROVISIONED"
+    assert decision_unknown["error_code"] == "ERR_TENANT_ROUTE_NOT_FOUND"
+
+    # 5. Dé-enregistrement et vérification de la table finale
+    remote_manager.unregister_tenant_route("poc-alpha")
+    assert len(remote_manager.get_routing_table()) == 0
 
 
 # ─── CA3 : ACCÈS AU MOTEUR DOCKER DU SECOND HÔTE LIMITÉ ET TRACÉ ─────────────
@@ -201,12 +197,30 @@ def test_kan61_ca3_security_limited_access_and_audit_log(remote_manager, tmp_pat
         parsed = json.loads(lines[-1])
         assert parsed["tenant_slug"] == "poc-alpha"
 
-    # 2. Limitation de la surface d'exposition : ports 2375/2376 fermés
-    with patch("socket.socket.connect_ex", return_value=111):  # ECONNREFUSED
+    # 2. Distinction formelle : hôte injoignable vs ports fermés
+    # Cas A : Hôte injoignable (port 22 ne répond pas) -> all_secure doit être FALSE / INCONCLUANT
+    def mock_unreachable_connect(addr):
+        return 110  # ETIMEDOUT sur tout
+
+    with patch("socket.socket.connect_ex", side_effect=mock_unreachable_connect):
+        sec_unreach = remote_manager.verify_port_exposure_security("prod-fr-003")
+        assert sec_unreach["host_reachable"] is False
+        assert sec_unreach["all_secure"] is False
+        assert "INCONCLUANT" in sec_unreach["verdict_global"]
+
+    # Cas B : Hôte joignable (port 22 ouvert) et ports 2375/2376 fermés (ECONNREFUSED)
+    def mock_closed_connect(addr):
+        ip, port = addr
+        if port == 22:
+            return 0  # SSH ouvert -> hôte joignable
+        return 111  # ECONNREFUSED sur 2375 et 2376
+
+    with patch("socket.socket.connect_ex", side_effect=mock_closed_connect):
         sec = remote_manager.verify_port_exposure_security("prod-fr-003")
+        assert sec["host_reachable"] is True
         assert sec["all_secure"] is True
-        assert sec["ports_checked"][2375]["open"] is False
-        assert sec["ports_checked"][2376]["open"] is False
+        assert sec["ports_checked"][2375]["state"] == "CLOSED"
+        assert sec["ports_checked"][2376]["state"] == "CLOSED"
 
     # 3. Allocation de ports déterministe et étanche
     port_alpha = remote_manager.allocate_tenant_port("poc-alpha")

@@ -8,6 +8,7 @@ et la vérification de non-transit des données clients sur le plan de contrôle
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import os
@@ -237,8 +238,42 @@ class RemoteDockerHostManager:
         }
 
     def verify_port_exposure_security(self, host_id: Optional[str] = None, timeout: float = 3.0) -> Dict[str, Any]:
-        """Vérifie formellement que les ports TCP Docker (2375, 2376) ne sont pas exposés sur Internet (CA3)."""
+        """Vérifie formellement que les ports TCP Docker (2375, 2376) ne sont pas exposés sur Internet (CA3).
+        
+        Distingue formellement :
+        - Un hôte injoignable (échec sur port SSH 22) -> verdict INCONCLUANT (ne valide jamais all_secure par erreur)
+        - Un port ouvert -> VULNÉRABLE (all_secure = False)
+        - Un port fermé -> SÉCURISÉ (CLOSED / TCP RST reçu)
+        - Un port filtré -> SÉCURISÉ (FILTERED / Timeout avec hôte joignable par ailleurs)
+        """
         host_cfg = self.get_host_config(host_id)
+        
+        # 1. Contrôle préalable de la joignabilité de l'hôte via son port de référence SSH (22)
+        host_reachable = False
+        s_ping = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s_ping.settimeout(timeout)
+        try:
+            res_ping = s_ping.connect_ex((host_cfg.ip, host_cfg.ssh_port))
+            if res_ping == 0:
+                host_reachable = True
+            else:
+                _log.warning("Hôte %s (%s) non joignable sur port SSH %d (errno=%d)", host_cfg.host_id, host_cfg.ip, host_cfg.ssh_port, res_ping)
+        except Exception as e:
+            _log.warning("Erreur contrôle joignabilité hôte %s : %s", host_cfg.host_id, e)
+        finally:
+            s_ping.close()
+
+        if not host_reachable:
+            return {
+                "host_id": host_cfg.host_id,
+                "host_ip": host_cfg.ip,
+                "host_reachable": False,
+                "all_secure": False,
+                "verdict_global": "INCONCLUANT (Hôte injoignable sur le réseau / Port SSH 22 ne répond pas)",
+                "ports_checked": {},
+                "rule": "Une panne réseau ne doit jamais être interprétée comme une preuve de sécurité.",
+            }
+
         ports_to_check = [2375, 2376]
         exposure_results = {}
         all_closed = True
@@ -248,24 +283,56 @@ class RemoteDockerHostManager:
             s.settimeout(timeout)
             try:
                 res = s.connect_ex((host_cfg.ip, p))
-                is_open = (res == 0)
-                exposure_results[p] = {
-                    "open": is_open,
-                    "verdict": "VULNÉRABLE (Port exposé publiquement)" if is_open else "SÉCURISÉ (Fermé / Non exposé)",
-                }
-                if is_open:
+                if res == 0:
+                    exposure_results[p] = {
+                        "open": True,
+                        "state": "OPEN",
+                        "errno": 0,
+                        "verdict": "VULNÉRABLE (Port ouvert et exposé publiquement)",
+                    }
                     all_closed = False
+                elif res in (errno.ECONNREFUSED, 61, 111):
+                    exposure_results[p] = {
+                        "open": False,
+                        "state": "CLOSED",
+                        "errno": res,
+                        "verdict": "SÉCURISÉ (Port fermé / Rejet TCP RST reçu)",
+                    }
+                elif res in (errno.ETIMEDOUT, 60, 110):
+                    exposure_results[p] = {
+                        "open": False,
+                        "state": "FILTERED",
+                        "errno": res,
+                        "verdict": "SÉCURISÉ (Filtré par pare-feu réseau / Drop)",
+                    }
+                else:
+                    exposure_results[p] = {
+                        "open": False,
+                        "state": f"ERRNO_{res}",
+                        "errno": res,
+                        "verdict": f"SÉCURISÉ (Code TCP: {os.strerror(res) if res in errno.errorcode else res})",
+                    }
+            except socket.timeout:
+                exposure_results[p] = {
+                    "open": False,
+                    "state": "FILTERED",
+                    "errno": errno.ETIMEDOUT,
+                    "verdict": "SÉCURISÉ (Filtré par pare-feu / Timeout sans réponse)",
+                }
             except Exception as e:
                 exposure_results[p] = {
                     "open": False,
-                    "verdict": f"SÉCURISÉ (Exception / Inaccessible: {e})",
+                    "state": "ERROR",
+                    "verdict": f"NON CONCLUANT (Exception socket: {e})",
                 }
+                all_closed = False
             finally:
                 s.close()
 
         return {
             "host_id": host_cfg.host_id,
             "host_ip": host_cfg.ip,
+            "host_reachable": True,
             "all_secure": all_closed,
             "ports_checked": exposure_results,
             "rule": "Les ports 2375 et 2376 ne doivent jamais répondre publiquement sans mTLS ni être scannables.",
@@ -314,9 +381,58 @@ class RemoteDockerHostManager:
         """Supprime une route client de la table d'acheminement."""
         self._routing_table.pop(tenant_slug, None)
 
+    def get_routing_table(self) -> Dict[str, Dict[str, Any]]:
+        """Retourne une copie brute de la table de routage multi-hôtes en mémoire (CA2)."""
+        return dict(self._routing_table)
+
     def resolve_tenant_route(self, tenant_slug: str) -> Optional[Dict[str, Any]]:
         """Résout la destination réseau d'un slug dans la table de routage Ingress (CA2)."""
         return self._routing_table.get(tenant_slug)
+
+    def authorize_and_resolve_slug(self, tenant_slug: str) -> Dict[str, Any]:
+        """Associe chaque espace à un slug et rend une décision d'autorisation explicite (CA2 amendé).
+        
+        Conforme à l'exigence CA2 :
+        - La table de routage résout un slug vers son hôte et son port.
+        - Toute requête dont le slug ne correspond pas à une route active est rejetée par une décision explicite.
+        """
+        route = self.resolve_tenant_route(tenant_slug)
+        if not route:
+            return {
+                "tenant_slug": tenant_slug,
+                "allowed": False,
+                "decision": "REJECT",
+                "status": "REJECTED_UNPROVISIONED",
+                "error_code": "ERR_TENANT_ROUTE_NOT_FOUND",
+                "reason": f"Aucune route configurée pour le slug '{tenant_slug}' : espace non provisionné sur la flotte.",
+                "routed_target": None,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        if route.get("status") not in ("active", "ready"):
+            return {
+                "tenant_slug": tenant_slug,
+                "allowed": False,
+                "decision": "REJECT",
+                "status": "REJECTED_OFFLINE",
+                "error_code": "ERR_TENANT_CONTAINER_OFFLINE",
+                "reason": f"L'espace '{tenant_slug}' existe mais est inactif ({route.get('status')}) : wake-on-demand requis.",
+                "routed_target": None,
+                "wake_endpoint": f"/api/olympe/tenants/wake/{tenant_slug}",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        return {
+            "tenant_slug": tenant_slug,
+            "allowed": True,
+            "decision": "ACCEPT",
+            "status": "AUTHORIZED",
+            "host_id": route["host_id"],
+            "host_ip": route["host_ip"],
+            "port": route["port"],
+            "target_url": route["target_url"],
+            "reason": f"Route active trouvée : espace client autorisé et résolu vers {route['host_id']} ({route['host_ip']}:{route['port']}).",
+            "routed_target": route["target_url"],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
 
     def route_client_request(
         self,

@@ -85,49 +85,48 @@ L'objectif de **KAN-61 (POC 4)** est d'établir, d'outiller et de prouver de bou
 - **Preuve attendue** :
   - Journal horodaté d'exécution consignant la ligne de commande exacte (`docker -H ssh://... run ...`), le code de retour (0), et les sorties brutes d'inspection prouvant l'instanciation, la détection et la terminaison sur l'Hôte 2.
 
-### 3.2 CA2 - Acheminement Étanche des Requêtes par Slug
-- **Exigence** : Une requête pour un slug atteint son espace, et une requête portant un autre slug ne l'atteint pas.
+### 3.2 CA2 - Table de Routage Multi-Hôtes et Décision d'Autorisation par Slug (Amendement 04/10/2026 - Voie b)
+- **Exigence (Amendée par le PO le 04/10/2026)** :
+  Le plan de gestion associe chaque espace à un slug et refuse tout autre slug : la table de routage résout un slug vers son hôte et son port, et toute requête dont le slug ne correspond pas à une route active est rejetée par une décision explicite. L'acheminement L7 réel en réseau fait l'objet du ticket dédié KAN-97.
 - **Implémentation** :
-  - Table de routage dynamique multi-hôtes : Olympe associe chaque espace client à un tuple `(host_id, host_ip, port)`.
-  - La passerelle d'acheminement Ingress L7 relaie les requêtes `/t/{slug}/api/...` vers le port de l'espace sur l'Hôte 2.
-  - Requête sur slug actif (`poc-alpha`) : retourne 200 OK avec le corps de réponse de l'espace client.
-  - Requête sur slug inactif ou non provisionné (`poc-inconnu`) : retourne 503 `TENANT_CONTAINER_OFFLINE` ou 404 `TENANT_NOT_FOUND`.
-  - Requête croisée (slug-a avec identifiant / clé de slug-b) : formellement rejetée par le garde d'authentification tenant (403 Forbidden).
+  - `RemoteDockerHostManager` gère la table de routage dynamique multi-hôtes (`get_routing_table()`) associant chaque slug d'espace client à un tuple `(host_id, host_ip, port, status)`.
+  - Décision d'autorisation explicite (`authorize_and_resolve_slug(slug)`) :
+    - Si le slug correspond à une route active : renvoie `decision: "ACCEPT"`, `status: "AUTHORIZED"`, `host_id`, `host_ip`, `port`, et l'URL cible.
+    - Si le slug n'est pas provisionné : rejet explicite `decision: "REJECT"`, `status: "REJECTED_UNPROVISIONED"`, `error_code: "ERR_TENANT_ROUTE_NOT_FOUND"`.
+    - Si le slug est en veille : rejet explicite `decision: "REJECT"`, `status: "REJECTED_OFFLINE"`, `error_code: "ERR_TENANT_CONTAINER_OFFLINE"`.
 - **Preuve attendue** :
-  - Réponses HTTP brutes, en-têtes et codes d'état obtenus pour deux slugs distincts (`poc-alpha` -> 200 OK vs `poc-inexistant` -> 503 / 404).
+  - Sortie brute de la résolution et de la décision d'autorisation pour deux slugs distincts (un espace actif, un espace non provisionné), obtenue par exécution du gestionnaire, la table de routage étant lue avant et après.
 
 ### 3.3 CA3 - Accès au Moteur Docker Limité et Tracé
 - **Exigence** : L'accès au moteur Docker du second hôte est limité et tracé.
 - **Implémentation** :
-  1. **Limitation de l'exposition réseau** :
-     - Les ports d'API TCP Docker 2375 et 2376 sont formellement fermés et non exposés (`0.0.0.0:2375/2376` absent de `ss -tulpn`).
-     - L'accès d'orchestration s'opère exclusivement via SSH durci (`PasswordAuthentication no`, clé `ed25519`).
-     - Durcissement iptables `DOCKER-USER` sur l'Hôte 2 : les ports conteneurs publiés (9200-9299) ne répondent qu'à l'IP de l'Hôte 1 (`92.222.68.80`).
+  1. **Limitation de l'exposition réseau & Sonde étanche** :
+     - Les ports d'API TCP Docker 2375 et 2376 sont formellement fermés et non exposés.
+     - La sonde réseau `verify_port_exposure_security` contrôle au préalable la joignabilité de l'hôte (port 22 SSH) pour éviter toute fausse conformité en cas de panne réseau, et distingue les ports fermés (`ECONNREFUSED` / TCP RST) des ports filtrés (`ETIMEDOUT`).
+     - L'accès d'orchestration s'opère exclusivement via SSH durci (`PasswordAuthentication no`, clé asymétrique `ed25519`).
+     - Relevé et inspection de la chaîne pare-feu iptables `DOCKER-USER` sur l'Hôte 2 (`sudo iptables -S DOCKER-USER`).
+     - Décision d'architecture sur le bind : publication de port (`-p 9231:9119`) protégée par filtrage pare-feu ; le régime définitif d'acheminement L7 fait l'objet de KAN-97.
   2. **Traçabilité & Journalisation** :
      - Journal d'audit structuré des opérations distantes (`data/remote_audit.jsonl`) consignant :
-       - `timestamp_utc` : Date et heure ISO 8601.
-       - `target_host` : Identifiant de l'hôte (`prod-fr-003`).
+       - `timestamp` : Date et heure ISO 8601 UTC.
+       - `host_id` : Identifiant de l'hôte (`prod-fr-003`).
        - `tenant_slug` : Client concerné.
-       - `operation` : `provision`, `inspect`, `stop`, `teardown`.
+       - `operation` : `probe_info`, `provision`, `inspect`, `stop`, `cleanup`.
        - `command` : Commande complète exécutée.
        - `return_code` : 0 ou code d'erreur.
        - `duration_ms` : Temps de réponse en millisecondes.
 - **Preuve attendue** :
-  - Extrait du journal d'audit Olympe, scan des ports de l'Hôte 2 prouvant l'absence de port Docker exposé publiquement, et règles actives `iptables -L DOCKER-USER -n -v`.
+  - Extrait du journal d'audit `data/remote_audit.jsonl`, scan des ports de l'Hôte 2 (distinguant fermeture et panne réseau) et sortie brute `iptables -S DOCKER-USER`.
 
 ### 3.4 CA4 - Non-Transit des Données Clients par le Plan de Gestion
 - **Exigence** : Aucune donnée propre à un client ne transite par le plan de gestion.
-- **Implémentation** :
-  - Séparation stricte des flux :
-    - Le plan de gestion Olympe (port 9230) n'a aucun endpoint de relais de messagerie ou de données financières. Il n'ouvre que des flux de contrôle Docker.
-    - Le flux de données applicatif client (chat, SSE, WebSocket) relie directement le client à son conteneur sur l'Hôte 2 via Nginx Ingress en mode mandataire inverse L7 transparent (sans persistance).
-  - Étanchéité des systèmes de fichiers :
-    - Sur l'Hôte 1, aucun volume de données client (`/app/data`) n'est monté ni stocké sur le disque.
-    - Les volumes `/app/data` résident exclusivement sur le stockage local de l'Hôte 2 (`/home/ubuntu/data/tenants/{slug}`).
-  - Audit des journaux d'Olympe :
-    - Aucune trace de payload de conversation, clé d'API financière, balance âgée ou mémoire persistée dans les logs d'Olympe (`olympe.log`, `agent.log`).
+- **Implémentation & Inspection Réelle** :
+  - L'inspection ne repose sur aucune entrée artificielle et interroge directement l'Hôte 1 de gestion (`prod-fr-002` / `92.222.68.80`) en SSH direct non-interactif :
+    - Points de montage réels d'Olympe : `ssh ubuntu@92.222.68.80 docker inspect olympe_core --format '{{json .Mounts}}'` certifie qu'aucun volume de données client déporté (`/app/data`) n'est monté.
+    - Journaux réels d'Olympe : `ssh ubuntu@92.222.68.80 docker logs --tail 30 olympe_core` certifie que le superviseur ne traite que de la télémétrie et aucun payload métier client.
+    - Stockage Hôte 1 : `ssh ubuntu@92.222.68.80 ls -d /home/ubuntu/orso-core/data/tenants/kan61*` certifie l'absence de répertoire client pour l'espace déporté.
 - **Preuve attendue** :
-  - Inspection de l'arborescence disque de l'Hôte 1 (0 volume de données client), inspection des points de montage Docker sur Hôte 1, et analyse automatisée des logs d'Olympe certifiant l'absence de toute donnée client.
+  - Commandes brutes exécutées contre `prod-fr-002`, sorties JSON et textuelles réelles sans injection factice.
 
 ---
 
@@ -135,7 +134,7 @@ L'objectif de **KAN-61 (POC 4)** est d'établir, d'outiller et de prouver de bou
 
 | Critère Jira | Composant Technique | Fichier Source | Preuve d'Acceptation |
 | :--- | :--- | :--- | :--- |
-| **CA1** (Pilotage non-interactif) | `DockerLifecycleManager` + `RemoteDockerHostManager` | `olympe/remote_host_client.py` & `olympe/lifecycle_manager.py` | Commandes brutes exécutées et sorties d'inspection Docker sur Hôte 2 |
-| **CA2** (Routage par slug étanche) | Routeur dynamique Ingress & Résolveur multi-hôtes | `olympe/remote_host_client.py` & `docker/ingress/nginx.ingress.conf` | Requêtes HTTP sur `poc-alpha` (200 OK) vs slug inactif (503) |
-| **CA3** (Accès limité & tracé) | Règle `DOCKER-USER`, scan de ports, `remote_audit.jsonl` | `olympe/remote_host_client.py` & `scripts/poc/execute_kan61_poc.py` | 0 port Docker exposé (2375/2376), journal d'audit structuré |
-| **CA4** (Zéro donnée client sur Olympe) | Séparation des plans & isolation des montages | `olympe/lifecycle_manager.py` | Inspection disque Hôte 1 (0 volume client), scan anti-fuite des logs |
+| **CA1** (Pilotage non-interactif) | `DockerLifecycleManager` + `RemoteDockerHostManager` | `olympe/remote_host_client.py` & `olympe/lifecycle_manager.py` | Commandes brutes exécutées et sorties d'inspection Docker sur Hôte 2 (image sha256 mesurée, ID complet, status running/exited) |
+| **CA2** (Table de routage & Décision d'autorisation) | `RemoteDockerHostManager` (`authorize_and_resolve_slug`) | `olympe/remote_host_client.py` | Table de routage lue avant/après, décision brute ACCEPT (port 9231) vs REJECT (ERR_TENANT_ROUTE_NOT_FOUND) ; acheminement L7 réel versé à KAN-97 |
+| **CA3** (Accès limité & tracé) | Règle `DOCKER-USER`, scan de ports durci, `remote_audit.jsonl` | `olympe/remote_host_client.py` & `scripts/poc/execute_kan61_poc.py` | 0 port Docker exposé (2375/2376), sortie brute iptables DOCKER-USER, journal d'audit structuré |
+| **CA4** (Zéro donnée client sur Olympe) | Inspection SSH réelle de `prod-fr-002` (Hôte 1) | `scripts/poc/execute_kan61_poc.py` | Inspection réelle montages `olympe_core`, logs Olympe et stockage Hôte 1 certifiant 0 fuite |
