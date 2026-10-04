@@ -189,12 +189,31 @@ class TestKAN63CriteriaAcceptance:
                 os.remove(tmp_path)
 
     def test_ca5_zero_secrets_and_zero_client_data_audit(self):
-        """CA5 : Compteurs nuls lors de l'audit des secrets et de la configuration Docker."""
-        audit_report = run_full_ca5_audit()
-        assert audit_report["status"] == "PASSED", f"Violations détectées : {audit_report['violations']}"
-        metrics = audit_report["metrics"]
-        assert metrics["secrets_found_count"] == 0
-        assert metrics["dockerignore_violations_count"] == 0
-        assert metrics["dockerfile_violations_count"] == 0
-        assert metrics["client_data_in_engine_count"] == 0
-        assert metrics["total_violations"] == 0
+        """CA5 : Compteurs nuls lors de l'audit des secrets et de la configuration Docker (KAN-63 / KAN-66)."""
+        # 1. Vérification de falsifiabilité (CA1) : sans image, l'audit échoue strictement
+        audit_without_image = run_full_ca5_audit(image_ref=None, require_image=True)
+        assert audit_without_image["status"] == "FAILED"
+        assert audit_without_image["metrics"]["image_scan_errors_count"] == 1
+        assert audit_without_image["violations"]["image_scan_errors"][0]["type"] == "MISSING_REQUIRED_IMAGE"
+
+        # 2. Avec image inspectée propre (mock de l'inspection conteneur)
+        clean_img_result = {
+            "secrets": [],
+            "client_data": [],
+            "errors": [],
+            "scanned_files_count": 42,
+            "scanned_paths": ["app/run_agent.py", "app/Dockerfile.orso"],
+            "applicative_paths": ["app/run_agent.py", "app/Dockerfile.orso"],
+        }
+        from unittest.mock import patch
+        with patch("scripts.security.audit_zero_secrets_and_client_data.audit_docker_image_for_secrets_and_client_data", return_value=clean_img_result):
+            audit_report = run_full_ca5_audit(image_ref="ghcr.io/tquinzain59/orso-engine:v1.0.0", require_image=True)
+            assert audit_report["status"] == "PASSED", f"Violations détectées : {audit_report['violations']}"
+            metrics = audit_report["metrics"]
+            assert metrics["secrets_found_count"] == 0
+            assert metrics["dockerignore_violations_count"] == 0
+            assert metrics["dockerfile_violations_count"] == 0
+            assert metrics["client_data_in_engine_count"] == 0
+            assert metrics["image_scan_errors_count"] == 0
+            assert metrics["total_violations"] == 0
+            assert metrics["image_applicative_paths_count"] == 2
