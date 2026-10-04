@@ -263,7 +263,9 @@ install_id
 scripts/iam/backups/
 *.dump
 *.backup
+# Interdiction stricte de scripts de publication / manipulation Atlassian / Confluence dans le dépôt (KAN-72)
 scripts/publish_*.py
-!scripts/publish_kan59_atlassian.py
+scripts/sync_confluence_*.py
+scripts/*atlassian*.py
 
 

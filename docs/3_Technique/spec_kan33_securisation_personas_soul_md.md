@@ -183,5 +183,5 @@ $ echo $?
 | `tools/file_tools_write_guards.py` | Modification | Hard write refusal sur `profiles/`, `personas.lock.json` et `SOUL.md` |
 | `skills/telemetry.py` | Modification | Export de `persona_integrity` même en l'absence de `state.db` |
 | `docs/ADR/2026-09-30-03-personas-et-securite-des-prompts.md` | Création | Architecture Decision Record n°03 sous Git |
-| `scripts/publish_kan33_atlassian.py` | Création | Outil d'alignement et de publication Atlassian |
+| `scripts/publish_kan33_atlassian.py` | Retiré (KAN-72) | Ancien script de publication Atlassian (retiré du dépôt par gouvernance KAN-72) |
 | `docs/21_journal_realisations_orso.md` | Modification | Entrée KAN-33 consolidée |
