@@ -45,8 +45,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: tests-os-${{ github.ref }}
-  cancel-in-progress: true
+  group: tests-os-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   os-tests:
