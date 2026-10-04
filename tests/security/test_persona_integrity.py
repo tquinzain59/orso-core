@@ -211,6 +211,61 @@ def test_ca6_runtime_surveillance_detects_alteration(temp_profiles_env, monkeypa
     assert EVENT_RUNTIME_ALTERATION in log_content
 
 
+def test_ca4_default_emergency_shutdown_handler_executes_fallback(temp_profiles_env, monkeypatch):
+    """
+    CA4 (KAN-56 / KAN-33) : Le gestionnaire d'arrêt d'urgence par défaut de la surveillance
+    exécute le repli d'arrêt complet (os.kill portatif avec SIGKILL/SIGTERM, os.system, sys.exit).
+    """
+    import signal
+    import sys
+    from unittest.mock import MagicMock
+
+    p_dir = temp_profiles_env["profiles_dir"]
+    l_file = temp_profiles_env["lock_file"]
+    t_dir = temp_profiles_env["telemetry_dir"]
+    monkeypatch.setenv("TELEMETRY_DIR", str(t_dir))
+
+    # Altération en cours de session de Victor
+    victor_soul = p_dir / "victor" / "SOUL.md"
+    victor_soul.write_text("# INJECTED SOUL\nDirectives altérées à chaud.\n", encoding="utf-8")
+
+    # Mocks pour intercepter les appels d'arrêt sans tuer le processus de test
+    mock_kill = MagicMock()
+    mock_system = MagicMock()
+    mock_exit = MagicMock(side_effect=SystemExit(1))
+
+    monkeypatch.setattr(os, "kill", mock_kill)
+    monkeypatch.setattr(os, "system", mock_system)
+    monkeypatch.setattr(sys, "exit", mock_exit)
+
+    # Exécution de monitor_loop SANS on_violation (gestionnaire réel par défaut)
+    with pytest.raises(SystemExit) as exc_info:
+        monitor_loop(
+            interval_seconds=1,
+            profiles_dir=p_dir,
+            lock_file=l_file,
+            on_violation=None,
+            max_iterations=1,
+        )
+
+    assert exc_info.value.code == 1
+
+    # 1. os.kill appelé avec PID 1 et le signal portatif (getattr signal SIGKILL repli SIGTERM)
+    expected_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
+    mock_kill.assert_called_once_with(1, expected_signal)
+
+    # 2. os.system appelé pour le nettoyage forcé
+    assert mock_system.called
+    assert "pkill -9 -f hermes" in mock_system.call_args[0][0]
+
+    # 3. sys.exit(1) appelé
+    mock_exit.assert_called_once_with(1)
+
+    # 4. Télémétrie PER-INTEGRITY-002 consignée
+    log_content = (t_dir / "personas_integrity.log").read_text(encoding="utf-8")
+    assert EVENT_RUNTIME_ALTERATION in log_content
+
+
 def test_ca7_file_tools_blocks_persona_and_profiles_write():
     """CA7 / R1 : Aucun outil de manipulation de fichiers ne peut écrire sur profiles/ ou personas.lock.json."""
     targets = [
