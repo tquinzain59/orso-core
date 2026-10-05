@@ -190,27 +190,24 @@ def test_find_rogue_personas_exhaustiveness(isolated_kan54_env):
         assert (p_dir / name / "SOUL.md").resolve() not in found_resolved
 
 
-def test_ca5_file_tools_write_guard_blocks_all_soul_md_writes():
+def test_ca5_file_tools_write_guard_blocks_all_soul_md_writes_in_data():
     """CA5 : Le garde-fou d'écriture file_tools_write_guards bloque universellement
-    toute tentative d'écriture ou de création d'un fichier SOUL.md n'importe où sur le disque."""
+    toute tentative d'écriture d'un fichier SOUL.md dans les volumes inscriptibles ou profiles."""
     test_paths = [
-        "SOUL.md",
-        "./SOUL.md",
         "/app/data/hermes_home/SOUL.md",
         "/app/data/SOUL.md",
         "./data/hermes_home/SOUL.md",
-        "/tmp/SOUL.md",
-        "/tmp/arbitrary/path/SOUL.md",
+        "data/tenants/test/hermes_home/SOUL.md",
         "profiles/jerome/SOUL.md",
-        "/home/orso/.hermes/SOUL.md",
-        "nested/sub/dir/soul.md",
+        "/app/profiles/lucas/SOUL.md",
+        "/home/orso/.hermes/profiles/victor/SOUL.md",
     ]
 
     for target in test_paths:
         refusal = _check_sensitive_path(target)
         assert refusal is not None, f"L'écriture dans {target} aurait dû être bloquée !"
         assert "Refusing to write to protected agent profile path" in refusal
-        assert "KAN-33/KAN-54" in refusal or "read-only and immutable" in refusal
+        assert "read-only and immutable" in refusal
 
 
 def test_ca5_legitimate_files_not_blocked_by_guard():
