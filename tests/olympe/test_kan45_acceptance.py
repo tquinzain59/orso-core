@@ -8,8 +8,10 @@ du déploiement d'environnement piloté depuis le backoffice.
 from __future__ import annotations
 
 import os
+import random
 import shutil
 import subprocess
+import uuid
 from pathlib import Path
 from unittest.mock import patch
 import pytest
@@ -45,155 +47,109 @@ class TestKAN45Acceptance:
     """Suite d'acceptation validant les 5 critères du ticket Jira KAN-45."""
 
     def test_ca1_visitor_onboarding_trial_without_manual_intervention(self, client):
-        """Critère 1 : un visiteur peut souscrire en environnement de test sans intervention manuelle.
+        """Critère 1 (Arbitrage Direction 05/10/2026) :
+        Un visiteur dépose une demande d'essai depuis la vitrine sans intervention manuelle.
+        La vitrine ne crée rien : elle transmet la demande, qui est enregistrée en attente de validation.
+        Aucune création de client, d'abonnement, de compte ou d'environnement ne se déclenche depuis la page publique.
 
-        Vérifie le déroulement complet des étapes automatisées :
-        1. Initialisation SetupIntent Stripe (/init-setup)
-        2. Création de l'abonnement d'essai 30 jours (/create-subscription)
-        3. Création et synchronisation du compte administrateur (/create-admin-user)
-        4. Vérification de l'arbitrage Direction : l'environnement reste en attente (pending_validation)
-           jusqu'au déclenchement explicite par le superadmin dans le Cockpit Ops.
+        Vérifications formelles :
+        1. Neutralisation des 4 anciennes routes d'onboarding autonome : un GET (et POST) répond HTTP 404.
+        2. Dépôt de la demande d'essai via POST /api/olympe/contact sans intervention manuelle.
+        3. Enregistrement en attente (status pending_validation) sans création de conteneur.
         """
-        slug = f"test-vitrine-trial-{int(os.times().system * 1000) % 10000}"
-        admin_email = f"dirigeant.{slug}@orso-agents.fr"
-        company_name = "Vitrine Test Solutions SAS"
+        # 1. Vérification de la neutralisation des 4 routes d'onboarding autonome (répondent 404 en lecture GET)
+        decommissioned_routes = [
+            "/api/olympe/onboarding/init-setup",
+            "/api/olympe/onboarding/create-subscription",
+            "/api/olympe/onboarding/create-admin-user",
+            "/api/olympe/onboarding/rewrite-mission-letter",
+        ]
+        for route in decommissioned_routes:
+            resp_get = client.get(route)
+            assert resp_get.status_code == 404, f"La route neutralisée {route} doit répondre HTTP 404 en lecture GET, reçu {resp_get.status_code}"
+            resp_post = client.post(route, json={})
+            assert resp_post.status_code == 404, f"La route neutralisée {route} doit répondre HTTP 404 en POST, reçu {resp_post.status_code}"
 
-        # Mock hermétique de la couche réseau Stripe pour reproductibilité CI hors poste
-        def mock_stripe_request(endpoint, method="GET", data=None):
-            if endpoint.startswith("customers"):
-                return {"id": f"cus_test_{slug}", "email": admin_email}
-            elif endpoint == "setup_intents":
-                return {
-                    "id": f"seti_test_{slug}",
-                    "client_secret": f"seti_test_{slug}_secret_kan45",
-                    "status": "requires_payment_method",
-                }
-            elif "attach" in endpoint:
-                return {"id": "pm_card_test_123"}
-            elif endpoint == "subscriptions":
-                return {
-                    "id": f"sub_test_{slug}",
-                    "customer": f"cus_test_{slug}",
-                    "status": "trialing",
-                    "trial_end": 1799999999,
-                    "items": {"data": [{"price": {"id": "price_kan45"}}]},
-                }
-            return {}
-
-        with patch.object(ops_manager, "_stripe_request", side_effect=mock_stripe_request), \
-             patch.object(ops_manager, "stripe_secret_key", "sk_test_kan45_acceptance"):
-
-            # Étape 1 : Initialisation de l'empreinte bancaire Stripe SetupIntent
-            resp_setup = client.post(
-                "/api/olympe/onboarding/init-setup",
-                json={
-                    "email": admin_email,
-                    "name": "Jean Testeur",
-                    "company_name": company_name,
-                    "slug": slug,
-                },
-            )
-            assert resp_setup.status_code == 200, f"Échec init-setup: {resp_setup.text}"
-            setup_data = resp_setup.json()
-            assert setup_data.get("success") is True
-            assert "client_secret" in setup_data
-            assert "customer_id" in setup_data
-            stripe_customer_id = setup_data["customer_id"]
-
-            # Étape 2 : Création de la souscription d'essai 30 jours à 0 €
-            resp_sub = client.post(
-                "/api/olympe/onboarding/create-subscription",
-                json={
-                    "customer_id": stripe_customer_id,
-                    "payment_method_id": "pm_card_test_123",
-                    "tier_id": "2_agents",
-                    "slug": slug,
-                },
-            )
-            assert resp_sub.status_code == 200, f"Échec create-subscription: {resp_sub.text}"
-            sub_data = resp_sub.json()
-            assert sub_data.get("success") is True
-            assert sub_data.get("status") in ("trialing", "active")
-            assert sub_data.get("trial_days") == 30
-
-            # Étape 3 : Création du compte administrateur autonome rattaché à l'organisation
-            tenant_created = ops_manager.create_sandbox_tenant(
-                tenant_slug=slug,
-                name=company_name,
-                contact_email=admin_email,
-                contact_name="Jean Testeur",
-            )
-            tenant_id = tenant_created["tenant"]["id"]
-
-            resp_user = client.post(
-                "/api/olympe/onboarding/create-admin-user",
-                json={
-                    "tenant_id": tenant_id,
-                    "email": admin_email,
-                    "full_name": "Jean Testeur",
-                    "role": "Dirigeant",
-                    "password": "PasswordSecure2026!",
-                },
-            )
-            assert resp_user.status_code == 200, f"Échec create-admin-user: {resp_user.text}"
-            user_data = resp_user.json()
-            assert user_data.get("success") is True
-            created_user = user_data.get("user")
-            assert created_user is not None
-            assert created_user.get("email") == admin_email
-            assert created_user.get("is_admin") is True
+        # 2. Dépôt de la demande d'essai gratuit depuis la vitrine sans intervention manuelle
+        test_ip = f"10.{random.randint(10, 200)}.{random.randint(1, 250)}.{random.randint(1, 250)}"
+        headers_ip = {"X-Forwarded-For": test_ip}
+        slug = f"test-trial-vitrine-{int(os.times().system * 1000) % 10000}"
+        payload = {
+            "name": "Jean Visiteur",
+            "email": f"jean.{slug}@solutions-prospect.fr",
+            "company": "Solutions Prospect SAS",
+            "phone": "06 11 22 33 44",
+            "interest": "recouvrement, commercial",
+            "message": "Demande de qualification pour période d'essai 30 jours (arbitrage KAN-45).",
+            "consent": True,
+        }
+        resp = client.post("/api/olympe/contact", json=payload, headers=headers_ip)
+        assert resp.status_code == 200, f"Échec de la soumission de la demande d'essai : {resp.text}"
+        data = resp.json()
+        assert data.get("success") is True
+        assert "lead_id" in data
+        assert data.get("status") == "pending_validation"
 
     def test_ca2_subscription_creates_client_subscription_and_environment(self, client):
-        """Critère 2 : la souscription crée le client, l'abonnement et l'environnement, chacun vérifiable en base."""
+        """Critère 2 (Arbitrage Direction 05/10/2026) :
+        La demande déposée crée une fiche client, une demande d'abonnement d'essai de 30 jours
+        et une ligne d'environnement attendue, chacune lisible en base, dans l'état réel d'attente de validation.
+        La fiche doit être lue par le service de production lui-même, afin que le cockpit affiche la demande :
+        un magasin que la production ne lit pas ne vaut pas vérification.
+        Aucune ligne ne peut affirmer un environnement créé, prêt ou actif tant qu'aucun conteneur n'existe,
+        et l'appelant lit le retour du provisioning au lieu de le supposer.
+        """
         import sqlite3
 
-        slug = f"client-auto-{int(os.times().system * 1000) % 10000}"
+        slug = f"client-lead-{int(os.times().system * 1000) % 10000}"
         tenant_name = "Cabinet Audit & Finance"
         contact_email = f"contact@{slug}.orso-agents.fr"
 
-        # Création et enregistrement de l'organisation dans le gestionnaire
-        created = ops_manager.create_sandbox_tenant(
-            tenant_slug=slug,
-            name=tenant_name,
-            contact_email=contact_email,
-            contact_name="Marc Directeur",
-            quotas={"cpus": "1.0", "memory": "1024m"},
-        )
-        assert created.get("success") is True
-        tenant = created.get("tenant", {})
-        assert tenant.get("slug") == slug
-        assert tenant.get("name") == tenant_name
-        tenant_id = tenant.get("id")
+        # Dépôt de la demande via le formulaire de contact vitrine
+        test_ip = f"10.{random.randint(10, 200)}.{random.randint(1, 250)}.{random.randint(1, 250)}"
+        headers_ip = {"X-Forwarded-For": test_ip}
+        payload = {
+            "name": "Marc Directeur",
+            "email": contact_email,
+            "company": tenant_name,
+            "phone": "01 42 68 00 00",
+            "interest": "recouvrement",
+            "message": "Demande de cadrage pour période d'essai 30 jours Jérôme (CA2).",
+            "consent": True,
+        }
+        resp = client.post("/api/olympe/contact", json=payload, headers=headers_ip)
+        assert resp.status_code == 200, f"Erreur soumission : {resp.text}"
+        lead_id = resp.json().get("lead_id")
 
-        # ── Vérification 1 : Client / Organisation vérifiable en base de données ──
+        # ── Vérification 1 : Client / Organisation vérifiable en base SQLite réelle ──
         with sqlite3.connect(str(ops_manager.db_path)) as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT id, slug, name, status, contact_email, contact_name, is_sandbox FROM tenants WHERE slug = ?",
-                (slug,),
+                "SELECT id, slug, name, status, contact_email, contact_name, is_sandbox FROM tenants WHERE contact_email = ?",
+                (contact_email,),
             )
             row_tenant = cursor.fetchone()
-            assert row_tenant is not None, f"Client {slug} non trouvé dans la table SQL 'tenants'"
+            assert row_tenant is not None, f"Client {contact_email} non trouvé dans la table SQL 'tenants'"
             t_id, t_slug, t_name, t_status, t_email, t_cname, t_sandbox = row_tenant
-            assert t_slug == slug
             assert t_name == tenant_name
             assert t_email == contact_email
+            assert t_status == "trial"
             assert t_sandbox == 1
 
-            # ── Vérification 2 : Abonnement vérifiable en base de données ──
+            # ── Vérification 2 : Abonnement d'essai 30j en attente de validation en base ──
             cursor.execute(
-                "SELECT id, tenant_id, tier_id, status, trial_days, stripe_customer_id FROM subscriptions WHERE tenant_id = ?",
+                "SELECT id, tenant_id, tier_id, status, trial_days FROM subscriptions WHERE tenant_id = ?",
                 (t_id,),
             )
             row_sub = cursor.fetchone()
             assert row_sub is not None, f"Abonnement pour {t_id} non trouvé dans la table SQL 'subscriptions'"
-            s_id, s_tid, s_tier, s_status, s_trial_days, s_cus = row_sub
+            s_id, s_tid, s_tier, s_status, s_trial_days = row_sub
             assert s_tid == t_id
             assert s_tier == "1_agent"
-            assert s_status == "active"
+            assert s_status == "pending_validation", f"L'abonnement doit être en pending_validation, reçu {s_status}"
             assert s_trial_days == 30
 
-            # ── Vérification 3 : Environnement infrastructure vérifiable en base de données ──
+            # ── Vérification 3 : Environnement dans l'état réel d'attente (not_provisioned / pending_validation) ──
             cursor.execute(
                 "SELECT id, tenant_id, container_name, internal_route_key, status, environment_status FROM tenant_instances WHERE tenant_id = ?",
                 (t_id,),
@@ -202,21 +158,26 @@ class TestKAN45Acceptance:
             assert row_inst is not None, f"Instance pour {t_id} non trouvée dans la table SQL 'tenant_instances'"
             i_id, i_tid, i_cname, i_route, i_status, i_env_status = row_inst
             assert i_tid == t_id
-            assert i_cname == f"orso_client_{slug.replace('-', '_')}"
-            assert i_route == f"orso_client_{slug.replace('-', '_')}"
-            assert i_env_status in ("active", "ready", "inactive", "pending_validation")
+            assert i_status == "not_provisioned", f"L'instance ne peut pas affirmer ready sans conteneur physique : {i_status}"
+            assert i_env_status == "pending_validation", f"L'environnement ne peut pas affirmer active sans conteneur : {i_env_status}"
 
             # Sorties brutes d'inspection de base de données (exigence formelle du contrat de revue KAN-45)
             print(f"\n[RAW DB PROBE - CA2 TENANT] id={t_id} slug={t_slug} name='{t_name}' status={t_status} contact='{t_cname}' <{t_email}> sandbox={t_sandbox}")
-            print(f"[RAW DB PROBE - CA2 SUBSCRIPTION] id={s_id} tenant_id={s_tid} tier={s_tier} status={s_status} trial_days={s_trial_days} cus={s_cus}")
+            print(f"[RAW DB PROBE - CA2 SUBSCRIPTION] id={s_id} tenant_id={s_tid} tier={s_tier} status={s_status} trial_days={s_trial_days}")
             print(f"[RAW DB PROBE - CA2 INSTANCE] id={i_id} tenant_id={i_tid} container={i_cname} route={i_route} status={i_status} env_status={i_env_status}")
 
-        # Vérification complémentaire via l'API applicative
-        detail = ops_manager.get_tenant_detail(slug)
-        assert detail is not None, f"Client {slug} non trouvé via get_tenant_detail"
-        assert detail.get("slug") == slug
-        assert detail.get("contact", {}).get("email") == contact_email
-        assert detail.get("subscription", {}).get("status") in ("trialing", "active", "pending_validation")
+        # ── Vérification 4 : Lecture de la demande par le service de production lui-même ──
+        # get_tenants_overview lit la base de données et consolide les fiches SQLite
+        tenants_overview = ops_manager.get_tenants_overview()
+        found_in_overview = next((t for t in tenants_overview if t["id"] == t_id), None)
+        assert found_in_overview is not None, f"La demande {t_id} n'est pas remontée par get_tenants_overview()"
+        assert found_in_overview["instance"]["status"] == "not_provisioned"
+        assert found_in_overview["instance"]["environment_status"] == "pending_validation"
+        assert found_in_overview["subscription"]["status"] == "pending_validation"
+
+        # Le Cockpit affiche la demande dans les arrivées en attente (Arrivées & OVH)
+        pending_list = ops_manager.get_pending_onboarding()
+        assert any(p["id"] == t_id for p in pending_list), f"La demande {t_id} n'apparaît pas dans get_pending_onboarding() pour le Cockpit"
 
     def test_ca3_confirmation_page_displays_real_state(self):
         """Critère 3 : une page de confirmation affiche l'état réel.
@@ -311,7 +272,7 @@ class TestKAN45Acceptance:
         assert resp_omitted.status_code == 400
 
         # 2. Test du point de terminaison de transmission serveur réel avec IP dédiée
-        test_ip = f"192.168.45.{int(os.times().system * 1000) % 250 + 1}"
+        test_ip = f"192.168.{random.randint(10, 200)}.{random.randint(1, 250)}"
         headers_ip = {"X-Forwarded-For": test_ip}
         payload = {
             "name": "Sophie Martin",
@@ -392,6 +353,7 @@ class TestKAN45Acceptance:
             assert "contact@orso-agents.fr" in contact_html
             assert "fetch(`${apiBase}/api/olympe/contact`" in contact_html or "/api/olympe/contact" in contact_html
 
-            # Configuration Vercel cleanUrls
+            # Configuration Vercel : rewrites propres et redirections de sécurité ops
             vercel_json = (site_dir / "vercel.json").read_text(encoding="utf-8")
-            assert '"cleanUrls": true' in vercel_json
+            assert '"rewrites"' in vercel_json or '"cleanUrls"' in vercel_json
+            assert 'https://ops.orso-agents.fr' in vercel_json

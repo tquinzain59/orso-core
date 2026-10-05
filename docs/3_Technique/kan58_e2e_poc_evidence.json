@@ -1,6 +1,6 @@
 {
   "ticket": "KAN-58",
-  "timestamp": "2026-10-02T09:47:42.242546+00:00",
+  "timestamp": "2026-10-05T16:51:18.054188+00:00",
   "host_telemetry": {
     "hostname": "vps-9df18c40",
     "kernel": "Linux vps-9df18c40 7.0.0-28-generic #28-Ubuntu SMP PREEMPT_DYNAMIC Sun Jun 21 01:01:36 UTC 2026 x86_64 GNU/Linux",
@@ -95,5 +95,34 @@
     "alteration_erased_after_rollback": true,
     "container_healthy_post_rollback": true
   },
-  "all_passed": true
+  "all_passed": true,
+  "execution_host_response": {
+    "poc-alpha": {
+      "action_taken": true,
+      "status": "ready",
+      "mode": "containerized",
+      "dedicated_space": true,
+      "space_directory": "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-alpha",
+      "data_directory": "/home/ubuntu/orso-poc-kan58/data/tenants_poc_kan58/poc-alpha",
+      "container_name": "orso_client_poc_alpha"
+    },
+    "poc-beta": {
+      "action_taken": true,
+      "status": "ready",
+      "mode": "containerized",
+      "dedicated_space": true,
+      "space_directory": "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-beta",
+      "data_directory": "/home/ubuntu/orso-poc-kan58/data/tenants_poc_kan58/poc-beta",
+      "container_name": "orso_client_poc_beta"
+    },
+    "poc-gamma": {
+      "action_taken": true,
+      "status": "ready",
+      "mode": "containerized",
+      "dedicated_space": true,
+      "space_directory": "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-gamma",
+      "data_directory": "/home/ubuntu/orso-poc-kan58/data/tenants_poc_kan58/poc-gamma",
+      "container_name": "orso_client_poc_gamma"
+    }
+  }
 }

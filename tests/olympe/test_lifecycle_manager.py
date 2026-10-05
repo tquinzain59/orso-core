@@ -169,6 +169,10 @@ def test_provision_tenant(tmp_path):
                     tenant_slug="nouveau-client",
                     image_digest="sha256:d8a5f82c448bb95b28a9b49b43e8b0b8c6e07eb4838a1f2987a123456789abcd",
                     persona_hmac_key="mock-fleet-hmac-key",
+                    env_vars={
+                        "HERMES_DASHBOARD_BASIC_AUTH_USERNAME": "admin",
+                        "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD": "testpassword",
+                    },
                 )
                 assert res["success"] is True
                 assert res["container_name"] == "orso_client_nouveau_client"

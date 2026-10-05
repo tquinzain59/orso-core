@@ -83,6 +83,10 @@ class TestKAN63CriteriaAcceptance:
                         image_name="ghcr.io/tquinzain59/orso-engine:latest",
                         image_digest=REF_DIGEST_V1,
                         persona_hmac_key="mock-fleet-hmac-key",
+                        env_vars={
+                            "HERMES_DASHBOARD_BASIC_AUTH_USERNAME": "admin",
+                            "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD": "testpassword",
+                        },
                     )
                     assert res["success"] is True
                     assert res["digest"] == REF_DIGEST_V1

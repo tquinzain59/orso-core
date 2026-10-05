@@ -25,6 +25,8 @@ from olympe.server import app, ops_manager
 @pytest.fixture(autouse=True)
 def setup_demo_mode_kan60(monkeypatch):
     monkeypatch.setenv("ORSO_DEMO_MODE", "1")
+    monkeypatch.setenv("HERMES_DASHBOARD_BASIC_AUTH_USERNAME", "admin")
+    monkeypatch.setenv("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD", "testpass123")
     ops_manager.demo_mode = True
     ops_manager._mock_tenants = ops_manager._init_seed_data()
 

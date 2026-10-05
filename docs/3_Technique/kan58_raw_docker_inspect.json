@@ -1,0 +1,1098 @@
+{
+  "ticket": "KAN-58",
+  "target_host_ip": "57.131.196.106",
+  "target_host_name": "vps-9df18c40.vps.ovh.net",
+  "containers": [
+    "orso_client_poc_alpha",
+    "orso_client_poc_beta",
+    "orso_client_poc_gamma"
+  ],
+  "inspections": {
+    "orso_client_poc_alpha": {
+      "Id": "986118abeb93b6ec37c67e995b2421171d02c34634dee3ae387c4124262d9614",
+      "Created": "2026-10-05T16:51:18.417413378Z",
+      "Path": "/app/docker/orso-entrypoint.sh",
+      "Args": [
+        "hermes",
+        "dashboard",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "9119",
+        "--no-open",
+        "--skip-build"
+      ],
+      "State": {
+        "Status": "running",
+        "Running": true,
+        "Paused": false,
+        "Restarting": false,
+        "OOMKilled": false,
+        "Dead": false,
+        "Pid": 157606,
+        "ExitCode": 0,
+        "Error": "",
+        "StartedAt": "2026-10-05T16:51:38.730854626Z",
+        "FinishedAt": "2026-10-05T16:51:38.620535175Z",
+        "Health": {
+          "Status": "healthy",
+          "FailingStreak": 0,
+          "Log": [
+            {
+              "Start": "2026-10-05T16:51:33.481429932Z",
+              "End": "2026-10-05T16:51:34.233648067Z",
+              "ExitCode": 0,
+              "Output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0{\"module\":\"Orso UI Client\",\"version\":\"1.0.0\",\"built\":true,\"dist_path\":\"/app/apps/ui-client/dist\",\"agents\":[\"jerome\",\"lucas\",\"clara\",\"victor\"],\"llm_connected\":false,\"client_id\":\"uuid-poc-alpha-001\",\"client_slug\":\"poc-alpha\",\"auth_required\":true}\r100   244  100   244    0     0    357      0 --:--:-- --:--:-- --:--:--   357\n"
+            },
+            {
+              "Start": "2026-10-05T16:51:43.880949892Z",
+              "End": "2026-10-05T16:51:44.141126308Z",
+              "ExitCode": 1,
+              "Output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\ncurl: (7) Failed to connect to localhost port 9119 after 0 ms: Could not connect to server\n"
+            },
+            {
+              "Start": "2026-10-05T16:51:49.143914713Z",
+              "End": "2026-10-05T16:51:49.352076422Z",
+              "ExitCode": 1,
+              "Output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\ncurl: (7) Failed to connect to localhost port 9119 after 2 ms: Could not connect to server\n"
+            },
+            {
+              "Start": "2026-10-05T16:51:53.731055544Z",
+              "End": "2026-10-05T16:51:54.48206565Z",
+              "ExitCode": 0,
+              "Output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r  0   244    0     0 {\"module\":\"Orso UI Client\",\"version\":\"1.0.0\",\"built\":true,\"dist_path\":\"/app/apps/ui-client/dist\",\"agents\":[\"jerome\",\"lucas\",\"clara\",\"victor\"],\"llm_connected\":false,\"client_id\":\"uuid-poc-alpha-001\",\"client_slug\":\"poc-alpha\",\"auth_required\":true}   0     0      0      0 --:--:-- --:--:-- --:--:--     0\r100   244  100   244    0     0    354      0 --:--:-- --:--:-- --:--:--   354\n"
+            },
+            {
+              "Start": "2026-10-05T16:52:14.48286255Z",
+              "End": "2026-10-05T16:52:14.553134703Z",
+              "ExitCode": 0,
+              "Output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r100   244  100   244    0     0  37492      0 --:--:-- --:--:-- --:--:-- 40666\n{\"module\":\"Orso UI Client\",\"version\":\"1.0.0\",\"built\":true,\"dist_path\":\"/app/apps/ui-client/dist\",\"agents\":[\"jerome\",\"lucas\",\"clara\",\"victor\"],\"llm_connected\":false,\"client_id\":\"uuid-poc-alpha-001\",\"client_slug\":\"poc-alpha\",\"auth_required\":true}"
+            }
+          ]
+        }
+      },
+      "Image": "sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
+      "ResolvConfPath": "/var/lib/docker/containers/986118abeb93b6ec37c67e995b2421171d02c34634dee3ae387c4124262d9614/resolv.conf",
+      "HostnamePath": "/var/lib/docker/containers/986118abeb93b6ec37c67e995b2421171d02c34634dee3ae387c4124262d9614/hostname",
+      "HostsPath": "/var/lib/docker/containers/986118abeb93b6ec37c67e995b2421171d02c34634dee3ae387c4124262d9614/hosts",
+      "LogPath": "/var/lib/docker/containers/986118abeb93b6ec37c67e995b2421171d02c34634dee3ae387c4124262d9614/986118abeb93b6ec37c67e995b2421171d02c34634dee3ae387c4124262d9614-json.log",
+      "Name": "/orso_client_poc_alpha",
+      "RestartCount": 0,
+      "Driver": "overlayfs",
+      "Platform": "linux",
+      "MountLabel": "",
+      "ProcessLabel": "",
+      "AppArmorProfile": "docker-default",
+      "ExecIDs": null,
+      "HostConfig": {
+        "Binds": [
+          "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-alpha/skills:/app/skills:ro",
+          "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-alpha/profiles:/app/profiles:ro",
+          "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-alpha/profiles:/app/data/hermes_home/profiles:ro",
+          "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-alpha/profiles:/home/orso/.hermes/profiles:ro",
+          "/home/ubuntu/orso-poc-kan58/data/tenants_poc_kan58/poc-alpha:/app/data",
+          "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-alpha/config:/app/config:ro"
+        ],
+        "ContainerIDFile": "",
+        "LogConfig": {
+          "Type": "json-file",
+          "Config": {
+            "max-file": "3",
+            "max-size": "10m"
+          }
+        },
+        "NetworkMode": "orso_network",
+        "PortBindings": {},
+        "RestartPolicy": {
+          "Name": "unless-stopped",
+          "MaximumRetryCount": 0
+        },
+        "AutoRemove": false,
+        "VolumeDriver": "",
+        "VolumesFrom": null,
+        "ConsoleSize": [
+          0,
+          0
+        ],
+        "CapAdd": null,
+        "CapDrop": null,
+        "CgroupnsMode": "private",
+        "Dns": null,
+        "DnsOptions": [],
+        "DnsSearch": [],
+        "ExtraHosts": null,
+        "GroupAdd": null,
+        "IpcMode": "private",
+        "Cgroup": "",
+        "Links": null,
+        "OomScoreAdj": 0,
+        "PidMode": "",
+        "Privileged": false,
+        "PublishAllPorts": false,
+        "ReadonlyRootfs": false,
+        "SecurityOpt": null,
+        "UTSMode": "",
+        "UsernsMode": "",
+        "ShmSize": 67108864,
+        "Runtime": "runc",
+        "Isolation": "",
+        "CpuShares": 0,
+        "Memory": 536870912,
+        "NanoCpus": 500000000,
+        "CgroupParent": "",
+        "BlkioWeight": 0,
+        "BlkioWeightDevice": [],
+        "BlkioDeviceReadBps": [],
+        "BlkioDeviceWriteBps": [],
+        "BlkioDeviceReadIOps": [],
+        "BlkioDeviceWriteIOps": [],
+        "CpuPeriod": 0,
+        "CpuQuota": 0,
+        "CpuRealtimePeriod": 0,
+        "CpuRealtimeRuntime": 0,
+        "CpusetCpus": "",
+        "CpusetMems": "",
+        "Devices": [],
+        "DeviceCgroupRules": null,
+        "DeviceRequests": null,
+        "MemoryReservation": 0,
+        "MemorySwap": 536870912,
+        "MemorySwappiness": null,
+        "OomKillDisable": null,
+        "PidsLimit": 100,
+        "Ulimits": null,
+        "CpuCount": 0,
+        "CpuPercent": 0,
+        "IOMaximumIOps": 0,
+        "IOMaximumBandwidth": 0,
+        "MaskedPaths": [
+          "/proc/acpi",
+          "/proc/asound",
+          "/proc/interrupts",
+          "/proc/kcore",
+          "/proc/keys",
+          "/proc/latency_stats",
+          "/proc/sched_debug",
+          "/proc/scsi",
+          "/proc/timer_list",
+          "/proc/timer_stats",
+          "/sys/devices/virtual/powercap",
+          "/sys/firmware"
+        ],
+        "ReadonlyPaths": [
+          "/proc/bus",
+          "/proc/fs",
+          "/proc/irq",
+          "/proc/sys",
+          "/proc/sysrq-trigger"
+        ]
+      },
+      "Storage": {
+        "RootFS": {
+          "Snapshot": {
+            "Name": "overlayfs"
+          }
+        }
+      },
+      "Mounts": [
+        {
+          "Type": "bind",
+          "Source": "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-alpha/config",
+          "Destination": "/app/config",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/home/ubuntu/orso-poc-kan58/data/tenants_poc_kan58/poc-alpha",
+          "Destination": "/app/data",
+          "Mode": "",
+          "RW": true,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-alpha/profiles",
+          "Destination": "/app/profiles",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-alpha/skills",
+          "Destination": "/app/skills",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-alpha/profiles",
+          "Destination": "/app/data/hermes_home/profiles",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-alpha/profiles",
+          "Destination": "/home/orso/.hermes/profiles",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        }
+      ],
+      "Config": {
+        "Hostname": "986118abeb93",
+        "Domainname": "",
+        "User": "",
+        "AttachStdin": false,
+        "AttachStdout": false,
+        "AttachStderr": false,
+        "ExposedPorts": {
+          "9119/tcp": {}
+        },
+        "Tty": false,
+        "OpenStdin": false,
+        "StdinOnce": false,
+        "Env": [
+          "ORSO_CLIENT_ID=uuid-poc-alpha-001",
+          "ORSO_CLIENT_SLUG=poc-alpha",
+          "HERMES_CONFIG_PATH=/app/config/hermes.yaml",
+          "HERMES_HOME=/app/data/hermes_home",
+          "ORSO_PERSONA_HMAC_KEY=89fb4a7e32cf33668ef85fbc04b08e11ab77f5c3f65bb363cba3de18a675fe10",
+          "HERMES_DASHBOARD_BASIC_AUTH_USERNAME=admin",
+          "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=YefnAATeiKAIVfOVpxHwFDVOuAeL3yWM",
+          "PATH=/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+          "LANG=C.UTF-8",
+          "GPG_KEY=A035C8C19219BA821ECEA86B64E628F8D684696D",
+          "PYTHON_VERSION=3.11.16",
+          "PYTHON_SHA256=91bcdebfdde239a003ae93738a7fce0f9230fee5c4bc2b86f6e6e8c6f98aabe8",
+          "PYTHONDONTWRITEBYTECODE=1",
+          "PYTHONUNBUFFERED=1",
+          "PYTHONPATH=/app"
+        ],
+        "Cmd": [
+          "hermes",
+          "dashboard",
+          "--host",
+          "0.0.0.0",
+          "--port",
+          "9119",
+          "--no-open",
+          "--skip-build"
+        ],
+        "Healthcheck": {
+          "Test": [
+            "CMD-SHELL",
+            "curl -f http://localhost:9119/api/client/status || exit 1"
+          ],
+          "Interval": 20000000000,
+          "Timeout": 5000000000,
+          "StartPeriod": 15000000000,
+          "Retries": 3
+        },
+        "Image": "ghcr.io/tquinzain59/orso-engine@sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
+        "Volumes": null,
+        "WorkingDir": "/app",
+        "Entrypoint": [
+          "/app/docker/orso-entrypoint.sh"
+        ],
+        "Labels": {
+          "com.orso.created_at": "2026-10-05T16:51:18.272130+00:00",
+          "com.orso.engine.digest": "sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
+          "com.orso.engine.image": "ghcr.io/tquinzain59/orso-engine@sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
+          "com.orso.engine.pinned": "true",
+          "com.orso.managed": "true",
+          "com.orso.quotas.cpus": "0.5",
+          "com.orso.quotas.memory": "512m",
+          "com.orso.quotas.pids_limit": "100",
+          "com.orso.role": "client_backend",
+          "com.orso.space.path": "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-alpha",
+          "com.orso.space.type": "dedicated",
+          "com.orso.tenant_id": "uuid-poc-alpha-001",
+          "com.orso.tenant_slug": "poc-alpha",
+          "com.orso.tier_id": "default",
+          "maintainer": "Thibaut - Orso Agents (www.orso-agents.fr)",
+          "org.opencontainers.image.created": "2026-09-30T18:47:07.167Z",
+          "org.opencontainers.image.description": "The agent that grows with you adapted for Orso activities",
+          "org.opencontainers.image.licenses": "MIT",
+          "org.opencontainers.image.revision": "c91a966be507ae9cfa1480338c942c0aa00a707f",
+          "org.opencontainers.image.source": "https://github.com/tquinzain59/orso-core",
+          "org.opencontainers.image.title": "orso-core",
+          "org.opencontainers.image.url": "https://github.com/tquinzain59/orso-core",
+          "org.opencontainers.image.version": "v1.0.0-c91a966be507ae9cfa1480338c942c0aa00a707f",
+          "version": "1.0-orso-core"
+        }
+      },
+      "NetworkSettings": {
+        "SandboxID": "58bef1d7b3cce23f76bb8064637f217081ee12caf01e0307fdafd9842a300179",
+        "SandboxKey": "/var/run/docker/netns/58bef1d7b3cc",
+        "Ports": {
+          "9119/tcp": null
+        },
+        "Networks": {
+          "orso_network": {
+            "IPAMConfig": null,
+            "Links": null,
+            "Aliases": [
+              "orso_client_poc_alpha",
+              "orso_client_poc-alpha"
+            ],
+            "DriverOpts": null,
+            "GwPriority": 0,
+            "NetworkID": "228c032a2f5f2b6ef0ad50f04049173b543bba9964d5fcd66c885d7e506fea6d",
+            "EndpointID": "a29d8eb70c2587668122d8fa6b8020f26af0f8291f7f4a1f0bd86a3f9ebd21a9",
+            "Gateway": "172.18.0.1",
+            "IPAddress": "172.18.0.2",
+            "MacAddress": "26:2d:16:b2:a0:53",
+            "IPPrefixLen": 16,
+            "IPv6Gateway": "",
+            "GlobalIPv6Address": "",
+            "GlobalIPv6PrefixLen": 0,
+            "DNSNames": [
+              "orso_client_poc_alpha",
+              "orso_client_poc-alpha",
+              "986118abeb93"
+            ]
+          }
+        }
+      },
+      "ImageManifestDescriptor": {
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "digest": "sha256:7f5601be3349ea6a26e90d15521c6fbdd7dba26537b220e49ade0464b21eeb02",
+        "size": 4103,
+        "platform": {
+          "architecture": "amd64",
+          "os": "linux"
+        }
+      }
+    },
+    "orso_client_poc_beta": {
+      "Id": "ffcd2031cf60fc0912aca13c545a7dbfdac8c59c641d1b06d299b0055cb72c61",
+      "Created": "2026-10-05T16:51:18.943663801Z",
+      "Path": "/app/docker/orso-entrypoint.sh",
+      "Args": [
+        "hermes",
+        "dashboard",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "9119",
+        "--no-open",
+        "--skip-build"
+      ],
+      "State": {
+        "Status": "running",
+        "Running": true,
+        "Paused": false,
+        "Restarting": false,
+        "OOMKilled": false,
+        "Dead": false,
+        "Pid": 156793,
+        "ExitCode": 0,
+        "Error": "",
+        "StartedAt": "2026-10-05T16:51:18.993350207Z",
+        "FinishedAt": "0001-01-01T00:00:00Z",
+        "Health": {
+          "Status": "healthy",
+          "FailingStreak": 0,
+          "Log": [
+            {
+              "Start": "2026-10-05T16:51:24.168390637Z",
+              "End": "2026-10-05T16:51:24.412250888Z",
+              "ExitCode": 1,
+              "Output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\ncurl: (7) Failed to connect to localhost port 9119 after 3 ms: Could not connect to server\n"
+            },
+            {
+              "Start": "2026-10-05T16:51:29.413335393Z",
+              "End": "2026-10-05T16:51:29.645463404Z",
+              "ExitCode": 1,
+              "Output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\ncurl: (7) Failed to connect to localhost port 9119 after 3 ms: Could not connect to server\n"
+            },
+            {
+              "Start": "2026-10-05T16:51:33.994454Z",
+              "End": "2026-10-05T16:51:34.834992429Z",
+              "ExitCode": 0,
+              "Output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r100   242  100   242    0     0    314      0 --:--:-- --:--:-- --:--:--   313\r100   242  100   242    0     0    313      0 --:-{\"module\":\"Orso UI Client\",\"version\":\"1.0.0\",\"built\":true,\"dist_path\":\"/app/apps/ui-client/dist\",\"agents\":[\"jerome\",\"lucas\",\"clara\",\"victor\"],\"llm_connected\":false,\"client_id\":\"uuid-poc-beta-002\",\"client_slug\":\"poc-beta\",\"auth_required\":true}-:-- --:--:-- --:--:--   313\n"
+            },
+            {
+              "Start": "2026-10-05T16:51:54.837338622Z",
+              "End": "2026-10-05T16:51:54.908077568Z",
+              "ExitCode": 0,
+              "Output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r100   242  100   242    0     0  26593      0 --:--:-- --:--:-- --:--:-- 26888\n{\"module\":\"Orso UI Client\",\"version\":\"1.0.0\",\"built\":true,\"dist_path\":\"/app/apps/ui-client/dist\",\"agents\":[\"jerome\",\"lucas\",\"clara\",\"victor\"],\"llm_connected\":false,\"client_id\":\"uuid-poc-beta-002\",\"client_slug\":\"poc-beta\",\"auth_required\":true}"
+            },
+            {
+              "Start": "2026-10-05T16:52:14.909868291Z",
+              "End": "2026-10-05T16:52:15.006049635Z",
+              "ExitCode": 0,
+              "Output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r100   242  100   242    0     0   7963      0 --:--:-- --:--:-- --:--:--  8066\n{\"module\":\"Orso UI Client\",\"version\":\"1.0.0\",\"built\":true,\"dist_path\":\"/app/apps/ui-client/dist\",\"agents\":[\"jerome\",\"lucas\",\"clara\",\"victor\"],\"llm_connected\":false,\"client_id\":\"uuid-poc-beta-002\",\"client_slug\":\"poc-beta\",\"auth_required\":true}"
+            }
+          ]
+        }
+      },
+      "Image": "sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
+      "ResolvConfPath": "/var/lib/docker/containers/ffcd2031cf60fc0912aca13c545a7dbfdac8c59c641d1b06d299b0055cb72c61/resolv.conf",
+      "HostnamePath": "/var/lib/docker/containers/ffcd2031cf60fc0912aca13c545a7dbfdac8c59c641d1b06d299b0055cb72c61/hostname",
+      "HostsPath": "/var/lib/docker/containers/ffcd2031cf60fc0912aca13c545a7dbfdac8c59c641d1b06d299b0055cb72c61/hosts",
+      "LogPath": "/var/lib/docker/containers/ffcd2031cf60fc0912aca13c545a7dbfdac8c59c641d1b06d299b0055cb72c61/ffcd2031cf60fc0912aca13c545a7dbfdac8c59c641d1b06d299b0055cb72c61-json.log",
+      "Name": "/orso_client_poc_beta",
+      "RestartCount": 0,
+      "Driver": "overlayfs",
+      "Platform": "linux",
+      "MountLabel": "",
+      "ProcessLabel": "",
+      "AppArmorProfile": "docker-default",
+      "ExecIDs": null,
+      "HostConfig": {
+        "Binds": [
+          "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-beta/profiles:/app/data/hermes_home/profiles:ro",
+          "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-beta/profiles:/home/orso/.hermes/profiles:ro",
+          "/home/ubuntu/orso-poc-kan58/data/tenants_poc_kan58/poc-beta:/app/data",
+          "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-beta/config:/app/config:ro",
+          "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-beta/skills:/app/skills:ro",
+          "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-beta/profiles:/app/profiles:ro"
+        ],
+        "ContainerIDFile": "",
+        "LogConfig": {
+          "Type": "json-file",
+          "Config": {
+            "max-file": "3",
+            "max-size": "10m"
+          }
+        },
+        "NetworkMode": "orso_network",
+        "PortBindings": {},
+        "RestartPolicy": {
+          "Name": "unless-stopped",
+          "MaximumRetryCount": 0
+        },
+        "AutoRemove": false,
+        "VolumeDriver": "",
+        "VolumesFrom": null,
+        "ConsoleSize": [
+          0,
+          0
+        ],
+        "CapAdd": null,
+        "CapDrop": null,
+        "CgroupnsMode": "private",
+        "Dns": null,
+        "DnsOptions": [],
+        "DnsSearch": [],
+        "ExtraHosts": null,
+        "GroupAdd": null,
+        "IpcMode": "private",
+        "Cgroup": "",
+        "Links": null,
+        "OomScoreAdj": 0,
+        "PidMode": "",
+        "Privileged": false,
+        "PublishAllPorts": false,
+        "ReadonlyRootfs": false,
+        "SecurityOpt": null,
+        "UTSMode": "",
+        "UsernsMode": "",
+        "ShmSize": 67108864,
+        "Runtime": "runc",
+        "Isolation": "",
+        "CpuShares": 0,
+        "Memory": 536870912,
+        "NanoCpus": 500000000,
+        "CgroupParent": "",
+        "BlkioWeight": 0,
+        "BlkioWeightDevice": [],
+        "BlkioDeviceReadBps": [],
+        "BlkioDeviceWriteBps": [],
+        "BlkioDeviceReadIOps": [],
+        "BlkioDeviceWriteIOps": [],
+        "CpuPeriod": 0,
+        "CpuQuota": 0,
+        "CpuRealtimePeriod": 0,
+        "CpuRealtimeRuntime": 0,
+        "CpusetCpus": "",
+        "CpusetMems": "",
+        "Devices": [],
+        "DeviceCgroupRules": null,
+        "DeviceRequests": null,
+        "MemoryReservation": 0,
+        "MemorySwap": 536870912,
+        "MemorySwappiness": null,
+        "OomKillDisable": null,
+        "PidsLimit": 100,
+        "Ulimits": null,
+        "CpuCount": 0,
+        "CpuPercent": 0,
+        "IOMaximumIOps": 0,
+        "IOMaximumBandwidth": 0,
+        "MaskedPaths": [
+          "/proc/acpi",
+          "/proc/asound",
+          "/proc/interrupts",
+          "/proc/kcore",
+          "/proc/keys",
+          "/proc/latency_stats",
+          "/proc/sched_debug",
+          "/proc/scsi",
+          "/proc/timer_list",
+          "/proc/timer_stats",
+          "/sys/devices/virtual/powercap",
+          "/sys/firmware"
+        ],
+        "ReadonlyPaths": [
+          "/proc/bus",
+          "/proc/fs",
+          "/proc/irq",
+          "/proc/sys",
+          "/proc/sysrq-trigger"
+        ]
+      },
+      "Storage": {
+        "RootFS": {
+          "Snapshot": {
+            "Name": "overlayfs"
+          }
+        }
+      },
+      "Mounts": [
+        {
+          "Type": "bind",
+          "Source": "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-beta/config",
+          "Destination": "/app/config",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/home/ubuntu/orso-poc-kan58/data/tenants_poc_kan58/poc-beta",
+          "Destination": "/app/data",
+          "Mode": "",
+          "RW": true,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-beta/profiles",
+          "Destination": "/app/profiles",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-beta/skills",
+          "Destination": "/app/skills",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-beta/profiles",
+          "Destination": "/app/data/hermes_home/profiles",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-beta/profiles",
+          "Destination": "/home/orso/.hermes/profiles",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        }
+      ],
+      "Config": {
+        "Hostname": "ffcd2031cf60",
+        "Domainname": "",
+        "User": "",
+        "AttachStdin": false,
+        "AttachStdout": false,
+        "AttachStderr": false,
+        "ExposedPorts": {
+          "9119/tcp": {}
+        },
+        "Tty": false,
+        "OpenStdin": false,
+        "StdinOnce": false,
+        "Env": [
+          "ORSO_PERSONA_HMAC_KEY=89fb4a7e32cf33668ef85fbc04b08e11ab77f5c3f65bb363cba3de18a675fe10",
+          "HERMES_DASHBOARD_BASIC_AUTH_USERNAME=admin",
+          "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=YefnAATeiKAIVfOVpxHwFDVOuAeL3yWM",
+          "ORSO_CLIENT_ID=uuid-poc-beta-002",
+          "ORSO_CLIENT_SLUG=poc-beta",
+          "HERMES_CONFIG_PATH=/app/config/hermes.yaml",
+          "HERMES_HOME=/app/data/hermes_home",
+          "PATH=/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+          "LANG=C.UTF-8",
+          "GPG_KEY=A035C8C19219BA821ECEA86B64E628F8D684696D",
+          "PYTHON_VERSION=3.11.16",
+          "PYTHON_SHA256=91bcdebfdde239a003ae93738a7fce0f9230fee5c4bc2b86f6e6e8c6f98aabe8",
+          "PYTHONDONTWRITEBYTECODE=1",
+          "PYTHONUNBUFFERED=1",
+          "PYTHONPATH=/app"
+        ],
+        "Cmd": [
+          "hermes",
+          "dashboard",
+          "--host",
+          "0.0.0.0",
+          "--port",
+          "9119",
+          "--no-open",
+          "--skip-build"
+        ],
+        "Healthcheck": {
+          "Test": [
+            "CMD-SHELL",
+            "curl -f http://localhost:9119/api/client/status || exit 1"
+          ],
+          "Interval": 20000000000,
+          "Timeout": 5000000000,
+          "StartPeriod": 15000000000,
+          "Retries": 3
+        },
+        "Image": "ghcr.io/tquinzain59/orso-engine@sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
+        "Volumes": null,
+        "WorkingDir": "/app",
+        "Entrypoint": [
+          "/app/docker/orso-entrypoint.sh"
+        ],
+        "Labels": {
+          "com.orso.created_at": "2026-10-05T16:51:18.795645+00:00",
+          "com.orso.engine.digest": "sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
+          "com.orso.engine.image": "ghcr.io/tquinzain59/orso-engine@sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
+          "com.orso.engine.pinned": "true",
+          "com.orso.managed": "true",
+          "com.orso.quotas.cpus": "0.5",
+          "com.orso.quotas.memory": "512m",
+          "com.orso.quotas.pids_limit": "100",
+          "com.orso.role": "client_backend",
+          "com.orso.space.path": "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-beta",
+          "com.orso.space.type": "dedicated",
+          "com.orso.tenant_id": "uuid-poc-beta-002",
+          "com.orso.tenant_slug": "poc-beta",
+          "com.orso.tier_id": "default",
+          "maintainer": "Thibaut - Orso Agents (www.orso-agents.fr)",
+          "org.opencontainers.image.created": "2026-09-30T18:47:07.167Z",
+          "org.opencontainers.image.description": "The agent that grows with you adapted for Orso activities",
+          "org.opencontainers.image.licenses": "MIT",
+          "org.opencontainers.image.revision": "c91a966be507ae9cfa1480338c942c0aa00a707f",
+          "org.opencontainers.image.source": "https://github.com/tquinzain59/orso-core",
+          "org.opencontainers.image.title": "orso-core",
+          "org.opencontainers.image.url": "https://github.com/tquinzain59/orso-core",
+          "org.opencontainers.image.version": "v1.0.0-c91a966be507ae9cfa1480338c942c0aa00a707f",
+          "version": "1.0-orso-core"
+        }
+      },
+      "NetworkSettings": {
+        "SandboxID": "46213c59e8c04008b6646e78baa79a71b99be7d0d496870792b57fafcf1265b4",
+        "SandboxKey": "/var/run/docker/netns/46213c59e8c0",
+        "Ports": {
+          "9119/tcp": null
+        },
+        "Networks": {
+          "orso_network": {
+            "IPAMConfig": null,
+            "Links": null,
+            "Aliases": [
+              "orso_client_poc_beta",
+              "orso_client_poc-beta"
+            ],
+            "DriverOpts": null,
+            "GwPriority": 0,
+            "NetworkID": "228c032a2f5f2b6ef0ad50f04049173b543bba9964d5fcd66c885d7e506fea6d",
+            "EndpointID": "19ec88963b55d28e0c5f2e5f9fc30082b5762563cd4e417a773d3a6e7a647e15",
+            "Gateway": "172.18.0.1",
+            "IPAddress": "172.18.0.3",
+            "MacAddress": "9a:77:af:08:d9:97",
+            "IPPrefixLen": 16,
+            "IPv6Gateway": "",
+            "GlobalIPv6Address": "",
+            "GlobalIPv6PrefixLen": 0,
+            "DNSNames": [
+              "orso_client_poc_beta",
+              "orso_client_poc-beta",
+              "ffcd2031cf60"
+            ]
+          }
+        }
+      },
+      "ImageManifestDescriptor": {
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "digest": "sha256:7f5601be3349ea6a26e90d15521c6fbdd7dba26537b220e49ade0464b21eeb02",
+        "size": 4103,
+        "platform": {
+          "architecture": "amd64",
+          "os": "linux"
+        }
+      }
+    },
+    "orso_client_poc_gamma": {
+      "Id": "10d73d87b3fab7d4bd329a39fa7ce22a537f24f98b20e0708e836b9f6582eaa7",
+      "Created": "2026-10-05T16:51:19.601800945Z",
+      "Path": "/app/docker/orso-entrypoint.sh",
+      "Args": [
+        "hermes",
+        "dashboard",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "9119",
+        "--no-open",
+        "--skip-build"
+      ],
+      "State": {
+        "Status": "running",
+        "Running": true,
+        "Paused": false,
+        "Restarting": false,
+        "OOMKilled": false,
+        "Dead": false,
+        "Pid": 156925,
+        "ExitCode": 0,
+        "Error": "",
+        "StartedAt": "2026-10-05T16:51:19.668965978Z",
+        "FinishedAt": "0001-01-01T00:00:00Z",
+        "Health": {
+          "Status": "healthy",
+          "FailingStreak": 0,
+          "Log": [
+            {
+              "Start": "2026-10-05T16:51:24.873762994Z",
+              "End": "2026-10-05T16:51:25.067709181Z",
+              "ExitCode": 1,
+              "Output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\ncurl: (7) Failed to connect to localhost port 9119 after 2 ms: Could not connect to server\n"
+            },
+            {
+              "Start": "2026-10-05T16:51:30.068700491Z",
+              "End": "2026-10-05T16:51:30.228704784Z",
+              "ExitCode": 1,
+              "Output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\ncurl: (7) Failed to connect to localhost port 9119 after 7 ms: Could not connect to server\n"
+            },
+            {
+              "Start": "2026-10-05T16:51:34.671269707Z",
+              "End": "2026-10-05T16:51:35.533191538Z",
+              "ExitCode": 0,
+              "Output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r  0   244    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r100   244  100   244    0     0    340      0 --:--:-- --:--:-- --:--:--   339\n{\"module\":\"Orso UI Client\",\"version\":\"1.0.0\",\"built\":true,\"dist_path\":\"/app/apps/ui-client/dist\",\"agents\":[\"jerome\",\"lucas\",\"clara\",\"victor\"],\"llm_connected\":false,\"client_id\":\"uuid-poc-gamma-003\",\"client_slug\":\"poc-gamma\",\"auth_required\":true}"
+            },
+            {
+              "Start": "2026-10-05T16:51:55.534050791Z",
+              "End": "2026-10-05T16:51:55.607739025Z",
+              "ExitCode": 0,
+              "Output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r100   244  100   244    0     0  24341      0 --:--:-- --:--:-- --:--:-- 27111\n{\"module\":\"Orso UI Client\",\"version\":\"1.0.0\",\"built\":true,\"dist_path\":\"/app/apps/ui-client/dist\",\"agents\":[\"jerome\",\"lucas\",\"clara\",\"victor\"],\"llm_connected\":false,\"client_id\":\"uuid-poc-gamma-003\",\"client_slug\":\"poc-gamma\",\"auth_required\":true}"
+            },
+            {
+              "Start": "2026-10-05T16:52:15.608606482Z",
+              "End": "2026-10-05T16:52:15.698763254Z",
+              "ExitCode": 0,
+              "Output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r100   244  100   244    0     0   9944      0 --:--:-- --:--:-- --:--:-- 10166\n{\"module\":\"Orso UI Client\",\"version\":\"1.0.0\",\"built\":true,\"dist_path\":\"/app/apps/ui-client/dist\",\"agents\":[\"jerome\",\"lucas\",\"clara\",\"victor\"],\"llm_connected\":false,\"client_id\":\"uuid-poc-gamma-003\",\"client_slug\":\"poc-gamma\",\"auth_required\":true}"
+            }
+          ]
+        }
+      },
+      "Image": "sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
+      "ResolvConfPath": "/var/lib/docker/containers/10d73d87b3fab7d4bd329a39fa7ce22a537f24f98b20e0708e836b9f6582eaa7/resolv.conf",
+      "HostnamePath": "/var/lib/docker/containers/10d73d87b3fab7d4bd329a39fa7ce22a537f24f98b20e0708e836b9f6582eaa7/hostname",
+      "HostsPath": "/var/lib/docker/containers/10d73d87b3fab7d4bd329a39fa7ce22a537f24f98b20e0708e836b9f6582eaa7/hosts",
+      "LogPath": "/var/lib/docker/containers/10d73d87b3fab7d4bd329a39fa7ce22a537f24f98b20e0708e836b9f6582eaa7/10d73d87b3fab7d4bd329a39fa7ce22a537f24f98b20e0708e836b9f6582eaa7-json.log",
+      "Name": "/orso_client_poc_gamma",
+      "RestartCount": 0,
+      "Driver": "overlayfs",
+      "Platform": "linux",
+      "MountLabel": "",
+      "ProcessLabel": "",
+      "AppArmorProfile": "docker-default",
+      "ExecIDs": null,
+      "HostConfig": {
+        "Binds": [
+          "/home/ubuntu/orso-poc-kan58/data/tenants_poc_kan58/poc-gamma:/app/data",
+          "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-gamma/config:/app/config:ro",
+          "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-gamma/skills:/app/skills:ro",
+          "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-gamma/profiles:/app/profiles:ro",
+          "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-gamma/profiles:/app/data/hermes_home/profiles:ro",
+          "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-gamma/profiles:/home/orso/.hermes/profiles:ro"
+        ],
+        "ContainerIDFile": "",
+        "LogConfig": {
+          "Type": "json-file",
+          "Config": {
+            "max-file": "3",
+            "max-size": "10m"
+          }
+        },
+        "NetworkMode": "orso_network",
+        "PortBindings": {},
+        "RestartPolicy": {
+          "Name": "unless-stopped",
+          "MaximumRetryCount": 0
+        },
+        "AutoRemove": false,
+        "VolumeDriver": "",
+        "VolumesFrom": null,
+        "ConsoleSize": [
+          0,
+          0
+        ],
+        "CapAdd": null,
+        "CapDrop": null,
+        "CgroupnsMode": "private",
+        "Dns": null,
+        "DnsOptions": [],
+        "DnsSearch": [],
+        "ExtraHosts": null,
+        "GroupAdd": null,
+        "IpcMode": "private",
+        "Cgroup": "",
+        "Links": null,
+        "OomScoreAdj": 0,
+        "PidMode": "",
+        "Privileged": false,
+        "PublishAllPorts": false,
+        "ReadonlyRootfs": false,
+        "SecurityOpt": null,
+        "UTSMode": "",
+        "UsernsMode": "",
+        "ShmSize": 67108864,
+        "Runtime": "runc",
+        "Isolation": "",
+        "CpuShares": 0,
+        "Memory": 536870912,
+        "NanoCpus": 500000000,
+        "CgroupParent": "",
+        "BlkioWeight": 0,
+        "BlkioWeightDevice": [],
+        "BlkioDeviceReadBps": [],
+        "BlkioDeviceWriteBps": [],
+        "BlkioDeviceReadIOps": [],
+        "BlkioDeviceWriteIOps": [],
+        "CpuPeriod": 0,
+        "CpuQuota": 0,
+        "CpuRealtimePeriod": 0,
+        "CpuRealtimeRuntime": 0,
+        "CpusetCpus": "",
+        "CpusetMems": "",
+        "Devices": [],
+        "DeviceCgroupRules": null,
+        "DeviceRequests": null,
+        "MemoryReservation": 0,
+        "MemorySwap": 536870912,
+        "MemorySwappiness": null,
+        "OomKillDisable": null,
+        "PidsLimit": 100,
+        "Ulimits": null,
+        "CpuCount": 0,
+        "CpuPercent": 0,
+        "IOMaximumIOps": 0,
+        "IOMaximumBandwidth": 0,
+        "MaskedPaths": [
+          "/proc/acpi",
+          "/proc/asound",
+          "/proc/interrupts",
+          "/proc/kcore",
+          "/proc/keys",
+          "/proc/latency_stats",
+          "/proc/sched_debug",
+          "/proc/scsi",
+          "/proc/timer_list",
+          "/proc/timer_stats",
+          "/sys/devices/virtual/powercap",
+          "/sys/firmware"
+        ],
+        "ReadonlyPaths": [
+          "/proc/bus",
+          "/proc/fs",
+          "/proc/irq",
+          "/proc/sys",
+          "/proc/sysrq-trigger"
+        ]
+      },
+      "Storage": {
+        "RootFS": {
+          "Snapshot": {
+            "Name": "overlayfs"
+          }
+        }
+      },
+      "Mounts": [
+        {
+          "Type": "bind",
+          "Source": "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-gamma/config",
+          "Destination": "/app/config",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/home/ubuntu/orso-poc-kan58/data/tenants_poc_kan58/poc-gamma",
+          "Destination": "/app/data",
+          "Mode": "",
+          "RW": true,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-gamma/profiles",
+          "Destination": "/app/profiles",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-gamma/skills",
+          "Destination": "/app/skills",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-gamma/profiles",
+          "Destination": "/app/data/hermes_home/profiles",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-gamma/profiles",
+          "Destination": "/home/orso/.hermes/profiles",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        }
+      ],
+      "Config": {
+        "Hostname": "10d73d87b3fa",
+        "Domainname": "",
+        "User": "",
+        "AttachStdin": false,
+        "AttachStdout": false,
+        "AttachStderr": false,
+        "ExposedPorts": {
+          "9119/tcp": {}
+        },
+        "Tty": false,
+        "OpenStdin": false,
+        "StdinOnce": false,
+        "Env": [
+          "HERMES_HOME=/app/data/hermes_home",
+          "ORSO_PERSONA_HMAC_KEY=89fb4a7e32cf33668ef85fbc04b08e11ab77f5c3f65bb363cba3de18a675fe10",
+          "HERMES_DASHBOARD_BASIC_AUTH_USERNAME=admin",
+          "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=YefnAATeiKAIVfOVpxHwFDVOuAeL3yWM",
+          "ORSO_CLIENT_ID=uuid-poc-gamma-003",
+          "ORSO_CLIENT_SLUG=poc-gamma",
+          "HERMES_CONFIG_PATH=/app/config/hermes.yaml",
+          "PATH=/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+          "LANG=C.UTF-8",
+          "GPG_KEY=A035C8C19219BA821ECEA86B64E628F8D684696D",
+          "PYTHON_VERSION=3.11.16",
+          "PYTHON_SHA256=91bcdebfdde239a003ae93738a7fce0f9230fee5c4bc2b86f6e6e8c6f98aabe8",
+          "PYTHONDONTWRITEBYTECODE=1",
+          "PYTHONUNBUFFERED=1",
+          "PYTHONPATH=/app"
+        ],
+        "Cmd": [
+          "hermes",
+          "dashboard",
+          "--host",
+          "0.0.0.0",
+          "--port",
+          "9119",
+          "--no-open",
+          "--skip-build"
+        ],
+        "Healthcheck": {
+          "Test": [
+            "CMD-SHELL",
+            "curl -f http://localhost:9119/api/client/status || exit 1"
+          ],
+          "Interval": 20000000000,
+          "Timeout": 5000000000,
+          "StartPeriod": 15000000000,
+          "Retries": 3
+        },
+        "Image": "ghcr.io/tquinzain59/orso-engine@sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
+        "Volumes": null,
+        "WorkingDir": "/app",
+        "Entrypoint": [
+          "/app/docker/orso-entrypoint.sh"
+        ],
+        "Labels": {
+          "com.orso.created_at": "2026-10-05T16:51:19.444130+00:00",
+          "com.orso.engine.digest": "sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
+          "com.orso.engine.image": "ghcr.io/tquinzain59/orso-engine@sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
+          "com.orso.engine.pinned": "true",
+          "com.orso.managed": "true",
+          "com.orso.quotas.cpus": "0.5",
+          "com.orso.quotas.memory": "512m",
+          "com.orso.quotas.pids_limit": "100",
+          "com.orso.role": "client_backend",
+          "com.orso.space.path": "/home/ubuntu/orso-poc-kan58/data/spaces_poc_kan58/poc-gamma",
+          "com.orso.space.type": "dedicated",
+          "com.orso.tenant_id": "uuid-poc-gamma-003",
+          "com.orso.tenant_slug": "poc-gamma",
+          "com.orso.tier_id": "default",
+          "maintainer": "Thibaut - Orso Agents (www.orso-agents.fr)",
+          "org.opencontainers.image.created": "2026-09-30T18:47:07.167Z",
+          "org.opencontainers.image.description": "The agent that grows with you adapted for Orso activities",
+          "org.opencontainers.image.licenses": "MIT",
+          "org.opencontainers.image.revision": "c91a966be507ae9cfa1480338c942c0aa00a707f",
+          "org.opencontainers.image.source": "https://github.com/tquinzain59/orso-core",
+          "org.opencontainers.image.title": "orso-core",
+          "org.opencontainers.image.url": "https://github.com/tquinzain59/orso-core",
+          "org.opencontainers.image.version": "v1.0.0-c91a966be507ae9cfa1480338c942c0aa00a707f",
+          "version": "1.0-orso-core"
+        }
+      },
+      "NetworkSettings": {
+        "SandboxID": "5ebaadf4a47fe0c0429b23a5de10037138725e29224bfd4658977f0366b41d71",
+        "SandboxKey": "/var/run/docker/netns/5ebaadf4a47f",
+        "Ports": {
+          "9119/tcp": null
+        },
+        "Networks": {
+          "orso_network": {
+            "IPAMConfig": null,
+            "Links": null,
+            "Aliases": [
+              "orso_client_poc_gamma",
+              "orso_client_poc-gamma"
+            ],
+            "DriverOpts": null,
+            "GwPriority": 0,
+            "NetworkID": "228c032a2f5f2b6ef0ad50f04049173b543bba9964d5fcd66c885d7e506fea6d",
+            "EndpointID": "438341135bffb0b4aec5cba754765f36a542dbccbaa0c7e1a2b19e7a51b75957",
+            "Gateway": "172.18.0.1",
+            "IPAddress": "172.18.0.4",
+            "MacAddress": "82:d0:b4:7c:ff:9b",
+            "IPPrefixLen": 16,
+            "IPv6Gateway": "",
+            "GlobalIPv6Address": "",
+            "GlobalIPv6PrefixLen": 0,
+            "DNSNames": [
+              "orso_client_poc_gamma",
+              "orso_client_poc-gamma",
+              "10d73d87b3fa"
+            ]
+          }
+        }
+      },
+      "ImageManifestDescriptor": {
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "digest": "sha256:7f5601be3349ea6a26e90d15521c6fbdd7dba26537b220e49ade0464b21eeb02",
+        "size": 4103,
+        "platform": {
+          "architecture": "amd64",
+          "os": "linux"
+        }
+      }
+    }
+  }
+}
