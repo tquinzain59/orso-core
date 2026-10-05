@@ -102,8 +102,27 @@ def _check_sensitive_path(filepath: str, task_id: str = "default") -> str | None
             or norm.startswith("profiles/")
             or norm.endswith("/profiles")
         )
+<<<<<<< Updated upstream
         is_soul_file = (base == "soul.md")
         if is_profiles_path or is_soul_file:
+=======
+        is_home_soul = (
+            base == "soul.md"
+            and (
+                (real_home and norm.lower() == os.path.join(real_home, "soul.md").lower())
+                or "/app/profiles/" in norm
+                or "/profiles/" in norm
+                or norm.startswith("profiles/")
+                or "/data/hermes_home/" in norm
+                or "./data/hermes_home/" in norm
+                or "/app/data/" in norm
+                or "/data/" in norm
+                or norm.startswith("data/")
+                or "/home/orso/" in norm
+            )
+        )
+        if is_profiles_path or is_home_soul:
+>>>>>>> Stashed changes
             return (
                 f"Refusing to write to protected agent profile path: {filepath}\n"
                 "Agent cannot modify its own persona, SOUL.md, or profiles directory (Orso KAN-33/KAN-54). "
