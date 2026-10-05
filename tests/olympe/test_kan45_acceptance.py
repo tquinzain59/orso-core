@@ -34,7 +34,6 @@ def _find_site_dir() -> Path | None:
         Path("../orso-site").resolve(),
         Path("../../Site_Hermes-core").resolve(),
         Path("../../orso-site").resolve(),
-        Path("/Users/tquinzain/Documents/Dev Projects/Site_Hermes-core").resolve(),
     ]
     for c in candidates:
         if c.is_dir() and (c / "contact.html").is_file():
@@ -146,6 +145,8 @@ class TestKAN45Acceptance:
 
     def test_ca2_subscription_creates_client_subscription_and_environment(self, client):
         """Critère 2 : la souscription crée le client, l'abonnement et l'environnement, chacun vérifiable en base."""
+        import sqlite3
+
         slug = f"client-auto-{int(os.times().system * 1000) % 10000}"
         tenant_name = "Cabinet Audit & Finance"
         contact_email = f"contact@{slug}.orso-agents.fr"
@@ -162,25 +163,60 @@ class TestKAN45Acceptance:
         tenant = created.get("tenant", {})
         assert tenant.get("slug") == slug
         assert tenant.get("name") == tenant_name
+        tenant_id = tenant.get("id")
 
-        # Vérification 1 : Client / Organisation vérifiable
+        # ── Vérification 1 : Client / Organisation vérifiable en base de données ──
+        with sqlite3.connect(str(ops_manager.db_path)) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, slug, name, status, contact_email, contact_name, is_sandbox FROM tenants WHERE slug = ?",
+                (slug,),
+            )
+            row_tenant = cursor.fetchone()
+            assert row_tenant is not None, f"Client {slug} non trouvé dans la table SQL 'tenants'"
+            t_id, t_slug, t_name, t_status, t_email, t_cname, t_sandbox = row_tenant
+            assert t_slug == slug
+            assert t_name == tenant_name
+            assert t_email == contact_email
+            assert t_sandbox == 1
+
+            # ── Vérification 2 : Abonnement vérifiable en base de données ──
+            cursor.execute(
+                "SELECT id, tenant_id, tier_id, status, trial_days, stripe_customer_id FROM subscriptions WHERE tenant_id = ?",
+                (t_id,),
+            )
+            row_sub = cursor.fetchone()
+            assert row_sub is not None, f"Abonnement pour {t_id} non trouvé dans la table SQL 'subscriptions'"
+            s_id, s_tid, s_tier, s_status, s_trial_days, s_cus = row_sub
+            assert s_tid == t_id
+            assert s_tier == "1_agent"
+            assert s_status == "active"
+            assert s_trial_days == 30
+
+            # ── Vérification 3 : Environnement infrastructure vérifiable en base de données ──
+            cursor.execute(
+                "SELECT id, tenant_id, container_name, internal_route_key, status, environment_status FROM tenant_instances WHERE tenant_id = ?",
+                (t_id,),
+            )
+            row_inst = cursor.fetchone()
+            assert row_inst is not None, f"Instance pour {t_id} non trouvée dans la table SQL 'tenant_instances'"
+            i_id, i_tid, i_cname, i_route, i_status, i_env_status = row_inst
+            assert i_tid == t_id
+            assert i_cname == f"orso_client_{slug.replace('-', '_')}"
+            assert i_route == f"orso_client_{slug.replace('-', '_')}"
+            assert i_env_status in ("active", "ready", "inactive", "pending_validation")
+
+            # Sorties brutes d'inspection de base de données (exigence formelle du contrat de revue KAN-45)
+            print(f"\n[RAW DB PROBE - CA2 TENANT] id={t_id} slug={t_slug} name='{t_name}' status={t_status} contact='{t_cname}' <{t_email}> sandbox={t_sandbox}")
+            print(f"[RAW DB PROBE - CA2 SUBSCRIPTION] id={s_id} tenant_id={s_tid} tier={s_tier} status={s_status} trial_days={s_trial_days} cus={s_cus}")
+            print(f"[RAW DB PROBE - CA2 INSTANCE] id={i_id} tenant_id={i_tid} container={i_cname} route={i_route} status={i_status} env_status={i_env_status}")
+
+        # Vérification complémentaire via l'API applicative
         detail = ops_manager.get_tenant_detail(slug)
-        assert detail is not None, f"Client {slug} non trouvé"
+        assert detail is not None, f"Client {slug} non trouvé via get_tenant_detail"
         assert detail.get("slug") == slug
         assert detail.get("contact", {}).get("email") == contact_email
-
-        # Vérification 2 : Abonnement vérifiable
-        sub = detail.get("subscription", {})
-        assert sub is not None
-        assert sub.get("status") in ("trialing", "active", "pending_validation")
-
-        # Vérification 3 : Environnement infrastructure vérifiable
-        instance = detail.get("instance", {})
-        assert instance is not None
-        assert (instance.get("container_name") or instance.get("docker_container_name")) == f"orso_client_{slug.replace('-', '_')}"
-        assert instance.get("internal_route_key") == f"orso_client_{slug.replace('-', '_')}"
-        # Arbitrage Direction : l'environnement est prêt ou en attente de déploiement explicite
-        assert instance.get("environment_status") in ("active", "ready", "inactive", "pending_validation")
+        assert detail.get("subscription", {}).get("status") in ("trialing", "active", "pending_validation")
 
     def test_ca3_confirmation_page_displays_real_state(self):
         """Critère 3 : une page de confirmation affiche l'état réel.
@@ -249,11 +285,34 @@ class TestKAN45Acceptance:
 
     def test_ca5_contact_page_responds_transmits_and_notifies_ops(self, client):
         """Critère 5 : la page de contact demandée par le cahier des charges répond,
-
-        transmet les demandes de manière effective (POST /api/olympe/contact)
-        et notifie le Cockpit OPS sans 404.
+        transmet les demandes de manière effective (POST /api/olympe/contact),
+        est protégée contre les abus (rate limiting 429, consentement obligatoire 400),
+        persiste en base de données réelle (contact_leads, audit_events) et notifie le Cockpit OPS sans 404.
         """
-        # 1. Test du point de terminaison de transmission serveur réel
+        import sqlite3
+
+        # 1. Vérification du rejet si consentement RGPD manquant ou False (KAN-45 Condition 4)
+        bad_consent_payload = {
+            "name": "Consent Test",
+            "email": "noconsent@example.com",
+            "message": "Message sans consentement explicite.",
+            "consent": False,
+        }
+        resp_bad = client.post("/api/olympe/contact", json=bad_consent_payload)
+        assert resp_bad.status_code == 400, f"Le consentement manquant doit être rejeté en 400: {resp_bad.status_code}"
+        assert "consentement" in resp_bad.json().get("detail", "").lower()
+
+        # Vérification du rejet si le champ consent est omis (défaut False)
+        resp_omitted = client.post("/api/olympe/contact", json={
+            "name": "Consent Omitted",
+            "email": "omitted@example.com",
+            "message": "Message où consent n'est pas fourni.",
+        })
+        assert resp_omitted.status_code == 400
+
+        # 2. Test du point de terminaison de transmission serveur réel avec IP dédiée
+        test_ip = f"192.168.45.{int(os.times().system * 1000) % 250 + 1}"
+        headers_ip = {"X-Forwarded-For": test_ip}
         payload = {
             "name": "Sophie Martin",
             "email": "s.martin@financia-solutions.fr",
@@ -263,25 +322,60 @@ class TestKAN45Acceptance:
             "message": "Demande de cadrage pour période d'essai 30 jours sur l'agent de recouvrement Jérôme.",
             "consent": True,
         }
-        resp = client.post("/api/olympe/contact", json=payload)
+        resp = client.post("/api/olympe/contact", json=payload, headers=headers_ip)
         assert resp.status_code == 200, f"Échec transmission contact : {resp.text}"
         data = resp.json()
         assert data.get("success") is True
         assert "lead_id" in data
         assert data.get("status") == "pending_validation"
+        lead_id = data["lead_id"]
 
-        # 2. Vérification de l'enregistrement de l'audit et de la notification dans OPS
+        # 3. Vérification de la limitation de débit anti-abus (5 requêtes / minute)
+        for _ in range(4):
+            client.post("/api/olympe/contact", json=payload, headers=headers_ip)
+        resp_throttled = client.post("/api/olympe/contact", json=payload, headers=headers_ip)
+        assert resp_throttled.status_code == 429, f"La 6e requête doit être bloquée par le rate limiter (429): {resp_throttled.status_code}"
+        assert "trop de requêtes" in resp_throttled.json().get("detail", "").lower()
+
+        # 4. Vérification formelle en base de données SQLite réelle (tables contact_leads et audit_events)
+        with sqlite3.connect(str(ops_manager.db_path)) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, name, email, company, interest, consent, status FROM contact_leads WHERE email = ?",
+                ("s.martin@financia-solutions.fr",),
+            )
+            row_lead = cursor.fetchone()
+            assert row_lead is not None, "Lead 's.martin@financia-solutions.fr' introuvable dans la table SQL 'contact_leads'"
+            l_id, l_name, l_email, l_company, l_interest, l_consent, l_status = row_lead
+            assert l_name == "Sophie Martin"
+            assert l_email == "s.martin@financia-solutions.fr"
+            assert l_company == "Financia Solutions SAS"
+            assert l_consent == 1
+            assert l_status == "pending_review"
+
+            cursor.execute(
+                "SELECT id, action, target, actor, details_json FROM audit_events WHERE action = 'contact:lead' AND target = ?",
+                ("s.martin@financia-solutions.fr",),
+            )
+            row_audit = cursor.fetchone()
+            assert row_audit is not None, "Événement d'audit contact:lead introuvable dans la table SQL 'audit_events'"
+            a_id, a_action, a_target, a_actor, a_details = row_audit
+
+            print(f"\n[RAW DB PROBE - CA5 CONTACT_LEAD] id={l_id} email={l_email} company={l_company} consent={l_consent} status={l_status}")
+            print(f"[RAW DB PROBE - CA5 AUDIT_EVENT] id={a_id} action={a_action} target={a_target} actor={a_actor}")
+
+        # 5. Vérification de l'enregistrement de l'audit et de la notification dans OPS
         audit_events = ops_manager.get_audit_events(limit=10)
         contact_event = next((e for e in audit_events if e.get("action") == "contact:lead"), None)
         assert contact_event is not None, "Événement d'audit 'contact:lead' non enregistré dans OPS"
         assert contact_event.get("target") == "s.martin@financia-solutions.fr"
 
-        # 3. Vérification de la détection dans les arrivées en attente du Cockpit OPS (badge Arrivées & OVH)
+        # 6. Vérification de la détection dans les arrivées en attente du Cockpit OPS (badge Arrivées & OVH)
         pending_tenants = ops_manager.get_pending_onboarding()
         assert any(t.get("name") == "Financia Solutions SAS" for t in pending_tenants), \
             "Le prospect n'apparaît pas dans la liste des arrivées en attente de déploiement OPS"
 
-        # 4. Vérification statique de contact.html dans le dépôt vitrine (si présent)
+        # 7. Vérification statique de contact.html dans le dépôt vitrine (si présent)
         site_dir = _find_site_dir()
         if site_dir:
             contact_file = site_dir / "contact.html"

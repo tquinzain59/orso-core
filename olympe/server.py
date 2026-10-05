@@ -8,6 +8,7 @@ de facturation Stripe et de supervision de flotte.
 import os
 import logging
 import json
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from fastapi import Depends, FastAPI, HTTPException, Request, Security
@@ -188,7 +189,7 @@ class ContactFormRequest(BaseModel):
     phone: Optional[str] = Field("", description="Numéro de téléphone")
     interest: Optional[str] = Field("recouvrement", description="Agent ou service concerné")
     message: str = Field(..., description="Message ou besoin formulé")
-    consent: Optional[bool] = Field(True, description="Consentement RGPD")
+    consent: bool = Field(False, description="Consentement RGPD obligatoire")
 
 
 # ── Endpoints Supervision & Cycle de Vie Conteneurs ──────────────────────────
@@ -714,9 +715,43 @@ async def rewrite_mission_letter(req: RewriteMissionLetterRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# Rate limiter anti-abus pour l'endpoint public /api/olympe/contact (KAN-45)
+# 5 requêtes par fenêtre glissante de 60 secondes par IP source
+_CONTACT_RATE_LIMIT_WINDOW = 60.0
+_CONTACT_RATE_LIMIT_MAX = 5
+_contact_request_timestamps: Dict[str, List[float]] = {}
+
+
 @app.post("/api/olympe/contact")
-async def submit_contact_form(req: ContactFormRequest):
+async def submit_contact_form(req: ContactFormRequest, request: Request):
     """Reçoit et enregistre une prise de contact ou une demande d'essai gratuit depuis la vitrine (KAN-45)."""
+    # 1. Vérification stricte du consentement RGPD (défaut False)
+    if not req.consent:
+        raise HTTPException(
+            status_code=400,
+            detail="Le consentement RGPD est obligatoire pour transmettre votre demande.",
+        )
+
+    # 2. Protection anti-abus / limitation de débit par IP (5 requêtes / minute)
+    client_ip = "unknown"
+    if request.client and request.client.host:
+        client_ip = request.client.host
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        client_ip = forwarded.split(",")[0].strip()
+
+    now = time.time()
+    recent = [t for t in _contact_request_timestamps.get(client_ip, []) if now - t < _CONTACT_RATE_LIMIT_WINDOW]
+    if len(recent) >= _CONTACT_RATE_LIMIT_MAX:
+        _contact_request_timestamps[client_ip] = recent
+        raise HTTPException(
+            status_code=429,
+            detail="Trop de requêtes soumises depuis cette adresse. Veuillez patienter avant de renouveler votre message.",
+        )
+    recent.append(now)
+    _contact_request_timestamps[client_ip] = recent
+
+    # 3. Enregistrement sécurisé avec gestion des erreurs sanitisée (sans fuite de trace interne)
     try:
         res = ops_manager.record_contact_lead(
             name=req.name,
@@ -725,14 +760,19 @@ async def submit_contact_form(req: ContactFormRequest):
             phone=req.phone or "",
             interest=req.interest or "recouvrement",
             message=req.message,
-            consent=req.consent if req.consent is not None else True,
+            consent=req.consent,
         )
         return res
+    except HTTPException:
+        raise
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
-        _log.error("Erreur enregistrement contact/lead : %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        _log.error("Erreur enregistrement contact/lead : %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Une erreur interne est survenue lors de l'enregistrement de votre message. Veuillez réessayer ultérieurement.",
+        )
 
 
 # ── Endpoints Onboarding & Déploiement OVH ──────────────────────────────────
