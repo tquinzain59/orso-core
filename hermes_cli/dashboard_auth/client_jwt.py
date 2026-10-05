@@ -75,12 +75,16 @@ def fetch_jwks(jwks_url: str) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
-def get_signing_key_from_cache(kid: str) -> Optional[Any]:
-    """Retrieves a cached public signing key by kid."""
+def get_signing_key_from_cache(kid: str, ttl: float = 300.0) -> Optional[Any]:
+    """Retrieves a cached public signing key by kid if the cache has not expired (default TTL: 300s)."""
+    now = time.time()
+    cache_ts = _JWKS_CACHE.get("timestamp", 0.0)
+    if now - cache_ts > ttl:
+        return None
     return _JWKS_CACHE.get("keys", {}).get(kid)
 
 
-def get_jwks_data(jwks_url: Optional[str] = None, force_refresh: bool = False) -> dict:
+def get_jwks_data(jwks_url: Optional[str] = None, force_refresh: bool = False, ttl: float = 300.0) -> dict:
     """Retrieves JWKS data, using a TTL memory cache (default 300s)."""
     url = jwks_url or get_jwks_url()
     if not url:
@@ -89,7 +93,7 @@ def get_jwks_data(jwks_url: Optional[str] = None, force_refresh: bool = False) -
         )
 
     now = time.time()
-    if not force_refresh and _JWKS_CACHE.get("jwks") and (now - _JWKS_CACHE.get("timestamp", 0) < 300.0):
+    if not force_refresh and _JWKS_CACHE.get("jwks") and (now - _JWKS_CACHE.get("timestamp", 0.0) < ttl):
         return _JWKS_CACHE["jwks"]
 
     data = fetch_jwks(url)
@@ -115,8 +119,9 @@ def _resolve_es256_key(
     jwks_url: Optional[str] = None,
     jwks_data: Optional[dict] = None,
     force_refresh: bool = False,
+    ttl: float = 300.0,
 ) -> Any:
-    """Resolves an ES256 public key by kid from jwks_data, cache, or remote fetch."""
+    """Resolves an ES256 public key by kid from jwks_data, cache, or remote fetch (with TTL)."""
     if not kid:
         raise JWTVerificationError("En-tête de jeton sans 'kid' requis pour l'algorithme ES256")
 
@@ -129,28 +134,28 @@ def _resolve_es256_key(
                 return PyJWK(k).key
         raise JWTVerificationError(f"Clé de signature introuvable dans JWKS pour kid: {kid}")
 
-    # Consultation du cache si non forcé
+    # Consultation du cache si non forcé et non expiré (< 300s)
     if not force_refresh:
-        cached = get_signing_key_from_cache(kid)
+        cached = get_signing_key_from_cache(kid, ttl=ttl)
         if cached is not None:
             return cached
 
-    # Récupération / rafraîchissement depuis la source JWKS
+    # Récupération / rafraîchissement depuis la source JWKS (cache vide, expiré ou rafraîchissement forcé)
     try:
-        data = get_jwks_data(jwks_url=jwks_url, force_refresh=True)
+        data = get_jwks_data(jwks_url=jwks_url, force_refresh=True, ttl=ttl)
         if data and "keys" in data:
             for k in data.get("keys", []):
                 if k.get("kid") == kid:
                     return PyJWK(k).key
-        cached = get_signing_key_from_cache(kid)
+        cached = get_signing_key_from_cache(kid, ttl=ttl)
         if cached is not None:
             return cached
         raise JWTVerificationError(f"Clé de signature introuvable dans JWKS pour kid: {kid}")
     except JWTVerificationError:
         raise
     except Exception as e:
-        # Si une clé valide est déjà en cache, on tolère une panne réseau transitoire si force_refresh n'était pas imposé
-        cached = get_signing_key_from_cache(kid)
+        # Si la source est indisponible, tolérer une clé en cache valide sous son TTL si force_refresh n'était pas imposé
+        cached = get_signing_key_from_cache(kid, ttl=ttl)
         if cached is not None and not force_refresh:
             return cached
         raise JWTVerificationError(f"Source de clés JWKS indisponible : {e}")
@@ -163,6 +168,7 @@ def decode_and_verify_jwt(
     jwks_url: Optional[str] = None,
     jwks_data: Optional[dict] = None,
     force_jwks_refresh: bool = False,
+    ttl: float = 300.0,
 ) -> Dict[str, Any]:
     """Decodes and cryptographically verifies a JWT token.
     Supports ES256 (via Supabase JWKS) and HS256 (via SUPABASE_JWT_SECRET).
@@ -199,6 +205,7 @@ def decode_and_verify_jwt(
             jwks_url=jwks_url,
             jwks_data=jwks_data,
             force_refresh=force_jwks_refresh,
+            ttl=ttl,
         )
         try:
             import jwt

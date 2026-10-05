@@ -4,7 +4,7 @@ Validates that:
 - CA1: Unverifiable tokens are rejected (HS256 unknown key, ES256 fake, RS256 fake, none)
 - CA2: Legitimate ES256 tokens signed with EC key in JWKS are accepted
 - CA3: Tenant isolation (403) holds even with legitimately signed tokens
-- CA4: Fail-closed behavior when JWKS is unavailable (without cache), and cache hit behavior
+- CA4: Fail-closed behavior when JWKS is unavailable (without cache), cache hit within TTL, and TTL expiration
 - CA6: Explicit coverage of the 3 canonical cases (HS256 unknown rejected, ES256 invalid rejected, ES256 valid accepted)
 """
 
@@ -26,6 +26,11 @@ from hermes_cli.dashboard_auth.client_jwt import (
     verify_client_access,
     JWTVerificationError,
 )
+
+try:
+    from hermes_cli.dashboard_auth.client_jwt import _JWKS_CACHE
+except ImportError:
+    _JWKS_CACHE = {"keys": {}, "jwks": None, "timestamp": 0.0}
 from fastapi import Request, HTTPException
 
 
@@ -92,6 +97,7 @@ def test_ca6_three_core_cases(ec_key_setup, monkeypatch):
     """
     secret = "secret-officiel-recette-32-chars-ok"
     monkeypatch.setenv("SUPABASE_JWT_SECRET", secret)
+    monkeypatch.setenv("SUPABASE_JWKS_URL", "https://auth.orso-test.local/jwks.json")
     
     payload = _make_payload()
     
@@ -129,6 +135,7 @@ async def test_ca2_es256_legitimate_token_accepted(ec_key_setup, monkeypatch):
     """CA2: Un jeton ES256 légitimement signé par la clé présente dans le JWKS est accepté."""
     secret = "secret-officiel-recette-32-chars-ok"
     monkeypatch.setenv("SUPABASE_JWT_SECRET", secret)
+    monkeypatch.setenv("SUPABASE_JWKS_URL", "https://auth.orso-test.local/jwks.json")
     monkeypatch.setenv("ORSO_CLIENT_ID", "f3e25379-6531-479e-b276-3b3185e7421b")
     monkeypatch.setenv("ORSO_CLIENT_SLUG", "financia-solutions")
 
@@ -154,7 +161,6 @@ async def test_ca2_es256_legitimate_token_accepted(ec_key_setup, monkeypatch):
         assert result["tenant"]["is_admin"] is True
 
 
-
 # ==============================================================================
 # CA1: Rejet des jetons invérifiables (4 cas)
 # ==============================================================================
@@ -167,6 +173,7 @@ def test_ca1_unverifiable_tokens_rejected(ec_key_setup, monkeypatch):
     """
     secret = "secret-officiel-recette-32-chars-ok"
     monkeypatch.setenv("SUPABASE_JWT_SECRET", secret)
+    monkeypatch.setenv("SUPABASE_JWKS_URL", "https://auth.orso-test.local/jwks.json")
     payload = _make_payload()
     
     h_b64 = _b64url(json.dumps({"alg": "none", "typ": "JWT"}).encode())
@@ -201,6 +208,7 @@ async def test_ca3_tenant_isolation_maintained_with_valid_signature(ec_key_setup
     """CA3: Un jeton légitimement signé mais pour un autre tenant rend 403."""
     secret = "secret-officiel-recette-32-chars-ok"
     monkeypatch.setenv("SUPABASE_JWT_SECRET", secret)
+    monkeypatch.setenv("SUPABASE_JWKS_URL", "https://auth.orso-test.local/jwks.json")
     monkeypatch.setenv("ORSO_CLIENT_ID", "f3e25379-6531-479e-b276-3b3185e7421b")
     monkeypatch.setenv("ORSO_CLIENT_SLUG", "financia-solutions")
     
@@ -231,8 +239,12 @@ async def test_ca3_tenant_isolation_maintained_with_valid_signature(ec_key_setup
 def test_ca4_fail_closed_when_jwks_unavailable_and_cache_behavior(ec_key_setup, monkeypatch):
     """CA4:
     - Sans clé en cache et source JWKS indisponible -> Refus strict 401 (Fail-Closed).
-    - Avec clé en cache valide -> Accepté.
+    - Avec clé en cache valide sous son TTL -> Accepté.
+    Le test fixe hermétiquement son environnement avec SUPABASE_JWKS_URL.
     """
+    monkeypatch.setenv("SUPABASE_JWKS_URL", "https://auth.orso-test.local/jwks.json")
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    
     payload = _make_payload()
     token = jwt.encode(
         payload,
@@ -241,13 +253,49 @@ def test_ca4_fail_closed_when_jwks_unavailable_and_cache_behavior(ec_key_setup, 
         headers={"kid": ec_key_setup["kid"]},
     )
     
-    # Cas A: JWKS indisponible sans cache (fonction lève une exception de transport / renvoie None)
-    with patch("hermes_cli.dashboard_auth.client_jwt.fetch_jwks", side_effect=Exception("Connection refused")):
+    # Cas A: JWKS indisponible sans cache (fonction lève une exception de transport)
+    _JWKS_CACHE["keys"] = {}
+    _JWKS_CACHE["jwks"] = None
+    _JWKS_CACHE["timestamp"] = 0.0
+    
+    with patch("hermes_cli.dashboard_auth.client_jwt.fetch_jwks", side_effect=Exception("Connection refused (IDP down)")):
         with pytest.raises(JWTVerificationError) as exc_info:
             decode_and_verify_jwt(token, force_jwks_refresh=True)
-        assert "impossible de vérifier" in str(exc_info.value).lower() or "indisponible" in str(exc_info.value).lower()
+        msg = str(exc_info.value)
+        assert "source de clés jwks indisponible" in msg.lower()
+        assert "connection refused" in msg.lower()
         
-    # Cas B: Clé présente dans le cache
-    with patch("hermes_cli.dashboard_auth.client_jwt.get_signing_key_from_cache", return_value=ec_key_setup["public_key"]):
+    # Cas B: Clé présente dans le cache avec timestamp valide (< 300s)
+    _JWKS_CACHE["keys"][ec_key_setup["kid"]] = ec_key_setup["public_key"]
+    _JWKS_CACHE["timestamp"] = time.time()
+    
+    with patch("hermes_cli.dashboard_auth.client_jwt.fetch_jwks", side_effect=Exception("Connection refused (IDP down)")):
         decoded = decode_and_verify_jwt(token)
         assert decoded["sub"] == "user-test-kan99"
+
+
+def test_ca4_cache_ttl_expiration_forces_refresh(ec_key_setup, monkeypatch):
+    """Réserve 3: Vérifie que l'expiration du TTL (300s) invalide le cache et force un rafraîchissement auprès de la source JWKS."""
+    monkeypatch.setenv("SUPABASE_JWKS_URL", "https://auth.orso-test.local/jwks.json")
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    
+    payload = _make_payload()
+    token = jwt.encode(
+        payload,
+        ec_key_setup["private_key"],
+        algorithm="ES256",
+        headers={"kid": ec_key_setup["kid"]},
+    )
+    
+    # Cache initialisé mais périmé (datant de plus de 300 secondes)
+    _JWKS_CACHE["keys"][ec_key_setup["kid"]] = ec_key_setup["public_key"]
+    _JWKS_CACHE["timestamp"] = time.time() - 301.0
+    
+    # Après expiration du TTL, une tentative de consultation déclenche un rafraîchissement.
+    # Si la source est désormais inaccessible, le comportement Fail-Closed doit s'appliquer : refus 401.
+    with patch("hermes_cli.dashboard_auth.client_jwt.fetch_jwks", side_effect=Exception("IDP down after TTL")):
+        with pytest.raises(JWTVerificationError) as exc_info:
+            decode_and_verify_jwt(token)
+        msg = str(exc_info.value)
+        assert "source de clés jwks indisponible" in msg.lower()
+        assert "idp down after ttl" in msg.lower()
