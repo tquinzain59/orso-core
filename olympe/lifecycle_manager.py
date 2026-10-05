@@ -386,7 +386,7 @@ class DockerLifecycleManager:
         tag = backup_tag or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
         backup_dir = self.spaces_root / ".backups" / f"{tenant_slug}_{tag}"
         backup_dir.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copytree(space_dir, backup_dir)
+        shutil.copytree(space_dir, backup_dir, dirs_exist_ok=True)
         _log.info("Sauvegarde de l'espace client créée : %s", backup_dir)
         return backup_dir
 
@@ -1123,12 +1123,18 @@ class DockerLifecycleManager:
             if val:
                 base_envs[key] = val
 
+        for auth_key in ["HERMES_DASHBOARD_BASIC_AUTH_USERNAME", "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD", "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH"]:
+            val = os.environ.get(auth_key)
+            if val:
+                base_envs[auth_key] = val
+
         if self.supabase_url:
             base_envs["SUPABASE_URL"] = self.supabase_url
         if self.supabase_key:
             base_envs["SUPABASE_SERVICE_ROLE_KEY"] = self.supabase_key
         if env_vars:
             base_envs.update(env_vars)
+
 
         # ── Quotas de Ressources & Contrôle d'Admission de l'Hôte (KAN-59 / CA1 / CA2 / CA4) ──
         effective_quotas = get_quotas_for_tier(tier_id=tier_id, overrides=quotas)
@@ -1332,6 +1338,27 @@ class DockerLifecycleManager:
             run_args.extend(["-e", f"{k}={v}"])
 
         run_args.append(target_image)
+
+        # ── Validation stricte d'authentification dashboard (Refus explicite sans secret committé - KAN-58) ──
+        dashboard_user = base_envs.get("HERMES_DASHBOARD_BASIC_AUTH_USERNAME")
+        dashboard_secret = (
+            base_envs.get("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD")
+            or base_envs.get("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH")
+        )
+        if not (dashboard_user and dashboard_secret):
+            return {
+                "success": False,
+                "error": "ERR_DASHBOARD_AUTH_REQUIRED",
+                "tenant_slug": tenant_slug,
+                "container_name": container_name,
+                "mode": "containerized",
+                "action_taken": False,
+                "message": (
+                    "Provisioning refusé : authentification dashboard manquante. "
+                    "HERMES_DASHBOARD_BASIC_AUTH_USERNAME et (HERMES_DASHBOARD_BASIC_AUTH_PASSWORD ou HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH) "
+                    "doivent être explicitement fournis (aucun secret de repli par défaut dans le code)."
+                ),
+            }
 
         _log.info("Lancement du provisioning pour %s (%s)", tenant_slug, container_name)
         proc = self._exec_docker(run_args, timeout=20.0)

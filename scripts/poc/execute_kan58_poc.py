@@ -101,6 +101,11 @@ def main():
 
         # ── 1. Provisioning réel des 3 conteneurs ────────────────────────────
         _log.info("Étape 1 : Provisioning physique des 3 conteneurs clients...")
+        import secrets
+
+        poc_dash_user = os.environ.get("ORSO_POC_DASHBOARD_USER", "admin")
+        poc_dash_pwd = os.environ.get("ORSO_POC_DASHBOARD_PASSWORD") or secrets.token_urlsafe(24)
+
         provision_results = {}
         for t in tenants:
             _log.info("Provisioning de %s...", t["slug"])
@@ -112,27 +117,66 @@ def main():
                 allow_floating_tag=True,
                 persona_hmac_key=hmac_key,
                 use_dedicated_space=True,
+                env_vars={
+                    "HERMES_DASHBOARD_BASIC_AUTH_USERNAME": poc_dash_user,
+                    "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD": poc_dash_pwd,
+                },
             )
             if not res.get("success"):
                 raise RuntimeError(f"Échec du provisioning de {t['slug']}: {res}")
             provision_results[t["slug"]] = res
 
-        # Laisser 2 secondes aux conteneurs pour stabiliser leur boot
-        time.sleep(2.5)
+        evidence["execution_host_response"] = {
+            slug: {
+                "action_taken": r.get("action_taken"),
+                "status": r.get("status"),
+                "mode": r.get("mode"),
+                "dedicated_space": r.get("dedicated_space"),
+                "space_directory": r.get("space_directory"),
+                "data_directory": r.get("data_directory"),
+                "container_name": r.get("container_name"),
+            }
+            for slug, r in provision_results.items()
+        }
+
+        # Attente active de la stabilisation saine (healthy) des conteneurs
+        _log.info("Attente active de la stabilisation saine (healthy) des conteneurs clients...")
+        max_health_wait = 45.0
+        t_health_start = time.time()
+        while time.time() - t_health_start < max_health_wait:
+            all_healthy = True
+            for t in tenants:
+                cname = normalize_container_name(t["slug"])
+                chk = subprocess.run(
+                    ["docker", "inspect", cname, "--format", "{{.State.Health.Status}}"],
+                    capture_output=True,
+                    text=True,
+                )
+                st = chk.stdout.strip()
+                if st != "healthy":
+                    all_healthy = False
+                    break
+            if all_healthy:
+                _log.info("Tous les conteneurs clients sont Up (healthy) après %.1fs !", time.time() - t_health_start)
+                break
+            time.sleep(1.5)
 
         # ── 2. Validation CA1 : Inspection des montages réels Docker ───────────
         _log.info("Étape 2 : Contrôle CA1 - Zéro montage partagé entre conteneurs...")
         containers_mounts = {}
         containers_sources = {}
+        raw_docker_inspections = {}
         for t in tenants:
             cname = normalize_container_name(t["slug"])
             inspect_proc = subprocess.run(
-                ["docker", "inspect", "--format", "{{json .Mounts}}", cname],
+                ["docker", "inspect", cname],
                 capture_output=True,
                 text=True,
                 check=True,
             )
-            raw_mounts = json.loads(inspect_proc.stdout.strip())
+            parsed_inspect = json.loads(inspect_proc.stdout.strip())
+            raw_docker_inspections[t["slug"]] = parsed_inspect[0] if parsed_inspect else {}
+            raw_mounts = parsed_inspect[0].get("Mounts", []) if parsed_inspect else []
             containers_mounts[t["slug"]] = raw_mounts
             sources = {m["Source"] for m in raw_mounts}
             containers_sources[t["slug"]] = sources
@@ -315,23 +359,38 @@ def main():
         report_path.write_text(json.dumps(evidence, indent=2, ensure_ascii=False), encoding="utf-8")
         _log.info("Rapport d'évidence JSON consigné dans : %s", report_path)
 
+        # Sauvegarde des inspections Docker brutes horodatées pour la revue PO
+        raw_inspect_path = PROJECT_ROOT / "docs" / "3_Technique" / "kan58_raw_docker_inspect.json"
+        raw_inspect_payload = {
+            "ticket": "KAN-58",
+            "timestamp": evidence["timestamp"],
+            "host": evidence["host_telemetry"],
+            "inspections": raw_docker_inspections,
+        }
+        raw_inspect_path.write_text(json.dumps(raw_inspect_payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        _log.info("Inspections brutes Docker consignées dans : %s", raw_inspect_path)
+
         if not evidence["all_passed"]:
             raise RuntimeError(f"Échec de l'un des critères : {evidence}")
 
         _log.info("🎉 TOUS LES CRITÈRES KAN-58 (CA1, CA2, CA3, CA4) SONT FORMELLEMENT VALIDÉS SUR DOCKER EN DIRECT !")
 
     finally:
-        # Nettoyage des conteneurs de test pour laisser l'environnement propre
-        _log.info("Nettoyage des 3 conteneurs de test POC...")
-        for t in tenants:
-            try:
-                manager.teardown_tenant(t["slug"], remove_data=True)
-            except Exception as e:
-                _log.warning("Erreur teardown %s: %s", t["slug"], e)
-        # Nettoyage des répertoires temporaires POC
-        shutil.rmtree(poc_data_root, ignore_errors=True)
-        shutil.rmtree(poc_spaces_root, ignore_errors=True)
-        _log.info("Nettoyage complet terminé.")
+        keep_containers = os.environ.get("ORSO_KEEP_CONTAINERS") == "1" or "--keep-containers" in sys.argv
+        if keep_containers:
+            _log.info("🔒 Option ORSO_KEEP_CONTAINERS active : les conteneurs réels et leurs espaces dédiés restent en service pour inspection PO en lecture seule.")
+        else:
+            # Nettoyage des conteneurs de test pour laisser l'environnement propre
+            _log.info("Nettoyage des 3 conteneurs de test POC...")
+            for t in tenants:
+                try:
+                    manager.teardown_tenant(t["slug"], remove_data=True)
+                except Exception as e:
+                    _log.warning("Erreur teardown %s: %s", t["slug"], e)
+            # Nettoyage des répertoires temporaires POC
+            shutil.rmtree(poc_data_root, ignore_errors=True)
+            shutil.rmtree(poc_spaces_root, ignore_errors=True)
+            _log.info("Nettoyage complet terminé.")
 
 
 if __name__ == "__main__":

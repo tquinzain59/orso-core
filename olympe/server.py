@@ -297,6 +297,7 @@ async def provision_tenant(req: ProvisionRequest, admin: Dict[str, Any] = Depend
             "ERR_DIGEST_REQUIRED",
             "ERR_INVALID_DIGEST",
             "ERR_HMAC_KEY_REQUIRED",
+            "ERR_DASHBOARD_AUTH_REQUIRED",
         ) else 500
         mode = res.get("mode", "delegated_host")
         action_taken = res.get("action_taken", False)
@@ -641,86 +642,10 @@ async def get_audit_log(actor: Dict[str, Any] = Depends(require_ops_actor("tenan
     return {"events": ops_manager.get_audit_events()}
 
 
-# ── Endpoints Publics Onboarding Stripe ────────────────────────────────────
-
-@app.post("/api/olympe/onboarding/init-setup")
-async def onboarding_init_setup(req: OnboardingInitSetupRequest):
-    """Crée ou retrouve un client Stripe et génère un SetupIntent pour l'onboarding public."""
-    try:
-        res = ops_manager.create_onboarding_setup_intent(
-            email=req.email,
-            name=req.name,
-            company_name=req.company_name,
-            slug=req.slug,
-        )
-        return res
-    except Exception as e:
-        _log.error("Erreur lors de l'init setup onboarding : %s", e)
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@app.post("/api/olympe/onboarding/create-subscription")
-async def onboarding_create_subscription(req: OnboardingCreateSubscriptionRequest):
-    """Crée l'abonnement récurrent officiel avec 30 jours d'essai gratuit dans Stripe Billing."""
-    try:
-        res = ops_manager.create_trial_subscription(
-            customer_id=req.customer_id,
-            payment_method_id=req.payment_method_id,
-            tier_id=req.tier_id,
-            agents_count=req.agents_count,
-        )
-        return res
-    except Exception as e:
-        _log.error("Erreur lors de la création d'abonnement onboarding : %s", e)
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@app.post("/api/olympe/onboarding/create-admin-user")
-async def onboarding_create_admin_user(req: OnboardingCreateAdminUserRequest):
-    """Crée ou rattache le compte administrateur du client suite à la souscription d'onboarding."""
-    try:
-        kwargs: Dict[str, Any] = {
-            "tenant_id": req.tenant_id,
-            "email": req.email,
-            "full_name": req.full_name,
-            "role": req.role or "Dirigeant",
-            "phone": req.phone,
-        }
-        if req.password:
-            kwargs["password"] = req.password
-
-        user = ops_manager.create_onboarding_admin_user(**kwargs)
-        return {"success": True, "user": user}
-    except Exception as e:
-        _log.error("Erreur lors de la création du compte administrateur onboarding : %s", e)
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@app.post("/api/olympe/onboarding/rewrite-mission-letter")
-async def rewrite_mission_letter(req: RewriteMissionLetterRequest):
-    """Génère ou réécrit la lettre de mission opérationnelle avec DeepSeek côté serveur."""
-    try:
-        res = ops_manager.rewrite_mission_letter(
-            agent_id=req.agent_id,
-            agent_name=req.agent_name,
-            role_title=req.role_title,
-            company_name=req.company_name,
-            sector=req.sector,
-            raw_notes=req.raw_notes or "",
-            extracted_docs_text=req.extracted_docs_text or "",
-        )
-        return res
-    except Exception as e:
-        _log.error("Erreur réécriture lettre de mission : %s", e)
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-# Rate limiter anti-abus pour l'endpoint public /api/olympe/contact (KAN-45)
-# 5 requêtes par fenêtre glissante de 60 secondes par IP source
-_CONTACT_RATE_LIMIT_WINDOW = 60.0
-_CONTACT_RATE_LIMIT_MAX = 5
-_contact_request_timestamps: Dict[str, List[float]] = {}
-
+# ── Endpoint Public de Contact & Demande d'Essai (KAN-45) ──────────────────
+# Arbitrage Direction : La vitrine ne crée ni abonnement ni client de façon autonome.
+# Les 4 anciennes routes publiques (/init-setup, /create-subscription, /create-admin-user,
+# /rewrite-mission-letter) ont été neutralisées. Seule la demande d'essai est déposée.
 
 @app.post("/api/olympe/contact")
 async def submit_contact_form(req: ContactFormRequest, request: Request):
@@ -732,24 +657,23 @@ async def submit_contact_form(req: ContactFormRequest, request: Request):
             detail="Le consentement RGPD est obligatoire pour transmettre votre demande.",
         )
 
-    # 2. Protection anti-abus / limitation de débit par IP (5 requêtes / minute)
-    client_ip = "unknown"
-    if request.client and request.client.host:
+    # 2. Protection anti-abus / limitation de débit inter-processus via SQLite (5 requêtes / 60s)
+    client_ip = "127.0.0.1"
+    if request.headers.get("x-real-ip"):
+        client_ip = request.headers.get("x-real-ip").strip()
+    elif request.headers.get("x-forwarded-for"):
+        parts = [p.strip() for p in request.headers.get("x-forwarded-for").split(",") if p.strip()]
+        if parts:
+            client_ip = parts[-1]
+    elif request.client and request.client.host:
         client_ip = request.client.host
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        client_ip = forwarded.split(",")[0].strip()
 
-    now = time.time()
-    recent = [t for t in _contact_request_timestamps.get(client_ip, []) if now - t < _CONTACT_RATE_LIMIT_WINDOW]
-    if len(recent) >= _CONTACT_RATE_LIMIT_MAX:
-        _contact_request_timestamps[client_ip] = recent
+    is_allowed = ops_manager.check_and_record_rate_limit(client_ip, max_requests=5, window_seconds=60.0)
+    if not is_allowed:
         raise HTTPException(
             status_code=429,
             detail="Trop de requêtes soumises depuis cette adresse. Veuillez patienter avant de renouveler votre message.",
         )
-    recent.append(now)
-    _contact_request_timestamps[client_ip] = recent
 
     # 3. Enregistrement sécurisé avec gestion des erreurs sanitisée (sans fuite de trace interne)
     try:

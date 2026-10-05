@@ -76,7 +76,12 @@ class TestKAN64ExecutionReelleDistribution:
             assert res_invalid["error"] == "ERR_INVALID_DIGEST"
 
             # 3. Tentative avec variable d'environnement ORSO_TARGET_ENGINE_DIGEST (alignement spécification)
-            with patch.dict(os.environ, {"ORSO_TARGET_ENGINE_DIGEST": REF_DIGEST_V1, "ORSO_PERSONA_HMAC_KEY": "mock-fleet-key"}):
+            with patch.dict(os.environ, {
+                "ORSO_TARGET_ENGINE_DIGEST": REF_DIGEST_V1,
+                "ORSO_PERSONA_HMAC_KEY": "mock-fleet-key",
+                "HERMES_DASHBOARD_BASIC_AUTH_USERNAME": "admin",
+                "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD": "testpassword",
+            }):
                 mock_proc = subprocess.CompletedProcess(args=["docker", "run"], returncode=0, stdout="c999", stderr="")
                 with patch.object(mgr, "_exec_docker", return_value=mock_proc):
                     with patch.object(mgr, "_sync_tenant_instance_record"):
@@ -165,7 +170,12 @@ class TestKAN64ExecutionReelleDistribution:
 
         # 4. Preuve 4 : Provisioning Olympe avec clé -> succès et transmission dans base_envs
         with patch.object(mgr, "get_tenant_status", return_value=status_not_found):
-            with patch.dict(os.environ, {"ORSO_TARGET_ENGINE_DIGEST": REF_DIGEST_V1, "ORSO_PERSONA_HMAC_KEY": "secret-fleet-key"}):
+            with patch.dict(os.environ, {
+                "ORSO_TARGET_ENGINE_DIGEST": REF_DIGEST_V1,
+                "ORSO_PERSONA_HMAC_KEY": "secret-fleet-key",
+                "HERMES_DASHBOARD_BASIC_AUTH_USERNAME": "admin",
+                "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD": "testpassword",
+            }):
                 mock_proc = subprocess.CompletedProcess(args=["docker", "run"], returncode=0, stdout="c1000", stderr="")
                 with patch.object(mgr, "_exec_docker", return_value=mock_proc) as mock_exec:
                     with patch.object(mgr, "_sync_tenant_instance_record"):

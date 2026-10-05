@@ -49,24 +49,31 @@ def test_kan58_ca1_no_shared_host_directories(tmp_path):
     with patch.object(manager, "get_tenant_status", return_value=status_not_found):
         with patch.object(manager, "_exec_docker", side_effect=fake_exec_docker):
             with patch.object(manager, "_sync_tenant_instance_record"):
+                test_auth = {
+                    "HERMES_DASHBOARD_BASIC_AUTH_USERNAME": "admin",
+                    "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD": "testpassword123",
+                }
                 # Provisionner 3 clients distincts (alpha, beta, gamma)
                 res_a = manager.provision_tenant(
                     tenant_id="uuid-alpha",
                     tenant_slug="poc-alpha",
                     allow_floating_tag=True,
                     persona_hmac_key="key-alpha",
+                    env_vars=test_auth,
                 )
                 res_b = manager.provision_tenant(
                     tenant_id="uuid-beta",
                     tenant_slug="poc-beta",
                     allow_floating_tag=True,
                     persona_hmac_key="key-beta",
+                    env_vars=test_auth,
                 )
                 res_c = manager.provision_tenant(
                     tenant_id="uuid-gamma",
                     tenant_slug="poc-gamma",
                     allow_floating_tag=True,
                     persona_hmac_key="key-gamma",
+                    env_vars=test_auth,
                 )
 
                 assert res_a["success"] is True
@@ -156,6 +163,10 @@ def test_kan58_ca3_profile_mount_convergence(tmp_path):
                     tenant_slug="client-single-source",
                     allow_floating_tag=True,
                     persona_hmac_key="key-hmac",
+                    env_vars={
+                        "HERMES_DASHBOARD_BASIC_AUTH_USERNAME": "admin",
+                        "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD": "testpassword123",
+                    },
                 )
                 assert res["success"] is True
 
@@ -245,6 +256,10 @@ def test_kan58_legacy_fallback_mounts(tmp_path, monkeypatch):
                     allow_floating_tag=True,
                     persona_hmac_key="key-hmac",
                     use_dedicated_space=False,
+                    env_vars={
+                        "HERMES_DASHBOARD_BASIC_AUTH_USERNAME": "admin",
+                        "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD": "testpassword123",
+                    },
                 )
                 assert res["success"] is True
                 assert res["dedicated_space"] is False
@@ -391,3 +406,61 @@ def test_kan58_ca4_rollback_hardened_safety_and_restart(tmp_path):
             assert res_fail["container_healthy"] is False
             assert res_fail["pre_rollback_backup"] is not None
             assert Path(res_fail["pre_rollback_backup"]).is_dir()
+
+
+def test_kan58_dashboard_auth_strictly_required_no_fallback(tmp_path):
+    """Point 0 / Sécurité KAN-58 : Vérifie le rejet strict ERR_DASHBOARD_AUTH_REQUIRED sans mot de passe ou hash committé."""
+    data_dir = tmp_path / "tenants"
+    spaces_dir = tmp_path / "spaces"
+    manager = DockerLifecycleManager(data_root=str(data_dir), spaces_root=str(spaces_dir))
+    manager.has_docker = True
+
+    status_not_found = {"status": "not_found", "running": False}
+
+    with patch.object(manager, "get_tenant_status", return_value=status_not_found):
+        with patch.object(manager, "_sync_tenant_instance_record"):
+            # 1. Sans env_vars -> Rejet explicite immédiat
+            res_no_auth = manager.provision_tenant(
+                tenant_id="uuid-no-auth",
+                tenant_slug="client-no-auth",
+                allow_floating_tag=True,
+                persona_hmac_key="key-hmac",
+            )
+            assert res_no_auth["success"] is False
+            assert res_no_auth["error"] == "ERR_DASHBOARD_AUTH_REQUIRED"
+            assert res_no_auth["action_taken"] is False
+
+            # 2. Avec seulement username, sans mot de passe -> Rejet explicite
+            res_user_only = manager.provision_tenant(
+                tenant_id="uuid-user-only",
+                tenant_slug="client-user-only",
+                allow_floating_tag=True,
+                persona_hmac_key="key-hmac",
+                env_vars={"HERMES_DASHBOARD_BASIC_AUTH_USERNAME": "admin"},
+            )
+            assert res_user_only["success"] is False
+            assert res_user_only["error"] == "ERR_DASHBOARD_AUTH_REQUIRED"
+
+            # 3. Avec authentification explicite fournie -> Accepté pour lancement Docker
+            recorded_calls = []
+            def fake_exec_docker(args, timeout=20.0):
+                recorded_calls.append(list(args))
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout="c_fake_auth", stderr="")
+
+            with patch.object(manager, "_exec_docker", side_effect=fake_exec_docker):
+                res_ok = manager.provision_tenant(
+                    tenant_id="uuid-auth-ok",
+                    tenant_slug="client-auth-ok",
+                    allow_floating_tag=True,
+                    persona_hmac_key="key-hmac",
+                    env_vars={
+                        "HERMES_DASHBOARD_BASIC_AUTH_USERNAME": "ops_user",
+                        "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD": "ephemeral_secret_123",
+                    },
+                )
+                assert res_ok["success"] is True
+                assert res_ok["action_taken"] is True
+                run_call = next(c for c in recorded_calls if c and c[0] == "run")
+                assert "HERMES_DASHBOARD_BASIC_AUTH_USERNAME=ops_user" in run_call
+                assert "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=ephemeral_secret_123" in run_call
+
