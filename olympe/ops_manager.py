@@ -7,11 +7,13 @@ des périodes d'essai et des abonnements Stripe (99€, 169€, 279€ HT).
 import json
 import logging
 import os
+import sqlite3
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from olympe.onboarding_worker import onboarding_worker
@@ -139,6 +141,106 @@ def is_production() -> bool:
     return env in ("production", "prod")
 
 
+def _get_olympe_db_path() -> Path:
+    """Retourne le chemin vers la base de données SQLite locale d'Olympe Ops."""
+    env_path = os.environ.get("OLYMPE_DB_PATH")
+    if env_path:
+        p = Path(env_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return p
+    data_dir = Path("data")
+    if data_dir.is_dir():
+        return data_dir / "olympe_ops.db"
+    try:
+        from hermes_constants import get_hermes_home
+        home = get_hermes_home()
+        home.mkdir(parents=True, exist_ok=True)
+        return home / "olympe_ops.db"
+    except Exception:
+        fallback = Path(os.path.expanduser("~/.hermes"))
+        fallback.mkdir(parents=True, exist_ok=True)
+        return fallback / "olympe_ops.db"
+
+
+def _init_ops_db(db_path: Path) -> None:
+    """Initialise le schéma de persistance SQLite pour tenants, abonnements, instances, leads et audit (KAN-45 CA2)."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(str(db_path), timeout=15.0) as conn:
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS tenants (
+                id TEXT PRIMARY KEY,
+                slug TEXT UNIQUE,
+                name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                is_sandbox INTEGER NOT NULL DEFAULT 0,
+                contact_name TEXT,
+                contact_email TEXT,
+                contact_phone TEXT,
+                contact_role TEXT,
+                created_at TEXT NOT NULL,
+                quotas_json TEXT,
+                data_json TEXT
+            );"""
+        )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS subscriptions (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                tier_id TEXT,
+                tier_label TEXT,
+                status TEXT NOT NULL,
+                stripe_customer_id TEXT,
+                stripe_subscription_id TEXT,
+                trial_days INTEGER DEFAULT 0,
+                current_period_end TEXT,
+                created_at TEXT NOT NULL,
+                data_json TEXT,
+                FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+            );"""
+        )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS tenant_instances (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                container_name TEXT,
+                internal_route_key TEXT,
+                status TEXT NOT NULL,
+                environment_status TEXT NOT NULL,
+                agents_enabled_json TEXT,
+                updated_at TEXT,
+                data_json TEXT,
+                FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+            );"""
+        )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS contact_leads (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                email TEXT NOT NULL,
+                company TEXT,
+                phone TEXT,
+                interest TEXT,
+                message TEXT NOT NULL,
+                consent INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );"""
+        )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                role TEXT NOT NULL,
+                action TEXT NOT NULL,
+                target TEXT NOT NULL,
+                details_json TEXT
+            );"""
+        )
+        conn.commit()
+
+
 class OpsManager:
     """Gestionnaire des opérations clients, facturation Stripe et activation des agents."""
 
@@ -149,6 +251,12 @@ class OpsManager:
         stripe_secret_key: Optional[str] = None,
         demo_mode: Optional[bool] = None,
     ):
+        self.db_path = _get_olympe_db_path()
+        try:
+            _init_ops_db(self.db_path)
+        except Exception as e:
+            _log.error("Erreur initialisation base SQLite Olympe Ops : %s", e)
+
         self.supabase_url = (supabase_url or os.environ.get("SUPABASE_URL", "")).rstrip("/")
         self.supabase_key = supabase_key or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
         self.stripe_secret_key = stripe_secret_key or os.environ.get("STRIPE_SECRET_KEY", "")
@@ -202,6 +310,198 @@ class OpsManager:
     @is_production.setter
     def is_production(self, val: Optional[bool]):
         self._is_production_override = val
+
+    def _db_save_tenant(self, tenant: Dict[str, Any]) -> None:
+        """Persiste une organisation, son abonnement et son instance dans la base SQLite locale (KAN-45 CA2)."""
+        try:
+            t_id = tenant.get("id") or f"tenant-{tenant.get('slug')}"
+            slug = tenant.get("slug") or ""
+            name = tenant.get("name") or "Organisation"
+            status = tenant.get("status") or "trial"
+            is_sandbox = 1 if tenant.get("is_sandbox") else 0
+            contact = tenant.get("contact") or {}
+            c_name = contact.get("full_name") or contact.get("name") or ""
+            c_email = contact.get("email") or ""
+            c_phone = contact.get("phone") or ""
+            c_role = contact.get("role") or ""
+            created_at = tenant.get("created_at") or _format_timestamp()
+            quotas_json = json.dumps(tenant.get("quotas") or {})
+            data_json = json.dumps(tenant)
+
+            sub = tenant.get("subscription") or {}
+            sub_id = sub.get("subscription_id") or sub.get("id") or f"sub_{slug}"
+            tier_id = sub.get("tier_id") or "1_agent"
+            tier_label = sub.get("tier_label") or TIER_PRICING.get(tier_id, {}).get("label", tier_id)
+            sub_status = sub.get("status") or "trialing"
+            stripe_cus = sub.get("stripe_customer_id") or ""
+            stripe_sub = sub.get("stripe_subscription_id") or sub.get("subscription_id") or ""
+            trial_days = int(sub.get("trial_days") or (30 if sub_status in ("trialing", "pending_validation", "active") else 0))
+            cur_end = sub.get("current_period_end") or ""
+            sub_data = json.dumps(sub)
+
+            inst = tenant.get("instance") or {}
+            inst_id = f"inst_{slug}"
+            c_name_dock = inst.get("container_name") or f"orso_client_{slug.replace('-', '_')}"
+            route_key = inst.get("internal_route_key") or c_name_dock
+            inst_status = inst.get("status") or "not_provisioned"
+            env_status = inst.get("environment_status") or "pending_validation"
+            agents_json = json.dumps(tenant.get("agents_enabled") or tenant.get("agent_instances") or [])
+            inst_data = json.dumps(inst)
+
+            with sqlite3.connect(str(self.db_path), timeout=10.0) as conn:
+                conn.execute(
+                    """INSERT OR REPLACE INTO tenants
+                    (id, slug, name, status, is_sandbox, contact_name, contact_email, contact_phone, contact_role, created_at, quotas_json, data_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);""",
+                    (t_id, slug, name, status, is_sandbox, c_name, c_email, c_phone, c_role, created_at, quotas_json, data_json),
+                )
+                conn.execute(
+                    """INSERT OR REPLACE INTO subscriptions
+                    (id, tenant_id, tier_id, tier_label, status, stripe_customer_id, stripe_subscription_id, trial_days, current_period_end, created_at, data_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);""",
+                    (sub_id, t_id, tier_id, tier_label, sub_status, stripe_cus, stripe_sub, trial_days, cur_end, created_at, sub_data),
+                )
+                conn.execute(
+                    """INSERT OR REPLACE INTO tenant_instances
+                    (id, tenant_id, container_name, internal_route_key, status, environment_status, agents_enabled_json, updated_at, data_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);""",
+                    (inst_id, t_id, c_name_dock, route_key, inst_status, env_status, agents_json, created_at, inst_data),
+                )
+                conn.commit()
+        except Exception as e:
+            _log.error("Erreur lors de la persistance SQLite du tenant %s: %s", tenant.get("slug"), e)
+
+    def _db_get_tenant(self, tenant_id_or_slug: str) -> Optional[Dict[str, Any]]:
+        """Recherche un tenant dans la base SQLite par id ou par slug."""
+        try:
+            with sqlite3.connect(str(self.db_path), timeout=10.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT data_json FROM tenants WHERE id = ? OR slug = ? LIMIT 1;",
+                    (tenant_id_or_slug, tenant_id_or_slug),
+                )
+                row = cursor.fetchone()
+                if row and row[0]:
+                    return json.loads(row[0])
+        except Exception as e:
+            _log.error("Erreur lecture SQLite get_tenant: %s", e)
+        return None
+
+    def _db_list_tenants(self) -> List[Dict[str, Any]]:
+        """Lit et désérialise tous les tenants persistés en base SQLite."""
+        try:
+            with sqlite3.connect(str(self.db_path), timeout=10.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT data_json FROM tenants ORDER BY created_at DESC;")
+                rows = cursor.fetchall()
+                result = []
+                for (d_json,) in rows:
+                    if d_json:
+                        try:
+                            result.append(json.loads(d_json))
+                        except Exception:
+                            pass
+                return result
+        except Exception as e:
+            _log.error("Erreur lecture SQLite tenants: %s", e)
+            return []
+
+    def _db_delete_tenant(self, tenant_id_or_slug: str) -> None:
+        """Supprime un tenant de toutes les tables SQLite de manière propre et transactionnelle."""
+        try:
+            with sqlite3.connect(str(self.db_path), timeout=10.0) as conn:
+                conn.execute(
+                    "DELETE FROM tenant_instances WHERE tenant_id = ? OR tenant_id IN (SELECT id FROM tenants WHERE slug = ?);",
+                    (tenant_id_or_slug, tenant_id_or_slug),
+                )
+                conn.execute(
+                    "DELETE FROM subscriptions WHERE tenant_id = ? OR tenant_id IN (SELECT id FROM tenants WHERE slug = ?);",
+                    (tenant_id_or_slug, tenant_id_or_slug),
+                )
+                conn.execute(
+                    "DELETE FROM tenants WHERE id = ? OR slug = ?;",
+                    (tenant_id_or_slug, tenant_id_or_slug),
+                )
+                conn.commit()
+        except Exception as e:
+            _log.error("Erreur suppression SQLite tenant %s: %s", tenant_id_or_slug, e)
+
+    def _db_save_lead(self, lead: Dict[str, Any]) -> None:
+        """Persiste une prise de contact ou lead dans la table SQLite contact_leads (KAN-45 CA5)."""
+        try:
+            with sqlite3.connect(str(self.db_path), timeout=10.0) as conn:
+                conn.execute(
+                    """INSERT OR REPLACE INTO contact_leads
+                    (id, name, email, company, phone, interest, message, consent, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);""",
+                    (
+                        lead["id"],
+                        lead["name"],
+                        lead["email"],
+                        lead.get("company", ""),
+                        lead.get("phone", ""),
+                        lead.get("interest", ""),
+                        lead["message"],
+                        1 if lead.get("consent") else 0,
+                        lead.get("status", "pending_review"),
+                        lead.get("created_at", _format_timestamp()),
+                    ),
+                )
+                conn.commit()
+        except Exception as e:
+            _log.error("Erreur persistance SQLite lead %s: %s", lead.get("id"), e)
+
+    def _db_save_audit_event(self, event: Dict[str, Any]) -> None:
+        """Persiste un événement d'audit dans la table SQLite audit_events (KAN-45 CA5/CA7)."""
+        try:
+            with sqlite3.connect(str(self.db_path), timeout=10.0) as conn:
+                conn.execute(
+                    """INSERT INTO audit_events
+                    (timestamp, actor, role, action, target, details_json)
+                    VALUES (?, ?, ?, ?, ?, ?);""",
+                    (
+                        event.get("timestamp", _format_timestamp()),
+                        event.get("actor", "unknown"),
+                        event.get("role", "unknown"),
+                        event.get("action", "unknown"),
+                        event.get("target", ""),
+                        json.dumps(event.get("details", {})),
+                    ),
+                )
+                conn.commit()
+        except Exception as e:
+            _log.error("Erreur persistance SQLite audit event: %s", e)
+
+    def _db_get_audit_events(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """Lit les événements d'audit directement depuis la table SQLite."""
+        try:
+            with sqlite3.connect(str(self.db_path), timeout=10.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT timestamp, actor, role, action, target, details_json FROM audit_events ORDER BY id DESC LIMIT ?;",
+                    (limit,),
+                )
+                rows = cursor.fetchall()
+                events = []
+                for ts, actor, role, action, target, det_json in rows:
+                    details = {}
+                    if det_json:
+                        try:
+                            details = json.loads(det_json)
+                        except Exception:
+                            pass
+                    events.append({
+                        "timestamp": ts,
+                        "actor": actor,
+                        "role": role,
+                        "action": action,
+                        "target": target,
+                        "details": details,
+                    })
+                return events
+        except Exception as e:
+            _log.error("Erreur lecture SQLite audit_events: %s", e)
+            return []
 
     def _init_seed_data(self) -> Dict[str, Dict[str, Any]]:
         """Données d'amorçage réalistes représentant les premiers clients du projet Orso."""
@@ -923,8 +1223,14 @@ class OpsManager:
         if self.demo_mode:
             return list(self._mock_tenants.values())
 
-        # 4. Hors production et sans mode démo : uniquement les sandboxes explicites
-        return [t for t in self._mock_tenants.values() if t.get("is_sandbox")]
+        # 4. Hors production et sans mode démo : combiner sandboxes en mémoire et tenants persistés en base SQLite (KAN-45 CA2)
+        db_tenants = self._db_list_tenants()
+        seen_ids = {t["id"] for t in db_tenants}
+        combined = list(db_tenants)
+        for t in self._mock_tenants.values():
+            if t.get("is_sandbox") and t.get("id") not in seen_ids:
+                combined.append(t)
+        return combined
 
     def get_tenant_detail(self, tenant_id: str) -> Optional[Dict[str, Any]]:
         """Retourne la fiche détaillée complète d'un client."""
@@ -937,6 +1243,9 @@ class OpsManager:
         for t in self._mock_tenants.values():
             if t.get("slug") == tenant_id:
                 return t
+        db_t = self._db_get_tenant(tenant_id)
+        if db_t:
+            return db_t
         return None
 
     def get_tenant_users(self, tenant_id: str) -> List[Dict[str, Any]]:
@@ -1239,6 +1548,8 @@ class OpsManager:
                 "phone": clean_phone,
                 "role": clean_role,
             }
+        return created_user
+
     def rewrite_mission_letter(
         self,
         agent_id: str,
@@ -1601,7 +1912,7 @@ class OpsManager:
         self,
         tenant_slug: str = "clientx-orso",
         name: str = "CLIENTX-ORSO (TEST)",
-        contact_email: str = "test-drone-notifications@test.orso-agents.fr",
+        contact_email: str = "test-drone-notifications@orso-agents.fr",
         contact_name: str = "Dirigeant Test ClientX",
         quotas: Optional[Dict[str, Any]] = None,
         stripe_customer_id: Optional[str] = None,
@@ -1660,6 +1971,7 @@ class OpsManager:
                 "tier_label": "Starter (1 agent)",
                 "price_ht": 99.00,
                 "status": "active",
+                "trial_days": 30,
                 "stripe_customer_id": stripe_customer_id or f"cus_test_{tenant_slug}",
                 "subscription_id": f"sub_test_{tenant_slug}",
                 "current_period_end": "2026-10-31T23:59:59Z",
@@ -1674,6 +1986,34 @@ class OpsManager:
         }
 
         self._mock_tenants[tenant_id] = tenant_record
+        self._db_save_tenant(tenant_record)
+
+        # Synchronisation Supabase si disponible
+        if self.supabase_url and self.supabase_key:
+            try:
+                self._query_supabase("tenants", method="POST", payload={
+                    "id": tenant_id,
+                    "slug": tenant_slug,
+                    "name": name,
+                    "status": "trial",
+                    "is_sandbox": True,
+                })
+                self._query_supabase("subscriptions", method="POST", payload={
+                    "tenant_id": tenant_id,
+                    "tier_id": "1_agent",
+                    "status": "active",
+                    "stripe_customer_id": stripe_customer_id or f"cus_test_{tenant_slug}",
+                    "stripe_subscription_id": f"sub_test_{tenant_slug}",
+                })
+                self._query_supabase("tenant_instances", method="POST", payload={
+                    "tenant_id": tenant_id,
+                    "container_name": f"orso_client_{tenant_slug.replace('-', '_')}",
+                    "internal_route_key": f"orso_client_{tenant_slug.replace('-', '_')}",
+                    "status": "ready",
+                    "environment_status": "active",
+                })
+            except Exception as e:
+                _log.warning("Provisioning Supabase pour sandbox %s: %s", tenant_slug, e)
 
         # Provisioning Docker via Lifecycle Manager
         try:
@@ -1711,6 +2051,11 @@ class OpsManager:
 
         if matched_id:
             self._mock_tenants.pop(matched_id, None)
+
+        # Nettoyage SQLite persistant (KAN-45 CA2)
+        self._db_delete_tenant(matched_id or target)
+        if matched_slug != target:
+            self._db_delete_tenant(matched_slug)
 
         # Nettoyage Supabase si configuré
         if self.supabase_url and self.supabase_key:
@@ -2158,11 +2503,150 @@ class OpsManager:
             "details": details or {},
         }
         self._audit_log.append(event)
+        self._db_save_audit_event(event)
         _log.info("[OPS_AUDIT] [%s] %s -> Action: %s | Target: %s", actor_role.upper(), actor_name, action, target)
 
     def get_audit_events(self, limit: int = 100) -> List[Dict[str, Any]]:
         """Retourne le journal d'audit des actions administratives et machine (CA7)."""
+        db_events = self._db_get_audit_events(limit)
+        if db_events:
+            return db_events
         return list(reversed(self._audit_log))[:limit]
+
+    def record_contact_lead(
+        self,
+        name: str,
+        email: str,
+        company: str = "",
+        phone: str = "",
+        interest: str = "recouvrement",
+        message: str = "",
+        consent: bool = True,
+    ) -> Dict[str, Any]:
+        """Enregistre une prise de contact ou demande de souscription depuis la vitrine et notifie le cockpit OPS (KAN-45)."""
+        clean_email = email.strip().lower()
+        if not clean_email or "@" not in clean_email:
+            raise ValueError("Adresse email invalide.")
+        if not name.strip():
+            raise ValueError("Le nom complet est obligatoire.")
+        if not message.strip():
+            raise ValueError("Le message est obligatoire.")
+
+        lead_id = f"lead_{int(time.time())}_{abs(hash(clean_email)) % 10000}"
+        lead_record = {
+            "id": lead_id,
+            "name": name.strip(),
+            "email": clean_email,
+            "company": company.strip() or "Organisation Prospect",
+            "phone": phone.strip(),
+            "interest": interest.strip(),
+            "message": message.strip(),
+            "consent": consent,
+            "status": "pending_review",
+            "created_at": _format_timestamp(),
+        }
+
+        # 1. Enregistrement dans le journal d'audit OPS (CA7 / notifications)
+        self.record_audit_event(
+            actor={"actor": "vitrine", "actor_type": "visitor", "email": clean_email},
+            action="contact:lead",
+            target=clean_email,
+            details={
+                "lead_id": lead_id,
+                "company": lead_record["company"],
+                "interest": lead_record["interest"],
+                "phone": lead_record["phone"],
+                "message_excerpt": lead_record["message"][:100],
+            },
+        )
+
+        # 2. Stockage des leads
+        if not hasattr(self, "_contact_leads"):
+            self._contact_leads = []
+        self._contact_leads.append(lead_record)
+
+        # 3. Arbitrage Direction KAN-45 :
+        # L'inscription/demande d'essai vitrine prépare une fiche organisation en attente (status trial / pending_validation)
+        # pour affichage dans la vue "Arrivées & OVH" du Cockpit OPS avec son badge de notification.
+        # Le superadmin déclenche ensuite le déploiement effectif depuis le backoffice.
+        raw_slug = f"lead-{lead_record['company'].lower().replace(' ', '-').replace('.', '')[:20]}-{int(time.time()) % 1000}"
+        slug = "".join(c for c in raw_slug if c.isalnum() or c == "-").strip("-")
+        if not slug:
+            slug = f"lead-{int(time.time())}"
+
+        pending_tenant = {
+            "id": f"tenant-{slug}",
+            "slug": slug,
+            "name": lead_record["company"],
+            "status": "trial",
+            "is_sandbox": True,
+            "created_at": _format_timestamp(),
+            "contact": {
+                "full_name": lead_record["name"],
+                "email": lead_record["email"],
+                "phone": lead_record["phone"],
+                "role": "Prospect Vitrine",
+            },
+            "subscription": {
+                "tier_id": "1_agent",
+                "status": "pending_validation",
+                "trial_days": 30,
+            },
+            "instance": {
+                "status": "not_provisioned",
+                "environment_status": "pending_validation",
+                "container_name": f"orso_client_{slug.replace('-', '_')}",
+                "internal_route_key": f"orso_client_{slug.replace('-', '_')}",
+            },
+            "agent_instances": [
+                {
+                    "agent_id": lead_record["interest"],
+                    "provisioning_status": "PENDING_SETUP",
+                }
+            ],
+            "quotas": {"cpus": "0.5", "memory": "512m"},
+        }
+        self._mock_tenants[pending_tenant["id"]] = pending_tenant
+
+        # 4. Persistance en base SQLite locale (KAN-45 CA2/CA5)
+        self._db_save_lead(lead_record)
+        self._db_save_tenant(pending_tenant)
+
+        # 5. Synchronisation Supabase distante si configurée
+        if self.supabase_url and self.supabase_key:
+            try:
+                self._query_supabase("tenants", method="POST", payload={
+                    "id": pending_tenant["id"],
+                    "slug": pending_tenant["slug"],
+                    "name": pending_tenant["name"],
+                    "status": "trial",
+                    "is_sandbox": True,
+                })
+                self._query_supabase("subscriptions", method="POST", payload={
+                    "tenant_id": pending_tenant["id"],
+                    "tier_id": "1_agent",
+                    "status": "pending_validation",
+                    "trial_days": 30,
+                })
+                self._query_supabase("tenant_instances", method="POST", payload={
+                    "tenant_id": pending_tenant["id"],
+                    "container_name": pending_tenant["instance"]["container_name"],
+                    "internal_route_key": pending_tenant["instance"]["internal_route_key"],
+                    "status": "not_provisioned",
+                    "environment_status": "pending_validation",
+                })
+            except Exception as e:
+                _log.warning("Erreur synchronisation Supabase pour lead %s: %s", slug, e)
+
+        _log.info("Demande de contact / lead enregistrée avec succès : %s (%s)", clean_email, lead_id)
+        return {
+            "success": True,
+            "lead_id": lead_id,
+            "slug": slug,
+            "status": "pending_validation",
+            "message": "Votre message a été transmis avec succès à notre équipe d'exploitation.",
+            "created_at": lead_record["created_at"],
+        }
 
     # ── Onboarding & Déploiement Flotte OVH ────────────────────────────────────
 
@@ -2470,6 +2954,7 @@ class OpsManager:
             "subscription_id": sub["id"],
             "customer_id": customer_id,
             "status": sub.get("status", "trialing"),
+            "trial_days": 30,
             "trial_end": sub.get("trial_end"),
             "current_period_end": sub.get("current_period_end"),
             "price_id": price_id,

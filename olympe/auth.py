@@ -242,7 +242,7 @@ def verify_ops_token(
             drone_mock = {
                 "id": "drone-clientx-001",
                 "actor": "drone-clientx",
-                "email": "drone-clientx@test.orso-agents.fr",
+                "email": "drone-clientx@orso-agents.fr",
                 "full_name": "Drone Test Client-X",
                 "role": DRONE_ROLE,
                 "actor_type": "machine",
@@ -259,7 +259,7 @@ def verify_ops_token(
         drone_actor = {
             "id": f"drone-{actor_name}",
             "actor": actor_name,
-            "email": f"{actor_name}@test.orso-agents.fr",
+            "email": f"{actor_name}@orso-agents.fr",
             "full_name": f"Drone Service ({actor_name})",
             "role": DRONE_ROLE,
             "actor_type": "machine",
@@ -314,7 +314,7 @@ def verify_ops_token(
         drone_profile = {
             "id": user.get("id"),
             "actor": actor_name,
-            "email": user.get("email") or f"{actor_name}@test.orso-agents.fr",
+            "email": user.get("email") or f"{actor_name}@orso-agents.fr",
             "full_name": user_meta.get("full_name") or f"Drone Service ({actor_name})",
             "role": DRONE_ROLE,
             "actor_type": "machine",

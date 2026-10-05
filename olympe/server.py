@@ -8,6 +8,7 @@ de facturation Stripe et de supervision de flotte.
 import os
 import logging
 import json
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from fastapi import Depends, FastAPI, HTTPException, Request, Security
@@ -110,7 +111,7 @@ class RollbackArtifactRequest(BaseModel):
 class CreateTenantOpsRequest(BaseModel):
     tenant_slug: str = Field("clientx-orso", description="Slug normalisé du tenant")
     name: Optional[str] = Field("CLIENTX-ORSO (TEST)", description="Nom d'affichage du tenant")
-    contact_email: Optional[str] = Field("test-drone-notifications@test.orso-agents.fr", description="Email de notification")
+    contact_email: Optional[str] = Field("test-drone-notifications@orso-agents.fr", description="Email de notification")
     contact_name: Optional[str] = Field("Dirigeant Test ClientX", description="Nom du contact dirigeant")
     quotas: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Quotas matériels explicites")
 
@@ -179,6 +180,16 @@ class RewriteMissionLetterRequest(BaseModel):
     sector: str = Field(..., description="Secteur d'activité")
     raw_notes: Optional[str] = Field("", description="Notes ou consignes rédigées par l'utilisateur")
     extracted_docs_text: Optional[str] = Field("", description="Extraits textuels de documents d'entreprise")
+
+
+class ContactFormRequest(BaseModel):
+    name: str = Field(..., description="Nom complet du contact")
+    email: str = Field(..., description="Adresse email professionnelle")
+    company: Optional[str] = Field("", description="Nom de l'entreprise ou cabinet")
+    phone: Optional[str] = Field("", description="Numéro de téléphone")
+    interest: Optional[str] = Field("recouvrement", description="Agent ou service concerné")
+    message: str = Field(..., description="Message ou besoin formulé")
+    consent: bool = Field(False, description="Consentement RGPD obligatoire")
 
 
 # ── Endpoints Supervision & Cycle de Vie Conteneurs ──────────────────────────
@@ -493,7 +504,7 @@ async def create_tenant(req: CreateTenantOpsRequest, actor: Dict[str, Any] = Dep
     return ops_manager.create_sandbox_tenant(
         tenant_slug=req.tenant_slug,
         name=req.name or "CLIENTX-ORSO (TEST)",
-        contact_email=req.contact_email or "test-drone-notifications@test.orso-agents.fr",
+        contact_email=req.contact_email or "test-drone-notifications@orso-agents.fr",
         contact_name=req.contact_name or "Dirigeant Test ClientX",
         quotas=req.quotas,
     )
@@ -702,6 +713,66 @@ async def rewrite_mission_letter(req: RewriteMissionLetterRequest):
     except Exception as e:
         _log.error("Erreur réécriture lettre de mission : %s", e)
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# Rate limiter anti-abus pour l'endpoint public /api/olympe/contact (KAN-45)
+# 5 requêtes par fenêtre glissante de 60 secondes par IP source
+_CONTACT_RATE_LIMIT_WINDOW = 60.0
+_CONTACT_RATE_LIMIT_MAX = 5
+_contact_request_timestamps: Dict[str, List[float]] = {}
+
+
+@app.post("/api/olympe/contact")
+async def submit_contact_form(req: ContactFormRequest, request: Request):
+    """Reçoit et enregistre une prise de contact ou une demande d'essai gratuit depuis la vitrine (KAN-45)."""
+    # 1. Vérification stricte du consentement RGPD (défaut False)
+    if not req.consent:
+        raise HTTPException(
+            status_code=400,
+            detail="Le consentement RGPD est obligatoire pour transmettre votre demande.",
+        )
+
+    # 2. Protection anti-abus / limitation de débit par IP (5 requêtes / minute)
+    client_ip = "unknown"
+    if request.client and request.client.host:
+        client_ip = request.client.host
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        client_ip = forwarded.split(",")[0].strip()
+
+    now = time.time()
+    recent = [t for t in _contact_request_timestamps.get(client_ip, []) if now - t < _CONTACT_RATE_LIMIT_WINDOW]
+    if len(recent) >= _CONTACT_RATE_LIMIT_MAX:
+        _contact_request_timestamps[client_ip] = recent
+        raise HTTPException(
+            status_code=429,
+            detail="Trop de requêtes soumises depuis cette adresse. Veuillez patienter avant de renouveler votre message.",
+        )
+    recent.append(now)
+    _contact_request_timestamps[client_ip] = recent
+
+    # 3. Enregistrement sécurisé avec gestion des erreurs sanitisée (sans fuite de trace interne)
+    try:
+        res = ops_manager.record_contact_lead(
+            name=req.name,
+            email=req.email,
+            company=req.company or "",
+            phone=req.phone or "",
+            interest=req.interest or "recouvrement",
+            message=req.message,
+            consent=req.consent,
+        )
+        return res
+    except HTTPException:
+        raise
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        _log.error("Erreur enregistrement contact/lead : %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Une erreur interne est survenue lors de l'enregistrement de votre message. Veuillez réessayer ultérieurement.",
+        )
 
 
 # ── Endpoints Onboarding & Déploiement OVH ──────────────────────────────────
