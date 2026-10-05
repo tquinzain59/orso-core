@@ -92,7 +92,8 @@ def _check_sensitive_path(filepath: str, task_id: str = "default") -> str | None
             "Agent cannot modify security-sensitive configuration. "
             "Edit ~/.hermes/config.yaml directly or use 'hermes config' instead.")
 
-    # Hard deny writing to persona definitions in profiles/ or personas.lock.json or ANY SOUL.md (Orso KAN-33 / KAN-54)
+    # Hard deny writing to persona definitions in profiles/ or personas.lock.json or HERMES_HOME/data volumes (Orso KAN-33 / KAN-54)
+    real_home = _get_real_hermes_home()
     for c in candidates:
         norm = os.path.normpath(c)
         base = os.path.basename(norm).lower()
@@ -102,10 +103,6 @@ def _check_sensitive_path(filepath: str, task_id: str = "default") -> str | None
             or norm.startswith("profiles/")
             or norm.endswith("/profiles")
         )
-<<<<<<< Updated upstream
-        is_soul_file = (base == "soul.md")
-        if is_profiles_path or is_soul_file:
-=======
         is_home_soul = (
             base == "soul.md"
             and (
@@ -122,7 +119,6 @@ def _check_sensitive_path(filepath: str, task_id: str = "default") -> str | None
             )
         )
         if is_profiles_path or is_home_soul:
->>>>>>> Stashed changes
             return (
                 f"Refusing to write to protected agent profile path: {filepath}\n"
                 "Agent cannot modify its own persona, SOUL.md, or profiles directory (Orso KAN-33/KAN-54). "
