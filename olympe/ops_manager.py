@@ -238,6 +238,15 @@ def _init_ops_db(db_path: Path) -> None:
                 details_json TEXT
             );"""
         )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS rate_limits (
+                ip TEXT NOT NULL,
+                timestamp REAL NOT NULL
+            );"""
+        )
+        conn.execute(
+            """CREATE INDEX IF NOT EXISTS idx_rate_limits_ip_time ON rate_limits (ip, timestamp);"""
+        )
         conn.commit()
 
 
@@ -502,6 +511,40 @@ class OpsManager:
         except Exception as e:
             _log.error("Erreur lecture SQLite audit_events: %s", e)
             return []
+
+    def check_and_record_rate_limit(
+        self,
+        ip: str,
+        max_requests: int = 5,
+        window_seconds: float = 60.0,
+    ) -> bool:
+        """Contrôle et enregistre une requête dans le limiteur de débit SQLite persistant (inter-processus).
+
+        Retourne True si la requête est autorisée, False si le quota est dépassé.
+        """
+        now = time.time()
+        cutoff = now - window_seconds
+        try:
+            with sqlite3.connect(str(self.db_path), timeout=5.0) as conn:
+                conn.execute("DELETE FROM rate_limits WHERE timestamp < ?;", (cutoff,))
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT COUNT(*) FROM rate_limits WHERE ip = ? AND timestamp >= ?;",
+                    (ip, cutoff),
+                )
+                row = cursor.fetchone()
+                count = row[0] if row else 0
+                if count >= max_requests:
+                    return False
+                conn.execute(
+                    "INSERT INTO rate_limits (ip, timestamp) VALUES (?, ?);",
+                    (ip, now),
+                )
+                conn.commit()
+                return True
+        except Exception as e:
+            _log.warning("Erreur rate limiter SQLite (repli transparent) : %s", e)
+            return True
 
     def _init_seed_data(self) -> Dict[str, Dict[str, Any]]:
         """Données d'amorçage réalistes représentant les premiers clients du projet Orso."""
@@ -1201,10 +1244,22 @@ class OpsManager:
                     }
                     result.append(item)
 
+                existing_ids = {item["id"] for item in result}
+                existing_slugs = {item.get("slug") for item in result if item.get("slug")}
+
+                # Consolidation avec la base SQLite locale (data/olympe_ops.db)
+                # Garantit que les demandes d'onboarding / leads locaux sont visibles dans le Cockpit
+                db_tenants = self._db_list_tenants()
+                for d_t in db_tenants:
+                    if d_t.get("id") not in existing_ids and d_t.get("slug") not in existing_slugs:
+                        result.append(d_t)
+                        existing_ids.add(d_t.get("id"))
+                        if d_t.get("slug"):
+                            existing_slugs.add(d_t.get("slug"))
+
                 # Inclure les sandboxes créés en mémoire non présents en base
-                existing_slugs = {item["slug"] for item in result}
                 for m_id, m_data in self._mock_tenants.items():
-                    if m_data.get("is_sandbox") and m_data.get("slug") not in existing_slugs:
+                    if m_data.get("is_sandbox") and m_data.get("id") not in existing_ids and m_data.get("slug") not in existing_slugs:
                         result.append(m_data)
 
                 return result
@@ -1952,8 +2007,8 @@ class OpsManager:
             "instance": {
                 "container_name": f"orso_client_{tenant_slug.replace('-', '_')}",
                 "internal_route_key": f"orso_client_{tenant_slug.replace('-', '_')}",
-                "status": "ready",
-                "environment_status": "active",
+                "status": "not_provisioned",
+                "environment_status": "pending_validation",
             },
             "agents_enabled": {
                 "active": ["jerome"],
@@ -1970,7 +2025,7 @@ class OpsManager:
                 "tier_id": "1_agent",
                 "tier_label": "Starter (1 agent)",
                 "price_ht": 99.00,
-                "status": "active",
+                "status": "pending_validation",
                 "trial_days": 30,
                 "stripe_customer_id": stripe_customer_id or f"cus_test_{tenant_slug}",
                 "subscription_id": f"sub_test_{tenant_slug}",
@@ -1984,6 +2039,24 @@ class OpsManager:
             },
             "invoices": [],
         }
+
+        # Provisioning Docker via Lifecycle Manager
+        is_container_ready = False
+        try:
+            from olympe.server import manager as docker_mgr
+            prov_res = docker_mgr.provision_tenant(
+                tenant_id=tenant_id,
+                tenant_slug=tenant_slug,
+                tier_id="1_agent",
+                quotas=effective_quotas,
+            )
+            if prov_res and prov_res.get("status") in ("created", "running", "ready"):
+                is_container_ready = True
+                tenant_record["instance"]["status"] = "ready"
+                tenant_record["instance"]["environment_status"] = "active"
+                tenant_record["subscription"]["status"] = "active"
+        except Exception as e:
+            _log.warning("Provisioning conteneur pour sandbox %s: %s", tenant_slug, e)
 
         self._mock_tenants[tenant_id] = tenant_record
         self._db_save_tenant(tenant_record)
@@ -2001,7 +2074,7 @@ class OpsManager:
                 self._query_supabase("subscriptions", method="POST", payload={
                     "tenant_id": tenant_id,
                     "tier_id": "1_agent",
-                    "status": "active",
+                    "status": "active" if is_container_ready else "pending_validation",
                     "stripe_customer_id": stripe_customer_id or f"cus_test_{tenant_slug}",
                     "stripe_subscription_id": f"sub_test_{tenant_slug}",
                 })
@@ -2009,23 +2082,11 @@ class OpsManager:
                     "tenant_id": tenant_id,
                     "container_name": f"orso_client_{tenant_slug.replace('-', '_')}",
                     "internal_route_key": f"orso_client_{tenant_slug.replace('-', '_')}",
-                    "status": "ready",
-                    "environment_status": "active",
+                    "status": "ready" if is_container_ready else "not_provisioned",
+                    "environment_status": "active" if is_container_ready else "pending_validation",
                 })
             except Exception as e:
                 _log.warning("Provisioning Supabase pour sandbox %s: %s", tenant_slug, e)
-
-        # Provisioning Docker via Lifecycle Manager
-        try:
-            from olympe.server import manager as docker_mgr
-            docker_mgr.provision_tenant(
-                tenant_id=tenant_id,
-                tenant_slug=tenant_slug,
-                tier_id="1_agent",
-                quotas=effective_quotas,
-            )
-        except Exception as e:
-            _log.warning("Provisioning conteneur pour sandbox %s: %s", tenant_slug, e)
 
         self.record_audit_event(
             actor={"actor": "drone-clientx", "role": "drone"},
