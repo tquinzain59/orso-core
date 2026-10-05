@@ -1239,6 +1239,8 @@ class OpsManager:
                 "phone": clean_phone,
                 "role": clean_role,
             }
+        return created_user
+
     def rewrite_mission_letter(
         self,
         agent_id: str,
@@ -1601,7 +1603,7 @@ class OpsManager:
         self,
         tenant_slug: str = "clientx-orso",
         name: str = "CLIENTX-ORSO (TEST)",
-        contact_email: str = "test-drone-notifications@test.orso-agents.fr",
+        contact_email: str = "test-drone-notifications@orso-agents.fr",
         contact_name: str = "Dirigeant Test ClientX",
         quotas: Optional[Dict[str, Any]] = None,
         stripe_customer_id: Optional[str] = None,

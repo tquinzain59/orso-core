@@ -110,7 +110,7 @@ class RollbackArtifactRequest(BaseModel):
 class CreateTenantOpsRequest(BaseModel):
     tenant_slug: str = Field("clientx-orso", description="Slug normalisé du tenant")
     name: Optional[str] = Field("CLIENTX-ORSO (TEST)", description="Nom d'affichage du tenant")
-    contact_email: Optional[str] = Field("test-drone-notifications@test.orso-agents.fr", description="Email de notification")
+    contact_email: Optional[str] = Field("test-drone-notifications@orso-agents.fr", description="Email de notification")
     contact_name: Optional[str] = Field("Dirigeant Test ClientX", description="Nom du contact dirigeant")
     quotas: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Quotas matériels explicites")
 
@@ -493,7 +493,7 @@ async def create_tenant(req: CreateTenantOpsRequest, actor: Dict[str, Any] = Dep
     return ops_manager.create_sandbox_tenant(
         tenant_slug=req.tenant_slug,
         name=req.name or "CLIENTX-ORSO (TEST)",
-        contact_email=req.contact_email or "test-drone-notifications@test.orso-agents.fr",
+        contact_email=req.contact_email or "test-drone-notifications@orso-agents.fr",
         contact_name=req.contact_name or "Dirigeant Test ClientX",
         quotas=req.quotas,
     )
