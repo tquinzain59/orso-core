@@ -181,6 +181,16 @@ class RewriteMissionLetterRequest(BaseModel):
     extracted_docs_text: Optional[str] = Field("", description="Extraits textuels de documents d'entreprise")
 
 
+class ContactFormRequest(BaseModel):
+    name: str = Field(..., description="Nom complet du contact")
+    email: str = Field(..., description="Adresse email professionnelle")
+    company: Optional[str] = Field("", description="Nom de l'entreprise ou cabinet")
+    phone: Optional[str] = Field("", description="Numéro de téléphone")
+    interest: Optional[str] = Field("recouvrement", description="Agent ou service concerné")
+    message: str = Field(..., description="Message ou besoin formulé")
+    consent: Optional[bool] = Field(True, description="Consentement RGPD")
+
+
 # ── Endpoints Supervision & Cycle de Vie Conteneurs ──────────────────────────
 
 @app.get("/health")
@@ -702,6 +712,27 @@ async def rewrite_mission_letter(req: RewriteMissionLetterRequest):
     except Exception as e:
         _log.error("Erreur réécriture lettre de mission : %s", e)
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/olympe/contact")
+async def submit_contact_form(req: ContactFormRequest):
+    """Reçoit et enregistre une prise de contact ou une demande d'essai gratuit depuis la vitrine (KAN-45)."""
+    try:
+        res = ops_manager.record_contact_lead(
+            name=req.name,
+            email=req.email,
+            company=req.company or "",
+            phone=req.phone or "",
+            interest=req.interest or "recouvrement",
+            message=req.message,
+            consent=req.consent if req.consent is not None else True,
+        )
+        return res
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        _log.error("Erreur enregistrement contact/lead : %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── Endpoints Onboarding & Déploiement OVH ──────────────────────────────────

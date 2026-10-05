@@ -2166,6 +2166,111 @@ class OpsManager:
         """Retourne le journal d'audit des actions administratives et machine (CA7)."""
         return list(reversed(self._audit_log))[:limit]
 
+    def record_contact_lead(
+        self,
+        name: str,
+        email: str,
+        company: str = "",
+        phone: str = "",
+        interest: str = "recouvrement",
+        message: str = "",
+        consent: bool = True,
+    ) -> Dict[str, Any]:
+        """Enregistre une prise de contact ou demande de souscription depuis la vitrine et notifie le cockpit OPS (KAN-45)."""
+        clean_email = email.strip().lower()
+        if not clean_email or "@" not in clean_email:
+            raise ValueError("Adresse email invalide.")
+        if not name.strip():
+            raise ValueError("Le nom complet est obligatoire.")
+        if not message.strip():
+            raise ValueError("Le message est obligatoire.")
+
+        lead_id = f"lead_{int(time.time())}_{abs(hash(clean_email)) % 10000}"
+        lead_record = {
+            "id": lead_id,
+            "name": name.strip(),
+            "email": clean_email,
+            "company": company.strip() or "Organisation Prospect",
+            "phone": phone.strip(),
+            "interest": interest.strip(),
+            "message": message.strip(),
+            "consent": consent,
+            "status": "pending_review",
+            "created_at": _format_timestamp(),
+        }
+
+        # 1. Enregistrement dans le journal d'audit OPS (CA7 / notifications)
+        self.record_audit_event(
+            actor={"actor": "vitrine", "actor_type": "visitor", "email": clean_email},
+            action="contact:lead",
+            target=clean_email,
+            details={
+                "lead_id": lead_id,
+                "company": lead_record["company"],
+                "interest": lead_record["interest"],
+                "phone": lead_record["phone"],
+                "message_excerpt": lead_record["message"][:100],
+            },
+        )
+
+        # 2. Stockage des leads
+        if not hasattr(self, "_contact_leads"):
+            self._contact_leads = []
+        self._contact_leads.append(lead_record)
+
+        # 3. Arbitrage Direction KAN-45 :
+        # L'inscription/demande d'essai vitrine prépare une fiche organisation en attente (status trial / pending_validation)
+        # pour affichage dans la vue "Arrivées & OVH" du Cockpit OPS avec son badge de notification.
+        # Le superadmin déclenche ensuite le déploiement effectif depuis le backoffice.
+        raw_slug = f"lead-{lead_record['company'].lower().replace(' ', '-').replace('.', '')[:20]}-{int(time.time()) % 1000}"
+        slug = "".join(c for c in raw_slug if c.isalnum() or c == "-").strip("-")
+        if not slug:
+            slug = f"lead-{int(time.time())}"
+
+        pending_tenant = {
+            "id": f"tenant-{slug}",
+            "slug": slug,
+            "name": lead_record["company"],
+            "status": "trial",
+            "is_sandbox": True,
+            "created_at": _format_timestamp(),
+            "contact": {
+                "full_name": lead_record["name"],
+                "email": lead_record["email"],
+                "phone": lead_record["phone"],
+                "role": "Prospect Vitrine",
+            },
+            "subscription": {
+                "tier_id": "1_agent",
+                "status": "pending_validation",
+                "trial_days": 30,
+            },
+            "instance": {
+                "status": "not_provisioned",
+                "environment_status": "pending_validation",
+                "container_name": f"orso_client_{slug.replace('-', '_')}",
+                "internal_route_key": f"orso_client_{slug.replace('-', '_')}",
+            },
+            "agent_instances": [
+                {
+                    "agent_id": lead_record["interest"],
+                    "provisioning_status": "PENDING_SETUP",
+                }
+            ],
+            "quotas": {"cpus": "0.5", "memory": "512m"},
+        }
+        self._mock_tenants[pending_tenant["id"]] = pending_tenant
+
+        _log.info("Demande de contact / lead enregistrée avec succès : %s (%s)", clean_email, lead_id)
+        return {
+            "success": True,
+            "lead_id": lead_id,
+            "slug": slug,
+            "status": "pending_validation",
+            "message": "Votre message a été transmis avec succès à notre équipe d'exploitation.",
+            "created_at": lead_record["created_at"],
+        }
+
     # ── Onboarding & Déploiement Flotte OVH ────────────────────────────────────
 
     def get_pending_onboarding(self) -> List[Dict[str, Any]]:
@@ -2472,6 +2577,7 @@ class OpsManager:
             "subscription_id": sub["id"],
             "customer_id": customer_id,
             "status": sub.get("status", "trialing"),
+            "trial_days": 30,
             "trial_end": sub.get("trial_end"),
             "current_period_end": sub.get("current_period_end"),
             "price_id": price_id,
