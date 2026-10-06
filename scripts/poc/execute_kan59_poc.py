@@ -49,6 +49,32 @@ from olympe.ops_manager import TIER_PRICING
 from olympe.ovh_client import OVH_FLAVORS, OVHClient
 
 
+def sanitize_inspect_object(obj):
+    """Masque récursivement les variables d'environnement et secrets sensibles dans l'inspection Docker."""
+    if isinstance(obj, dict):
+        res = {}
+        for k, v in obj.items():
+            if k == "Env" and isinstance(v, list):
+                masked_list = []
+                for item in v:
+                    if isinstance(item, str) and "=" in item:
+                        var_name, _ = item.split("=", 1)
+                        if any(sec in var_name.upper() for sec in ("PASSWORD", "SECRET", "KEY", "TOKEN", "AUTH")) and var_name not in ("GPG_KEY", "HERMES_DASHBOARD_BASIC_AUTH_USERNAME"):
+                            masked_list.append(f"{var_name}=[REDACTED]")
+                        else:
+                            masked_list.append(item)
+                    else:
+                        masked_list.append(item)
+                res[k] = masked_list
+            else:
+                res[k] = sanitize_inspect_object(v)
+        return res
+    elif isinstance(obj, list):
+        return [sanitize_inspect_object(item) for item in obj]
+    else:
+        return obj
+
+
 def get_host_system_identity() -> dict:
     """Collecte l'identité réelle et les caractéristiques physiques de l'hôte."""
     uname_res = platform.uname()
@@ -75,6 +101,8 @@ def get_host_system_identity() -> dict:
         "cpu_count": os.cpu_count() or 1,
         "physical_memory_total_mb": total_mem_mb,
         "physical_memory_available_mb": avail_mem_mb,
+        "target_host_ip": os.environ.get("ORSO_HOST_IP", "57.131.196.106"),
+        "target_host_name": "vps-9df18c40.vps.ovh.net",
     }
 
 
@@ -176,6 +204,10 @@ def main():
 
         # ── 1. CA1 : Provisioning réel des 3 conteneurs avec quotas de palier ─
         _log.info("Étape 1 (CA1) : Provisioning physique des 3 conteneurs avec quotas stricts...")
+        import secrets
+        poc_dash_user = os.environ.get("ORSO_POC_DASHBOARD_USER", "admin")
+        poc_dash_pwd = os.environ.get("ORSO_POC_DASHBOARD_PASSWORD") or secrets.token_urlsafe(24)
+
         provision_results = {}
         for t in poc_tenants:
             _log.info("Provisioning de %s (palier %s)...", t["slug"], t["tier"])
@@ -188,17 +220,40 @@ def main():
                 allow_floating_tag=True,
                 persona_hmac_key=hmac_key,
                 use_dedicated_space=True,
+                env_vars={
+                    "HERMES_DASHBOARD_BASIC_AUTH_USERNAME": poc_dash_user,
+                    "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD": poc_dash_pwd,
+                },
             )
             if not res.get("success"):
                 raise RuntimeError(f"Échec du provisioning de {t['slug']}: {res}")
             provision_results[t["slug"]] = res
 
-        # Laisser 3 secondes de stabilisation
-        time.sleep(3.0)
+        # Attente active de l'état Up (healthy)
+        max_health_wait = 45.0
+        t_health_start = time.time()
+        while time.time() - t_health_start < max_health_wait:
+            all_healthy = True
+            for t in poc_tenants:
+                cname = normalize_container_name(t["slug"])
+                chk = subprocess.run(
+                    ["docker", "inspect", cname, "--format", "{{.State.Health.Status}}"],
+                    capture_output=True,
+                    text=True,
+                )
+                st = chk.stdout.strip()
+                if st != "healthy":
+                    all_healthy = False
+                    break
+            if all_healthy:
+                _log.info("Tous les conteneurs clients sont Up (healthy) après %.1fs !", time.time() - t_health_start)
+                break
+            time.sleep(1.5)
 
         # Inspection Docker réelle des conteneurs
         _log.info("Étape 2 (CA1) : Contrôle d'inspection Docker (NanoCpus, Memory, MemorySwap, PidsLimit)...")
         ca1_inspection = {}
+        raw_docker_inspections = {}
         for t in poc_tenants:
             c_name = normalize_container_name(t["slug"])
             inspect_cmd = [
@@ -221,6 +276,20 @@ def main():
             nano_cpus = int(parts[2])
             pids_limit = int(parts[3])
             labels = json.loads(parts[4])
+
+            # Inspection complète assainie pour preuve d'exploitation
+            full_proc = subprocess.run(
+                ["docker", "inspect", c_name],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=True,
+            )
+            full_inspect = json.loads(full_proc.stdout.strip())
+            raw_docker_inspections[t["slug"]] = (
+                sanitize_inspect_object(full_inspect[0]) if full_inspect else {}
+            )
 
             expected_quotas = TIER_RESOURCE_QUOTAS[t["tier"]]
             expected_mem_mb = parse_memory_str_to_mb(expected_quotas["memory"])
@@ -372,6 +441,10 @@ def main():
             tier_id=target_refusal_tier,
             allow_floating_tag=True,
             persona_hmac_key=hmac_key,
+            env_vars={
+                "HERMES_DASHBOARD_BASIC_AUTH_USERNAME": poc_dash_user,
+                "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD": poc_dash_pwd,
+            },
         )
 
         assert res_delta["success"] is False, "Le provisioning aurait dû être refusé !"
@@ -451,25 +524,42 @@ def main():
         evidence["all_passed"] = True
         _log.info("Succès total du protocole de validation POC KAN-59 !")
 
-    finally:
-        # Nettoyage des conteneurs de test
-        _log.info("Nettoyage des conteneurs de test POC...")
-        for t in poc_tenants:
-            try:
-                manager.teardown_tenant(t["slug"], remove_data=True)
-            except Exception as e:
-                _log.warning("Erreur teardown %s: %s", t["slug"], e)
-        try:
-            manager.teardown_tenant("poc-delta", remove_data=True)
-        except Exception:
-            pass
+        # Sauvegarde des preuves et des inspections brutes
+        evidence_file = PROJECT_ROOT / "docs" / "3_Technique" / "kan59_e2e_poc_evidence.json"
+        evidence_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(evidence_file, "w", encoding="utf-8") as f:
+            json.dump(evidence, f, indent=2, ensure_ascii=False)
+        _log.info("Rapport de preuves sauvegardé : %s", evidence_file)
 
-    # Sauvegarde des preuves
-    evidence_file = PROJECT_ROOT / "docs" / "3_Technique" / "kan59_e2e_poc_evidence.json"
-    evidence_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(evidence_file, "w", encoding="utf-8") as f:
-        json.dump(evidence, f, indent=2, ensure_ascii=False)
-    _log.info("Rapport de preuves sauvegardé : %s", evidence_file)
+        raw_inspect_file = PROJECT_ROOT / "docs" / "3_Technique" / "kan59_raw_docker_inspect.json"
+        raw_inspect_payload = {
+            "ticket": "KAN-59",
+            "timestamp": evidence["timestamp"],
+            "target_host_ip": os.environ.get("ORSO_HOST_IP", "57.131.196.106"),
+            "target_host_name": "vps-9df18c40.vps.ovh.net",
+            "containers": [normalize_container_name(t["slug"]) for t in poc_tenants],
+            "inspections": raw_docker_inspections,
+        }
+        with open(raw_inspect_file, "w", encoding="utf-8") as f:
+            json.dump(raw_inspect_payload, f, indent=2, ensure_ascii=False)
+        _log.info("Inspections brutes Docker consignées dans : %s", raw_inspect_file)
+
+    finally:
+        keep_containers = os.environ.get("ORSO_KEEP_CONTAINERS") == "1" or "--keep-containers" in sys.argv
+        if keep_containers:
+            _log.info("🔒 Option ORSO_KEEP_CONTAINERS active : les conteneurs réels restent en service pour inspection PO en lecture seule.")
+        else:
+            # Nettoyage des conteneurs de test
+            _log.info("Nettoyage des conteneurs de test POC...")
+            for t in poc_tenants:
+                try:
+                    manager.teardown_tenant(t["slug"], remove_data=True)
+                except Exception as e:
+                    _log.warning("Erreur teardown %s: %s", t["slug"], e)
+            try:
+                manager.teardown_tenant("poc-delta", remove_data=True)
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
