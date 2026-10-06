@@ -37,6 +37,32 @@ if os.environ.get("ORSO_NO_DOTENV") != "1" and env_file.exists():
 from olympe.lifecycle_manager import DockerLifecycleManager, normalize_container_name
 
 
+def sanitize_inspect_object(obj):
+    """Masque récursivement les variables d'environnement et secrets sensibles dans l'inspection Docker."""
+    if isinstance(obj, dict):
+        res = {}
+        for k, v in obj.items():
+            if k == "Env" and isinstance(v, list):
+                masked_list = []
+                for item in v:
+                    if isinstance(item, str) and "=" in item:
+                        var_name, _ = item.split("=", 1)
+                        if any(sec in var_name.upper() for sec in ("PASSWORD", "SECRET", "KEY", "TOKEN", "AUTH")) and var_name not in ("GPG_KEY", "HERMES_DASHBOARD_BASIC_AUTH_USERNAME"):
+                            masked_list.append(f"{var_name}=[REDACTED]")
+                        else:
+                            masked_list.append(item)
+                    else:
+                        masked_list.append(item)
+                res[k] = masked_list
+            else:
+                res[k] = sanitize_inspect_object(v)
+        return res
+    elif isinstance(obj, list):
+        return [sanitize_inspect_object(item) for item in obj]
+    else:
+        return obj
+
+
 def main():
     hmac_key = os.environ.get("ORSO_PERSONA_HMAC_KEY")
     if not hmac_key or not hmac_key.strip():
@@ -175,7 +201,9 @@ def main():
                 check=True,
             )
             parsed_inspect = json.loads(inspect_proc.stdout.strip())
-            raw_docker_inspections[t["slug"]] = parsed_inspect[0] if parsed_inspect else {}
+            raw_docker_inspections[t["slug"]] = (
+                sanitize_inspect_object(parsed_inspect[0]) if parsed_inspect else {}
+            )
             raw_mounts = parsed_inspect[0].get("Mounts", []) if parsed_inspect else []
             containers_mounts[t["slug"]] = raw_mounts
             sources = {m["Source"] for m in raw_mounts}
