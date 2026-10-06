@@ -554,9 +554,10 @@ def _make_tui_argv(tui_dir: Path, tui_dev: bool) -> tuple[list[str], Path]:
             if (p / "dist" / "entry.js").is_file():
                 return [_tui_node_bin("node"), "--expose-gc", str(p / "dist" / "entry.js")], p
 
-        bundled = _find_bundled_tui()
-        if bundled is not None:
-            return [_tui_node_bin("node"), "--expose-gc", str(bundled)], bundled.parent
+        if not tui_dir.is_dir():
+            bundled = _find_bundled_tui()
+            if bundled is not None:
+                return [_tui_node_bin("node"), "--expose-gc", str(bundled)], bundled.parent
 
     # About to npm install/build from source, so the workspace must exist.
     if not ext_dir:

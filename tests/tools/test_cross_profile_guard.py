@@ -6,7 +6,7 @@ This file tests that the tool surfaces:
 
   1. Refuse cross-profile writes by default and return the warning.
   2. Accept cross-profile writes when cross_profile=True is passed.
-  3. Continue to accept in-profile writes normally.
+  3. Under Orso (KAN-33), writes targeting profiles/ are strictly refused by persona guard.
   4. skill_manage's "not found" error names other profiles where the
      skill exists.
 """
@@ -57,15 +57,17 @@ def fake_hermes(tmp_path, monkeypatch):
 
 
 class TestWriteFileCrossProfileGuard:
-    def test_in_profile_write_allowed(self, fake_hermes):
+    def test_in_profile_write_refused_by_orso_persona_guard(self, fake_hermes):
         from tools.file_tools import write_file_tool
         target = fake_hermes["sec_home"] / "skills" / "new-skill" / "SKILL.md"
         target.parent.mkdir(parents=True)
         result_json = write_file_tool(str(target), "in-profile content")
         result = json.loads(result_json)
-        assert not result.get("error"), f"In-profile write should succeed: {result}"
-        assert target.exists()
-        assert target.read_text() == "in-profile content"
+        # Orso KAN-33 / KAN-69 : sous Orso, toute écriture ciblant profiles/ est strictement
+        # refusée par le garde-fou d'intégrité des personas (immutabilité physique et applicative).
+        assert result.get("error") is not None, f"Write targeting profiles/ must be refused by KAN-33: {result}"
+        assert "Refusing to write to protected agent profile path" in result["error"]
+        assert "Orso KAN-33" in result["error"]
 
     def test_cross_profile_write_allowed_guard_retired(self, fake_hermes):
         """Guard RETIRED (maintainer decision): profiles are not isolated —
