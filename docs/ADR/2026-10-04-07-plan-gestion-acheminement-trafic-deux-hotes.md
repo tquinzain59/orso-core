@@ -62,12 +62,21 @@ Trois options d'accès ont été analysées pour permettre au superviseur Olympe
 
 #### 2. Durcissement Pare-Feu & Règle iptables DOCKER-USER (Contournement UFW neutralisé) :
 - **Point de vigilance soulevé par Jarvis (PO)** : *"Les ports publiés par Docker écrivent leurs règles directement dans iptables et contournent ufw."*
-- **Solution architecturale mise en place** :
-  Sur l'Hôte 2 (`prod-fr-003`), une règle stricte dans la chaîne `DOCKER-USER` d'iptables est configurée :
+- **Contre-mesure retenue, et état réel de l'hôte** : la restriction de la plage `9200-9299` à l'adresse IP publique de l'Hôte 1 (`92.222.68.80` - Ingress / Olympe) est portée par la chaîne `DOCKER-USER` d'iptables. Elle est **appliquée sur `prod-fr-003` depuis le 06/10/2026 à 15h23Z**, après une recette qui l'a trouvée annoncée ici sans exister sur l'hôte (`sudo iptables -S DOCKER-USER` ne rendait que `-N DOCKER-USER`). Commandes retenues, celles de la procédure d'ajout d'hôte section 5.1 :
+
   ```bash
-  iptables -I DOCKER-USER -i eth0 -p tcp --dport 9200:9299 ! -s 92.222.68.80 -j DROP
+  # Interface réseau de l'hôte, à lire avant : ip -br link
+  # Sur prod-fr-003 : ens3 (et non eth0)
+  sudo iptables -I DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  sudo iptables -A DOCKER-USER -i ens3 -p tcp --dport 9200:9299 -s 92.222.68.80 -j ACCEPT
+  sudo iptables -A DOCKER-USER -i ens3 -p tcp --dport 9200:9299 -j DROP
   ```
-  **Effet** : Seules les connexions TCP issues de l'adresse IP publique de l'Hôte 1 (`92.222.68.80` - Ingress / Olympe) sont autorisées à atteindre les conteneurs clients sur l'Hôte 2. Toute tentative d'accès direct depuis une autre IP Internet est immédiatement rejetée en silence (`DROP`).
+
+  **Effet** : seules les connexions TCP issues de l'adresse IP publique de l'Hôte 1 sont autorisées à atteindre les conteneurs clients sur l'Hôte 2 ; toute tentative d'accès direct depuis une autre IP Internet est rejetée en silence (`DROP`). Mesure du 06/10/2026, depuis un hôte tiers : un port publié dans la plage reste muet (attente de 6 s, SYN comptés par la règle `DROP`), un port publié hors plage répond en 0,02 s.
+
+  **Persistance** : la règle est enregistrée dans `/etc/iptables/rules.v4` et rechargée au démarrage par `netfilter-persistent` (`systemctl is-enabled netfilter-persistent` rend `enabled`). Le paquet `iptables-persistent` doit être installé au préalable : la procédure le supposait sans le nommer, et `prod-fr-003` ne l'avait pas.
+
+  **Limite** : le filtre évalue le port de destination *après* la traduction NAT de Docker. La règle ne couvre donc la plage que si le port publié sur l'hôte porte le même numéro que le port du conteneur. Le régime de publication des ports clients est porté par KAN-97 ; toute correspondance différente y rendra la règle inopérante.
 
 ---
 
