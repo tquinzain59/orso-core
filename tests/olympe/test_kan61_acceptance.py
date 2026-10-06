@@ -15,6 +15,12 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+@pytest.fixture(autouse=True)
+def setup_dashboard_auth_kan61(monkeypatch):
+    """Garantit les identifiants d'authentification dashboard obligatoires (KAN-58)."""
+    monkeypatch.setenv("HERMES_DASHBOARD_BASIC_AUTH_USERNAME", "admin")
+    monkeypatch.setenv("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD", "testpass123")
+
 
 from olympe.lifecycle_manager import DockerLifecycleManager, normalize_container_name
 from olympe.remote_host_client import (
@@ -316,3 +322,38 @@ def test_kan61_docker_lifecycle_manager_remote_integration(tmp_path, remote_mana
 
     # La route doit avoir été désenregistrée
     assert remote_manager.resolve_tenant_route("poc-alpha") is None
+
+
+def test_kan61_fail_closed_on_missing_dashboard_auth_no_route(tmp_path, remote_manager, monkeypatch):
+    """Vérifie que l'absence d'auth dashboard (KAN-58) rejette le provisioning et n'enregistre AUCUNE route (KAN-61)."""
+    monkeypatch.delenv("HERMES_DASHBOARD_BASIC_AUTH_USERNAME", raising=False)
+    monkeypatch.delenv("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD", raising=False)
+    monkeypatch.delenv("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH", raising=False)
+
+    data_dir = tmp_path / "tenants_fail_closed"
+    spaces_dir = tmp_path / "spaces_fail_closed"
+    data_dir.mkdir(parents=True)
+    spaces_dir.mkdir(parents=True)
+
+    manager = DockerLifecycleManager(
+        data_root=str(data_dir),
+        spaces_root=str(spaces_dir),
+        host_max_containers=50,
+        remote_manager=remote_manager,
+    )
+    manager.has_docker = True
+
+    status_not_found = {"status": "not_found", "running": False}
+    with patch.object(manager, "get_tenant_status", return_value=status_not_found):
+        with patch.object(manager, "check_host_admission", return_value=(True, "OK", {})):
+            res = manager.provision_tenant(
+                tenant_id="uuid-unauth",
+                tenant_slug="poc-unauth",
+                allow_floating_tag=True,
+                persona_hmac_key="key-hmac",
+            )
+            assert res["success"] is False
+            assert res["error"] == "ERR_DASHBOARD_AUTH_REQUIRED"
+
+    # Vérification inviolable : AUCUNE route enregistrée dans remote_manager
+    assert remote_manager.resolve_tenant_route("poc-unauth") is None

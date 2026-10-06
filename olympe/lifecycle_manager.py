@@ -1295,8 +1295,6 @@ class DockerLifecycleManager:
                 "-p", f"{effective_port}:9119",
                 "--label", f"com.orso.port={effective_port}",
             ])
-            if self.remote_manager:
-                self.remote_manager.register_tenant_route(tenant_slug, port=effective_port, status="active")
 
         # Montages de l'environnement client (fin des dossiers partagés KAN-58 / Document 27)
         project_root = Path(__file__).resolve().parent.parent
@@ -1408,6 +1406,10 @@ class DockerLifecycleManager:
                 "container_name": container_name,
                 "error": err,
             }
+
+        # Enregistrement étanche de la route dans le superviseur multi-hôtes (KAN-61 / Fail-Closed KAN-58)
+        if effective_port and self.remote_manager:
+            self.remote_manager.register_tenant_route(tenant_slug, port=effective_port, status="active")
 
         # Mise à jour Supabase si configuré
         self._sync_tenant_instance_record(
