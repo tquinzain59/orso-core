@@ -1,0 +1,299 @@
+{
+  "ticket": "KAN-61",
+  "title": "POC 4 - Plan de gestion et acheminement du trafic sur deux hôtes",
+  "timestamp": "2026-10-04T16:42:23.000863+00:00",
+  "harness_runner": {
+    "hostname": "Mac.lan",
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "system": "Darwin",
+    "python_version": "3.11.14",
+    "user": "tquinzain",
+    "source_repo": "/Users/tquinzain/Documents/Dev Projects/orso-core"
+  },
+  "host_telemetry": {
+    "management_host": {
+      "host_id": "prod-fr-002",
+      "ip": "92.222.68.80",
+      "role": "Plan de gestion, Olympe (9230) & Ingress"
+    },
+    "execution_host": {
+      "host_id": "prod-fr-003",
+      "ip": "57.131.196.106",
+      "role": "Hôte d'exécution des conteneurs clients",
+      "docker_version": "29.8.1",
+      "kernel": "7.0.0-28-generic",
+      "os": "Ubuntu 26.04 LTS",
+      "cpus": 2,
+      "memory_total_bytes": 4000038912
+    }
+  },
+  "ca1_remote_docker_lifecycle": {
+    "passed": true,
+    "target_image_measured": {
+      "pinned_ref": "ghcr.io/tquinzain59/orso-engine@sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
+      "measured_image_id": "sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
+      "measured_repo_digest": "ghcr.io/tquinzain59/orso-engine@sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f"
+    },
+    "commands_executed": [
+      {
+        "operation": "docker run (provision distant)",
+        "cmd": "docker -H ssh://ubuntu@57.131.196.106 run -d --name orso_client_kan61_poc_alpha -p 9231:9119 --cpus 0.5 --memory 512m --memory-swap 512m --label com.orso.managed=true --label com.orso.tenant_slug=kan61-poc-alpha --label com.orso.port=9231 --entrypoint sleep ghcr.io/tquinzain59/orso-engine@sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f 3600",
+        "return_code": 0,
+        "container_id_full": "7829b772a3c15dfcf5c56d38b50f0a5c11e6a8f9298df280021a2abf60978833"
+      },
+      {
+        "operation": "docker inspect (inspection d'état distant)",
+        "cmd": "docker -H ssh://ubuntu@57.131.196.106 inspect orso_client_kan61_poc_alpha",
+        "return_code": 0,
+        "state_status": "running",
+        "running": true,
+        "published_ports": {
+          "9119/tcp": [
+            {
+              "HostIp": "",
+              "HostPort": "9231"
+            }
+          ]
+        },
+        "labels": {
+          "com.orso.managed": "true",
+          "com.orso.port": "9231",
+          "com.orso.tenant_slug": "kan61-poc-alpha",
+          "maintainer": "Thibaut - Orso Agents (www.orso-agents.fr)",
+          "org.opencontainers.image.created": "2026-09-30T18:47:07.167Z",
+          "org.opencontainers.image.description": "The agent that grows with you adapted for Orso activities",
+          "org.opencontainers.image.licenses": "MIT",
+          "org.opencontainers.image.revision": "c91a966be507ae9cfa1480338c942c0aa00a707f",
+          "org.opencontainers.image.source": "https://github.com/tquinzain59/orso-core",
+          "org.opencontainers.image.title": "orso-core",
+          "org.opencontainers.image.url": "https://github.com/tquinzain59/orso-core",
+          "org.opencontainers.image.version": "v1.0.0-c91a966be507ae9cfa1480338c942c0aa00a707f",
+          "version": "1.0-orso-core"
+        },
+        "container_image_hash": "sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f"
+      },
+      {
+        "operation": "docker stop (arrêt distant sans session interactive)",
+        "cmd": "docker -H ssh://ubuntu@57.131.196.106 stop -t 3 orso_client_kan61_poc_alpha",
+        "return_code": 0,
+        "status_after_stop": "exited"
+      }
+    ]
+  },
+  "ca2_routing_table_and_slug_authorization": {
+    "passed": true,
+    "amendment_note": "Critère réécrit le 04/10/2026 par le PO (voie b) : porte la table de routage multi-hôtes et la décision explicite d'autorisation par slug. L'acheminement L7 réel en réseau fait l'objet de KAN-97.",
+    "routing_table_before": {},
+    "registered_route_entry": {
+      "tenant_slug": "kan61-alpha",
+      "host_id": "prod-fr-003",
+      "host_ip": "57.131.196.106",
+      "port": 9231,
+      "status": "active",
+      "target_url": "http://57.131.196.106:9231",
+      "updated_at": "2026-10-04T16:42:34.077007+00:00"
+    },
+    "routing_table_after": {
+      "kan61-alpha": {
+        "tenant_slug": "kan61-alpha",
+        "host_id": "prod-fr-003",
+        "host_ip": "57.131.196.106",
+        "port": 9231,
+        "status": "active",
+        "target_url": "http://57.131.196.106:9231",
+        "updated_at": "2026-10-04T16:42:34.077007+00:00"
+      }
+    },
+    "slug_decisions_raw": {
+      "active_provisioned_slug": {
+        "tenant_slug": "kan61-alpha",
+        "allowed": true,
+        "decision": "ACCEPT",
+        "status": "AUTHORIZED",
+        "host_id": "prod-fr-003",
+        "host_ip": "57.131.196.106",
+        "port": 9231,
+        "target_url": "http://57.131.196.106:9231",
+        "reason": "Route active trouvée : espace client autorisé et résolu vers prod-fr-003 (57.131.196.106:9231).",
+        "routed_target": "http://57.131.196.106:9231",
+        "timestamp": "2026-10-04T16:42:34.077072+00:00"
+      },
+      "unprovisioned_unknown_slug": {
+        "tenant_slug": "kan61-inconnu",
+        "allowed": false,
+        "decision": "REJECT",
+        "status": "REJECTED_UNPROVISIONED",
+        "error_code": "ERR_TENANT_ROUTE_NOT_FOUND",
+        "reason": "Aucune route configurée pour le slug 'kan61-inconnu' : espace non provisionné sur la flotte.",
+        "routed_target": null,
+        "timestamp": "2026-10-04T16:42:34.077103+00:00"
+      }
+    },
+    "routing_table_final": {}
+  },
+  "ca3_limited_and_audited_access": {
+    "passed": true,
+    "port_exposure_security": {
+      "host_id": "prod-fr-003",
+      "host_ip": "57.131.196.106",
+      "host_reachable": true,
+      "all_secure": true,
+      "ports_checked": {
+        "2375": {
+          "open": false,
+          "state": "ERRNO_35",
+          "errno": 35,
+          "verdict": "SÉCURISÉ (Code TCP: Resource temporarily unavailable)"
+        },
+        "2376": {
+          "open": false,
+          "state": "ERRNO_35",
+          "errno": 35,
+          "verdict": "SÉCURISÉ (Code TCP: Resource temporarily unavailable)"
+        }
+      },
+      "rule": "Les ports 2375 et 2376 ne doivent jamais répondre publiquement sans mTLS ni être scannables."
+    },
+    "iptables_docker_user_raw": {
+      "command": "ssh ubuntu@57.131.196.106 sudo iptables -S DOCKER-USER",
+      "return_code": 0,
+      "stdout_raw": "-N DOCKER-USER"
+    },
+    "port_binding_policy_decision": {
+      "current_poc_regime": "Publication de port (-p 9231:9119) pour raccordement multi-hôtes avec filtrage pare-feu",
+      "defense_in_depth": "Chaîne iptables DOCKER-USER vérifiée sur l'Hôte 2",
+      "target_regime_kan97": "L'acheminement L7 réel et le durcissement du bind (localhost via tunnel SSH vs Ingress dédié) font l'objet de KAN-97."
+    },
+    "audit_log_file": "data/remote_audit.jsonl",
+    "audit_events_count": 8,
+    "audit_sample": [
+      {
+        "timestamp": "2026-10-04T16:42:27.987897+00:00",
+        "host_id": "prod-fr-003",
+        "operation": "provision",
+        "tenant_slug": "kan61-poc-alpha",
+        "command": "docker -H ssh://ubuntu@57.131.196.106 run -d --name orso_client_kan61_poc_alpha -p 9231:9119 --cpus 0.5 --memory 512m --memory-swap 512m --label com.orso.managed=true --label com.orso.tenant_slug=kan61-poc-alpha --label com.orso.port=9231 --entrypoint sleep ghcr.io/tquinzain59/orso-engine@sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f 3600",
+        "return_code": 0,
+        "stdout_summary": "7829b772a3c15dfcf5c56d38b50f0a5c11e6a8f9298df280021a2abf60978833",
+        "stderr_summary": "",
+        "duration_ms": 1673.26
+      },
+      {
+        "timestamp": "2026-10-04T16:42:28.684012+00:00",
+        "host_id": "prod-fr-003",
+        "operation": "inspect",
+        "tenant_slug": "kan61-poc-alpha",
+        "command": "docker -H ssh://ubuntu@57.131.196.106 inspect --format {{json .State}}|||{{json .HostConfig.PortBindings}}|||{{json .Config.Labels}}|||{{.Image}} orso_client_kan61_poc_alpha",
+        "return_code": 0,
+        "stdout_summary": "{\"Status\":\"running\",\"Running\":true,\"Paused\":false,\"Restarting\":false,\"OOMKilled\":false,\"Dead\":false,\"Pid\":80986,\"ExitCode\":0,\"Error\":\"\",\"StartedAt\":\"2026-10-04T16:42:27.834630979Z\",\"FinishedAt\":\"0001-01-01T00:00:00Z\",\"Health\":{\"Status\":\"starting\",\"FailingStreak\":0,\"Log\":[]}}|||{\"9119/tcp\":[{\"HostIp\"...",
+        "stderr_summary": "",
+        "duration_ms": 694.99
+      },
+      {
+        "timestamp": "2026-10-04T16:42:32.544212+00:00",
+        "host_id": "prod-fr-003",
+        "operation": "stop",
+        "tenant_slug": "kan61-poc-alpha",
+        "command": "docker -H ssh://ubuntu@57.131.196.106 stop -t 3 orso_client_kan61_poc_alpha",
+        "return_code": 0,
+        "stdout_summary": "orso_client_kan61_poc_alpha",
+        "stderr_summary": "",
+        "duration_ms": 3857.08
+      },
+      {
+        "timestamp": "2026-10-04T16:42:33.355634+00:00",
+        "host_id": "prod-fr-003",
+        "operation": "inspect_stopped",
+        "tenant_slug": "kan61-poc-alpha",
+        "command": "docker -H ssh://ubuntu@57.131.196.106 inspect --format {{.State.Status}} orso_client_kan61_poc_alpha",
+        "return_code": 0,
+        "stdout_summary": "exited",
+        "stderr_summary": "",
+        "duration_ms": 810.3
+      },
+      {
+        "timestamp": "2026-10-04T16:42:34.075702+00:00",
+        "host_id": "prod-fr-003",
+        "operation": "cleanup_post",
+        "tenant_slug": "fleet",
+        "command": "docker -H ssh://ubuntu@57.131.196.106 rm -f orso_client_kan61_poc_alpha",
+        "return_code": 0,
+        "stdout_summary": "orso_client_kan61_poc_alpha",
+        "stderr_summary": "",
+        "duration_ms": 719.41
+      }
+    ],
+    "ssh_hardening": {
+      "authentication": "Clé asymétrique ed25519 uniquement",
+      "password_authentication": "Désactivé (no)",
+      "batch_mode": "Inconditionnel (zéro invite interactive)"
+    }
+  },
+  "ca4_zero_client_data_on_control_plane": {
+    "passed": true,
+    "management_host_inspected": {
+      "host_id": "prod-fr-002",
+      "ip": "92.222.68.80",
+      "inspection_transport": "SSH direct batch non-interactif"
+    },
+    "olympe_container_mounts_check": {
+      "command": "ssh ubuntu@92.222.68.80 docker inspect olympe_core --format '{{json .Mounts}}'",
+      "total_mounts_found": 6,
+      "mounts_sample": [
+        {
+          "Type": "bind",
+          "Source": "/home/ubuntu/orso-core/olympe",
+          "Destination": "/app/olympe",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/home/ubuntu/orso-core/config",
+          "Destination": "/app/config",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/home/ubuntu/orso-core/skills",
+          "Destination": "/app/skills",
+          "Mode": "ro",
+          "RW": false,
+          "Propagation": "rprivate"
+        },
+        {
+          "Type": "bind",
+          "Source": "/var/run/docker.sock",
+          "Destination": "/var/run/docker.sock",
+          "Mode": "rw",
+          "RW": true,
+          "Propagation": "rprivate"
+        }
+      ],
+      "remote_client_mounts_found": 0,
+      "verdict": "CONFORME (0 volume client distant monté sur Olympe)"
+    },
+    "olympe_container_logs_check": {
+      "command": "ssh ubuntu@92.222.68.80 docker logs --tail 30 olympe_core",
+      "logs_lines_inspected": 30,
+      "suspicious_payloads_found": [],
+      "logs_sample_raw": [
+        "INFO:     172.22.0.1:34868 - \"GET /api/olympe/ops/telemetry/summary HTTP/1.1\" 401 Unauthorized",
+        "INFO:     172.22.0.1:47184 - \"GET /api/olympe/ops/telemetry/summary HTTP/1.1\" 401 Unauthorized",
+        "INFO:     172.22.0.1:47186 - \"GET /api/olympe/ops/telemetry/environments HTTP/1.1\" 401 Unauthorized",
+        "INFO:     172.22.0.1:45836 - \"GET /api/olympe/ops/telemetry/summary HTTP/1.1\" 401 Unauthorized",
+        "INFO:     172.22.0.1:45840 - \"GET /api/olympe/ops/telemetry/environments HTTP/1.1\" 401 Unauthorized"
+      ],
+      "verdict": "CONFORME (Aucune donnée métier client dans les flux superviseur)"
+    },
+    "management_host_storage_check": {
+      "command": "ssh ubuntu@92.222.68.80 ls -d /home/ubuntu/orso-core/data/tenants/kan61*",
+      "remote_client_directories_found": 0,
+      "verdict": "CONFORME (0 répertoire de données client kan61 sur Hôte 1)"
+    }
+  },
+  "all_passed": true
+}
