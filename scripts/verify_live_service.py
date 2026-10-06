@@ -118,7 +118,7 @@ ssh_cmd = [
     "\""
 ]
 
-res = subprocess.run(ssh_cmd, capture_output=True, text=True)
+res = subprocess.run(ssh_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
 print(res.stdout)
 if res.stderr:
     print("Stderr:", res.stderr)
