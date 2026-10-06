@@ -98,20 +98,43 @@ sudo systemctl restart ssh
 *Point de vigilance Jarvis (PO) : Les règles NAT de Docker contournent le pare-feu UFW standard. Il est impératif d'injecter la règle dans la chaîne `DOCKER-USER` pour protéger les ports applicatifs des conteneurs clients.*
 
 ### 5.1 Restriction des ports conteneurs clients (9200-9299) à l'Hôte Ingress
-Exécuter sur le nouvel hôte :
+
+**Étape 5.1.0 - Lire le nom de l'interface réseau.** Les commandes ci-dessous ne protègent que si l'interface nommée est bien celle qui reçoit le trafic Internet. La lire sur l'hôte, ne pas la supposer :
+
+```bash
+ip -br link        # prod-fr-003 : ens3
+```
+
+Un nom d'interface absent de l'hôte (`eth0` sur `prod-fr-003`) est accepté par iptables sans erreur, ne matche aucun paquet et se lit comme actif dans `iptables -S` : c'est un contrôle décoratif, vérifié le 06/10/2026.
+
+**Étape 5.1.1 - Installer la persistance avant de sauvegarder.** `netfilter-persistent` n'est pas présent par défaut : sans ce paquet, la commande de sauvegarde échoue et les règles disparaissent au premier redémarrage.
+
+```bash
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
+```
+
+**Étape 5.1.2 - Poser les règles.** Remplacer `<iface>` par l'interface lue à l'étape 5.1.0 :
+
 ```bash
 # Autoriser les connexions établies
 sudo iptables -I DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
 # Autoriser EXCLUSIVEMENT l'Hôte 1 (Ingress / Olympe : 92.222.68.80) sur la plage 9200-9299
-sudo iptables -A DOCKER-USER -i eth0 -p tcp --dport 9200:9299 -s 92.222.68.80 -j ACCEPT
+sudo iptables -A DOCKER-USER -i <iface> -p tcp --dport 9200:9299 -s 92.222.68.80 -j ACCEPT
 
 # Bloquer toute autre source Internet sur cette plage
-sudo iptables -A DOCKER-USER -i eth0 -p tcp --dport 9200:9299 -j DROP
-
-# Sauvegarder les règles de manière persistante
-sudo netfilter-persistent save
+sudo iptables -A DOCKER-USER -i <iface> -p tcp --dport 9200:9299 -j DROP
 ```
+
+**Étape 5.1.3 - Sauvegarder, puis vérifier le contenu de la chaîne.** La vérification porte sur ce que contient la chaîne, jamais sur le code retour des commandes : une chaîne qui rend `-N DOCKER-USER` seul signifie que rien n'est posé.
+
+```bash
+sudo netfilter-persistent save
+sudo iptables -S DOCKER-USER                    # doit rendre les trois règles, dans cet ordre
+sudo grep -A3 'DOCKER-USER' /etc/iptables/rules.v4
+```
+
+**Portée et limite.** Le filtre évalue le port de destination *après* la traduction NAT de Docker : la plage 9200-9299 ne protège que si le port publié sur l'hôte porte le même numéro que le port du conteneur. Le régime de publication des ports clients est porté par KAN-97.
 
 ---
 
