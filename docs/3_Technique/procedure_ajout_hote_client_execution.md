@@ -107,10 +107,11 @@ ip -br link        # prod-fr-003 : ens3
 
 Un nom d'interface absent de l'hôte (`eth0` sur `prod-fr-003`) est accepté par iptables sans erreur, ne matche aucun paquet et se lit comme actif dans `iptables -S` : c'est un contrôle décoratif, vérifié le 06/10/2026.
 
-**Étape 5.1.1 - Installer la persistance avant de sauvegarder.** `netfilter-persistent` n'est pas présent par défaut : sans ce paquet, la commande de sauvegarde échoue et les règles disparaissent au premier redémarrage.
+**Étape 5.1.1 - Vérifier la persistance.** Le paquet `iptables-persistent` est un prérequis de l'étape 2.1 ; le contrôler ici, car `netfilter-persistent save` échoue sans lui et la règle disparaît au premier redémarrage. Le cas s'est présenté sur `prod-fr-003`, provisionné avant l'inscription de cette ligne : le poser si le contrôle est négatif.
 
 ```bash
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
+dpkg -l iptables-persistent | tail -1                                          # doit rendre ii iptables-persistent
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent     # si absent
 ```
 
 **Étape 5.1.2 - Poser les règles.** Remplacer `<iface>` par l'interface lue à l'étape 5.1.0 :
