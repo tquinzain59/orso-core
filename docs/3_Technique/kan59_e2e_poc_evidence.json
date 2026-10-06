@@ -1,6 +1,6 @@
 {
   "ticket": "KAN-59",
-  "timestamp": "2026-10-02T10:35:48.366470+00:00",
+  "timestamp": "2026-10-06T17:06:39.312023+00:00",
   "host_identity": {
     "hostname": "vps-9df18c40",
     "system": "Linux",
@@ -9,7 +9,9 @@
     "machine": "x86_64",
     "cpu_count": 2,
     "physical_memory_total_mb": 3814,
-    "physical_memory_available_mb": 3204
+    "physical_memory_available_mb": 3192,
+    "target_host_ip": "57.131.196.106",
+    "target_host_name": "vps-9df18c40.vps.ovh.net"
   },
   "engine_image": {
     "image": "ghcr.io/tquinzain59/orso-engine:latest",
@@ -22,7 +24,7 @@
     "cpu_source": "host_physical_probe:cpu_count (2.0 vCPUs x 2.0 overcommit = 4.0 vCPUs)",
     "system_total_mem_mb": 3814,
     "reserved_system_mem_mb": 512,
-    "flavor_name": "d2-4"
+    "flavor_name": null
   },
   "ca1_quotas_enforced": {
     "passed": true,
@@ -114,49 +116,49 @@
       "poc-alpha": {
         "container_name": "orso_client_poc_alpha",
         "idle_measurements": {
-          "docker_stats_mem": "60.82MiB / 512MiB",
-          "docker_stats_cpu": "51.14%",
-          "docker_stats_pids": 3,
+          "docker_stats_mem": "131.6MiB / 512MiB",
+          "docker_stats_cpu": "0.28%",
+          "docker_stats_pids": 6,
           "active_pids_count": 2,
-          "measured_idle_memory_mb": 60.82
+          "measured_idle_memory_mb": 131.6
         },
         "active_measurements": {
-          "docker_stats_mem": "134.3MiB / 512MiB",
-          "docker_stats_cpu": "49.58%",
-          "docker_stats_pids": 4,
-          "measured_active_memory_mb": 134.3
+          "docker_stats_mem": "197.8MiB / 512MiB",
+          "docker_stats_cpu": "0.43%",
+          "docker_stats_pids": 7,
+          "measured_active_memory_mb": 197.8
         }
       },
       "poc-beta": {
         "container_name": "orso_client_poc_beta",
         "idle_measurements": {
-          "docker_stats_mem": "1016KiB / 1GiB",
-          "docker_stats_cpu": "0.00%",
-          "docker_stats_pids": 2,
-          "active_pids_count": 1,
-          "measured_idle_memory_mb": 0.99
+          "docker_stats_mem": "129.3MiB / 1GiB",
+          "docker_stats_cpu": "0.56%",
+          "docker_stats_pids": 6,
+          "active_pids_count": 2,
+          "measured_idle_memory_mb": 129.3
         },
         "active_measurements": {
-          "docker_stats_mem": "93.65MiB / 1GiB",
-          "docker_stats_cpu": "71.02%",
-          "docker_stats_pids": 3,
-          "measured_active_memory_mb": 93.65
+          "docker_stats_mem": "129.2MiB / 1GiB",
+          "docker_stats_cpu": "5.28%",
+          "docker_stats_pids": 6,
+          "measured_active_memory_mb": 129.2
         }
       },
       "poc-gamma": {
         "container_name": "orso_client_poc_gamma",
         "idle_measurements": {
-          "docker_stats_mem": "60.5MiB / 1.5GiB",
-          "docker_stats_cpu": "74.13%",
-          "docker_stats_pids": 3,
+          "docker_stats_mem": "129.1MiB / 1.5GiB",
+          "docker_stats_cpu": "0.20%",
+          "docker_stats_pids": 6,
           "active_pids_count": 2,
-          "measured_idle_memory_mb": 60.5
+          "measured_idle_memory_mb": 129.1
         },
         "active_measurements": {
-          "docker_stats_mem": "139.4MiB / 1.5GiB",
-          "docker_stats_cpu": "71.13%",
-          "docker_stats_pids": 4,
-          "measured_active_memory_mb": 139.4
+          "docker_stats_mem": "129.3MiB / 1.5GiB",
+          "docker_stats_cpu": "4.89%",
+          "docker_stats_pids": 6,
+          "measured_active_memory_mb": 129.3
         }
       }
     },
