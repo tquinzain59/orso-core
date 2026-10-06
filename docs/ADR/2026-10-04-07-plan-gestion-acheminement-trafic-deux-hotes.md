@@ -74,7 +74,7 @@ Trois options d'accès ont été analysées pour permettre au superviseur Olympe
 
   **Effet** : seules les connexions TCP issues de l'adresse IP publique de l'Hôte 1 sont autorisées à atteindre les conteneurs clients sur l'Hôte 2 ; toute tentative d'accès direct depuis une autre IP Internet est rejetée en silence (`DROP`). Mesure du 06/10/2026, depuis un hôte tiers : un port publié dans la plage reste muet (attente de 6 s, SYN comptés par la règle `DROP`), un port publié hors plage répond en 0,02 s.
 
-  **Persistance** : la règle est enregistrée dans `/etc/iptables/rules.v4` et rechargée au démarrage par `netfilter-persistent` (`systemctl is-enabled netfilter-persistent` rend `enabled`). Le paquet `iptables-persistent` doit être installé au préalable : la procédure le supposait sans le nommer, et `prod-fr-003` ne l'avait pas.
+  **Persistance** : la règle est enregistrée dans `/etc/iptables/rules.v4` et rechargée au démarrage par `netfilter-persistent` (`systemctl is-enabled netfilter-persistent` rend `enabled`). Elle suppose le paquet `iptables-persistent`, que la procédure d'ajout d'hôte prévoit dans ses prérequis (section 2.1) ; `prod-fr-003` ne l'avait pas, l'écart étant à l'exécution du provisionnement et non au document. Sur un hôte qui l'a manqué, `netfilter-persistent save` échoue et la règle disparaît au premier redémarrage.
 
   **Limite** : le filtre évalue le port de destination *après* la traduction NAT de Docker. La règle ne couvre donc la plage que si le port publié sur l'hôte porte le même numéro que le port du conteneur. Le régime de publication des ports clients est porté par KAN-97 ; toute correspondance différente y rendra la règle inopérante.
 
