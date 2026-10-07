@@ -59,27 +59,42 @@ def test_ca2_agents_md_contains_all_operational_essentials():
     assert "Règle de Survie lors des Synchronisations Amont" in content
 
 
+def _get_agents_md_content(local_dir_name: str, github_repo: str) -> str:
+    local_file = DEV_PROJECTS / local_dir_name / "AGENTS.md"
+    if local_file.is_file():
+        return local_file.read_text(encoding="utf-8")
+
+    # Fallback pour exécution en runner CI isolé
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    headers = {"User-Agent": "Orso-CI"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+        headers["Accept"] = "application/vnd.github.raw"
+        url = f"https://api.github.com/repos/{github_repo}/contents/AGENTS.md"
+    else:
+        url = f"https://raw.githubusercontent.com/{github_repo}/main/AGENTS.md"
+
+    import urllib.request
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return resp.read().decode("utf-8")
+
+
 def test_ca3_and_ca7_multi_depots_entry_points():
     """CA3 & CA7 : Vérifie que tous les dépôts Orso (orso-site, orso-app, orso-docs)
     disposent de leur point d'entrée AGENTS.md explicite renvoyant vers la Page 26."""
-    # 1. orso-site (Site_Hermes-core)
-    site_agents = DEV_PROJECTS / "Site_Hermes-core" / "AGENTS.md"
-    assert site_agents.exists(), "orso-site doit comporter un point d'entrée AGENTS.md"
-    site_content = site_agents.read_text(encoding="utf-8")
+    # 1. orso-site (Site_Hermes-core / tquinzain59/orso-site)
+    site_content = _get_agents_md_content("Site_Hermes-core", "tquinzain59/orso-site")
     assert "Page Confluence 26 - Charte globale du développeur Orso agents" in site_content
     assert "KAN-<n>-<slug>" in site_content
 
-    # 2. orso-app (App_Hermes Core)
-    app_agents = DEV_PROJECTS / "App_Hermes Core" / "AGENTS.md"
-    assert app_agents.exists(), "orso-app doit comporter un point d'entrée AGENTS.md"
-    app_content = app_agents.read_text(encoding="utf-8")
+    # 2. orso-app (App_Hermes Core / tquinzain59/App_Hermes-core)
+    app_content = _get_agents_md_content("App_Hermes Core", "tquinzain59/App_Hermes-core")
     assert "Page Confluence 26 - Charte globale du développeur Orso agents" in app_content
     assert "KAN-<n>-<slug>" in app_content
 
-    # 3. orso-docs (hermes-core)
-    docs_agents = DEV_PROJECTS / "hermes-core" / "AGENTS.md"
-    assert docs_agents.exists(), "orso-docs doit comporter une note d'interface AGENTS.md"
-    docs_content = docs_agents.read_text(encoding="utf-8")
+    # 3. orso-docs (hermes-core / tquinzain59/hermes-core)
+    docs_content = _get_agents_md_content("hermes-core", "tquinzain59/hermes-core")
     assert "Page Confluence 26 - Charte globale du développeur Orso agents" in docs_content
     assert "Confluence est la source de vérité unique" in docs_content
 
