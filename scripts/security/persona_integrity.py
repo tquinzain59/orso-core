@@ -137,9 +137,20 @@ def find_rogue_personas(
             pass
 
     # 2. Scan récursif des racines inscriptibles
-    default_roots = [Path("/app/data"), Path("./data")]
+    default_roots: List[Path] = []
+    if Path("/app/data").is_dir():
+        default_roots.append(Path("/app/data"))
+    if env_hermes_home and Path(env_hermes_home).is_dir():
+        default_roots.append(Path(env_hermes_home))
     if p_dir.parent.is_dir() and (p_dir.parent / "data").is_dir():
         default_roots.append(p_dir.parent / "data")
+
+    # Si profiles_dir pointe vers le dépôt local, scanner le ./data local
+    try:
+        if p_dir.resolve() == Path("./profiles").resolve() and Path("./data").is_dir():
+            default_roots.append(Path("./data"))
+    except Exception:
+        pass
 
     roots_to_scan = [Path(r) for r in scan_roots] if scan_roots is not None else default_roots
     for root_path in roots_to_scan:
@@ -148,6 +159,10 @@ def find_rogue_personas(
         try:
             for item in root_path.rglob("*"):
                 if item.is_file() and item.name.lower() == "soul.md" and not item.is_symlink():
+                    norm_path = str(item).replace("\\", "/")
+                    # Ignorer les profils de sous-espaces clients structurés (data/spaces/<slug>/profiles/...)
+                    if "/spaces/" in norm_path and "/profiles/" in norm_path:
+                        continue
                     try:
                         resolved = item.resolve()
                         if resolved in checked_paths:
@@ -488,7 +503,10 @@ def monitor_loop(
             print("🚨 [PER-INTEGRITY-002] Arrêt d'urgence immédiat du conteneur de l'agent compromis.", file=sys.stderr)
             try:
                 # Écriture d'un drapeau d'urgence sur disque
-                Path("/app/data/EMERGENCY_STOP_PER_INTEGRITY").touch(exist_ok=True)
+                flag_path = Path("/app/data/EMERGENCY_STOP_PER_INTEGRITY")
+                if not flag_path.parent.is_dir():
+                    flag_path = Path(resolve_telemetry_dir()).parent / "EMERGENCY_STOP_PER_INTEGRITY"
+                flag_path.touch(exist_ok=True)
             except Exception:
                 pass
 

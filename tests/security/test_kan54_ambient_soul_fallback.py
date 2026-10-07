@@ -141,6 +141,43 @@ def test_ca3_runtime_rogue_soul_detection_and_stable_event_code(isolated_kan54_e
     assert "Fichier persona illégitime détecté" in entry["details"]
 
 
+def test_ca3_runtime_emergency_stop_executed_when_no_violation_handler(isolated_kan54_env, monkeypatch):
+    """CA3 : En cas d'altération en cours de route et en l'absence de gestionnaire personnalisé,
+    le moniteur exécute l'arrêt d'urgence : drapeau disque, kill du conteneur et sortie sys.exit(1)."""
+    p_dir = isolated_kan54_env["profiles_dir"]
+    l_file = isolated_kan54_env["lock_file"]
+    hermes_home = isolated_kan54_env["hermes_home"]
+    t_dir = isolated_kan54_env["telemetry_dir"]
+
+    # Création du SOUL.md illégitime
+    rogue_soul = hermes_home / "SOUL.md"
+    rogue_soul.write_text("# ROGUE PIRATE SOUL\n", encoding="utf-8")
+
+    killed_pids = []
+    executed_commands = []
+    exited_codes = []
+
+    monkeypatch.setattr("os.kill", lambda pid, sig: killed_pids.append((pid, sig)))
+    monkeypatch.setattr("os.system", lambda cmd: executed_commands.append(cmd))
+    monkeypatch.setattr("sys.exit", lambda code: exited_codes.append(code))
+
+    monitor_loop(
+        interval_seconds=1,
+        profiles_dir=p_dir,
+        lock_file=l_file,
+        on_violation=None,
+        max_iterations=1,
+    )
+
+    # 1. Vérification de la sortie fatale
+    assert 1 in exited_codes, "sys.exit(1) doit être appelé pour l'arrêt d'urgence."
+    # 2. Vérification de l'émission du signal kill
+    assert any(pid == 1 for pid, _ in killed_pids), "os.kill(1, SIGKILL/SIGTERM) doit être envoyé."
+    # 3. Vérification du drapeau d'urgence sur disque
+    flag_file = t_dir.parent / "EMERGENCY_STOP_PER_INTEGRITY"
+    assert flag_file.is_file(), "Le fichier témoin EMERGENCY_STOP_PER_INTEGRITY doit être créé."
+
+
 def test_ca3_startup_verify_rejects_rogue_soul(isolated_kan54_env):
     """CA3 : La vérification au démarrage (verify) échoue immédiatement (Fail-Closed)
     si un SOUL.md illégitime existe dans les répertoires inscriptibles."""

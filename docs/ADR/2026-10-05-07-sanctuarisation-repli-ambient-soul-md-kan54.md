@@ -87,3 +87,11 @@ Le dispositif complet de KAN-33 demeure intact et vérifié :
 - Montage Docker `:ro` et permissions strictes `root:root` `0444` sur `/app/profiles`.
 - Purge préventive au démarrage dans `docker/orso-entrypoint.sh`.
 - Garde-fou d'écriture dans `tools/file_tools_write_guards.py`.
+
+---
+
+## 7. Décision Formelle sur la Remontée Upstream (Hermès Amont)
+
+Sous le régime de l'Option A (Garde-fou à la marge en Zone B), la question d'une remontée amont (`NousResearch/hermes-agent`) est formellement tranchée : **Sans objet et non retenue**.
+La présence de `~/.hermes/SOUL.md` est le comportement nominal du mode standalone d'Hermès. Tenter de conditionner ou de restreindre ce repli dans le cœur upstream dégraderait l'usage individuel open source. Les garanties de sécurité et d'étanchéité multi-tenant relèvent souverainement de la plateforme Orso en Zone B.
+
