@@ -32,6 +32,7 @@ from olympe.auth import (
     get_auth_audit_events,
 )
 from olympe.lifecycle_manager import DockerLifecycleManager
+from olympe.mailer import brevo_mailer
 from olympe.ops_manager import OpsManager
 from olympe.ovh_client import ovh_client
 from olympe.telemetry_client import telemetry_client
@@ -857,6 +858,86 @@ async def get_telemetry_alerts(agent_id: Optional[int] = None, admin: Dict[str, 
     """Retourne les alertes actives."""
     alerts = telemetry_client.get_alerts(resolved=False, agent_id=agent_id)
     return {"alerts": alerts, "count": len(alerts)}
+
+
+# ── Emails Transactionnels Brevo & Invitations (KAN-104) ──────────────────────
+
+class SendEmailRequest(BaseModel):
+    recipient_email: str
+    template_id: str
+    params: Optional[Dict[str, Any]] = None
+    tenant_slug: Optional[str] = None
+
+
+class GenerateInvitationRequest(BaseModel):
+    tenant_slug: str
+    recipient_email: str
+    tenant_name: Optional[str] = None
+    contact_name: Optional[str] = None
+    send_email: bool = True
+    base_url: Optional[str] = None
+
+
+class ValidateInvitationRequest(BaseModel):
+    token: str
+
+
+@app.post("/api/olympe/mailer/send")
+async def send_transactional_email_endpoint(
+    req: SendEmailRequest,
+    actor: Dict[str, Any] = Depends(require_ops_actor("tenants:write")),
+):
+    """Achemine un email transactionnel via Brevo (templates M1 à M4)."""
+    try:
+        res = brevo_mailer.send_transactional_email(
+            recipient_email=req.recipient_email,
+            template_id=req.template_id,
+            params=req.params or {},
+            tenant_slug=req.tenant_slug,
+        )
+        return res
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/olympe/mailer/logs")
+async def get_mailer_logs_endpoint(
+    tenant_slug: Optional[str] = None,
+    recipient_email: Optional[str] = None,
+    limit: int = 50,
+    actor: Dict[str, Any] = Depends(require_ops_actor("tenants:read")),
+):
+    """Retourne l'historique d'audit des emails envoyés via Brevo."""
+    logs = brevo_mailer.get_email_logs(tenant_slug=tenant_slug, recipient_email=recipient_email, limit=limit)
+    return {"logs": logs, "count": len(logs)}
+
+
+@app.post("/api/olympe/invitations/generate")
+async def generate_invitation_endpoint(
+    req: GenerateInvitationRequest,
+    actor: Dict[str, Any] = Depends(require_ops_actor("tenants:write")),
+):
+    """Génère un jeton d'invitation sécurisé 7 jours et expédie optionnellement l'email M3."""
+    if req.send_email:
+        res = brevo_mailer.send_activation_invitation(
+            tenant_slug=req.tenant_slug,
+            recipient_email=req.recipient_email,
+            tenant_name=req.tenant_name or req.tenant_slug,
+            contact_name=req.contact_name or "Client",
+            base_url=req.base_url,
+        )
+        return res
+    token = brevo_mailer.generate_invitation_token(req.tenant_slug, req.recipient_email)
+    return {"success": True, "invitation_token": token, "tenant_slug": req.tenant_slug}
+
+
+@app.post("/api/olympe/invitations/validate")
+async def validate_invitation_endpoint(req: ValidateInvitationRequest):
+    """Valide et consomme un jeton d'invitation (usage unique strict)."""
+    result = brevo_mailer.validate_and_consume_token(req.token)
+    if not result.get("valid"):
+        raise HTTPException(status_code=400, detail=result)
+    return result
 
 
 # ── Service Frontend SPA Orso Ops (apps/ui-ops/dist) ─────────────────────────
