@@ -49,6 +49,18 @@ export interface ChatMessage {
   isStreaming?: boolean;
 }
 
+export interface ClientSession {
+  session_id: string;
+  tenant_id: string;
+  user_id: string;
+  agent_id: string;
+  title: string;
+  title_source: 'auto' | 'user' | string;
+  dossier_metier_id?: string | null;
+  created_at: number;
+  last_activity_at: number;
+}
+
 export type IntegrationCategory = 'erp' | 'mail' | 'legal' | 'crm' | 'tools';
 
 export interface Integration {

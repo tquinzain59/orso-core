@@ -9,6 +9,7 @@ import {
   UserProfileData,
   BillingData,
   ClientSubscription,
+  ClientSession,
 } from '@/types';
 import { ORSO_AGENTS, SAMPLE_INTEGRATIONS, SAMPLE_CHANNELS } from '@/lib/data';
 
@@ -502,9 +503,15 @@ export async function executeClientAction(
 }
 
 export async function getSessionMessages(
-  agentId: AgentId,
+  agentId: AgentId | string,
   sessionId: string
-): Promise<{ session_id: string; agent_id: string; messages: { role: 'user' | 'assistant'; content: string }[]; count: number }> {
+): Promise<{
+  session_id: string;
+  agent_id: string;
+  messages: { role: 'user' | 'assistant'; content: string; timestamp?: string; agent_id?: string }[];
+  count: number;
+  retention_days?: number;
+}> {
   const base = getApiBaseUrl();
   const res = await fetch(`${base}/api/client/chat/messages?agent_id=${encodeURIComponent(agentId)}&session_id=${encodeURIComponent(sessionId)}`, {
     headers: {
@@ -515,6 +522,72 @@ export async function getSessionMessages(
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
     throw new Error(`Erreur récupération messages (${res.status}): ${errText || res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function listClientSessions(
+  agentId?: string,
+  limit: number = 50,
+  offset: number = 0
+): Promise<{ sessions: ClientSession[]; total: number; retention_days: number }> {
+  const base = getApiBaseUrl();
+  const query = new URLSearchParams();
+  if (agentId) query.append('agent_id', agentId);
+  query.append('limit', String(limit));
+  query.append('offset', String(offset));
+
+  const res = await fetch(`${base}/api/client/chat/sessions?${query.toString()}`, {
+    method: 'GET',
+    headers: {
+      'Accept': 'application/json',
+      ...getAuthHeaders(),
+    },
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Erreur récupération historique (${res.status}): ${errText || res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function renameClientSession(
+  sessionId: string,
+  title: string,
+  agentId: string = 'jerome'
+): Promise<ClientSession> {
+  const base = getApiBaseUrl();
+  const res = await fetch(`${base}/api/client/chat/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      ...getAuthHeaders(),
+    },
+    body: JSON.stringify({ title, agent_id: agentId }),
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Erreur renommage conversation (${res.status}): ${errText || res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function deleteClientSession(
+  sessionId: string,
+  agentId: string = 'jerome'
+): Promise<{ success: boolean; session_id: string; deleted: boolean }> {
+  const base = getApiBaseUrl();
+  const res = await fetch(`${base}/api/client/chat/sessions/${encodeURIComponent(sessionId)}?agent_id=${encodeURIComponent(agentId)}`, {
+    method: 'DELETE',
+    headers: {
+      'Accept': 'application/json',
+      ...getAuthHeaders(),
+    },
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Erreur suppression conversation (${res.status}): ${errText || res.statusText}`);
   }
   return res.json();
 }

@@ -1837,9 +1837,22 @@ def _init_client_sessions_db() -> None:
                 user_id TEXT NOT NULL,
                 agent_id TEXT NOT NULL,
                 created_at REAL NOT NULL,
-                last_activity_at REAL NOT NULL
+                last_activity_at REAL NOT NULL,
+                title TEXT,
+                title_source TEXT DEFAULT 'auto',
+                dossier_metier_id TEXT
             );"""
         )
+        # Migration idempotente des colonnes si table pré-existante
+        cursor = conn.cursor()
+        cols = {row[1] for row in cursor.execute("PRAGMA table_info(client_chat_sessions)").fetchall()}
+        if "title" not in cols:
+            cursor.execute("ALTER TABLE client_chat_sessions ADD COLUMN title TEXT")
+        if "title_source" not in cols:
+            cursor.execute("ALTER TABLE client_chat_sessions ADD COLUMN title_source TEXT DEFAULT 'auto'")
+        if "dossier_metier_id" not in cols:
+            cursor.execute("ALTER TABLE client_chat_sessions ADD COLUMN dossier_metier_id TEXT")
+
         conn.execute(
             """CREATE INDEX IF NOT EXISTS idx_client_sessions_lookup
                ON client_chat_sessions(tenant_id, user_id, agent_id);"""
@@ -1852,6 +1865,7 @@ def _verify_and_bind_client_session(
     tenant_id: str,
     user_id: str,
     agent_id: str,
+    create_if_missing: bool = True,
 ) -> None:
     """Valide l'identifiant de session et garantit l'étanchéité tenant / utilisateur / agent (CA5, CA6, CA7)."""
     cleaned_sid = (session_id or "").strip()
@@ -1867,12 +1881,12 @@ def _verify_and_bind_client_session(
         with sqlite3.connect(str(db_path), timeout=15.0) as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT tenant_id, user_id, agent_id FROM client_chat_sessions WHERE session_id = ?",
+                "SELECT tenant_id, user_id, agent_id, last_activity_at FROM client_chat_sessions WHERE session_id = ?",
                 (cleaned_sid,),
             )
             row = cursor.fetchone()
             if row is not None:
-                existing_tenant, existing_user, existing_agent = row[0], row[1], row[2]
+                existing_tenant, existing_user, existing_agent, last_act = row[0], row[1], row[2], row[3]
                 if existing_tenant != tenant_id or existing_user != user_id:
                     raise HTTPException(
                         status_code=403,
@@ -1886,18 +1900,33 @@ def _verify_and_bind_client_session(
                             f"et ne peut pas être utilisée avec l'agent '{agent_id}'."
                         ),
                     )
-                cursor.execute(
-                    "UPDATE client_chat_sessions SET last_activity_at = ? WHERE session_id = ?",
-                    (time.time(), cleaned_sid),
-                )
-                conn.commit()
+
+                # Contrôle de rétention absolue 60 jours (CA7)
+                retention_limit = 60.0 * 86400.0
+                if (time.time() - (last_act or 0)) > retention_limit:
+                    raise HTTPException(
+                        status_code=410,
+                        detail="Cette conversation a expiré selon la politique de conservation de 60 jours.",
+                    )
+
+                if create_if_missing:
+                    cursor.execute(
+                        "UPDATE client_chat_sessions SET last_activity_at = ? WHERE session_id = ?",
+                        (time.time(), cleaned_sid),
+                    )
+                    conn.commit()
             else:
+                if not create_if_missing:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="Conversation introuvable ou supprimée.",
+                    )
                 now = time.time()
                 cursor.execute(
                     """INSERT INTO client_chat_sessions
-                       (session_id, tenant_id, user_id, agent_id, created_at, last_activity_at)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
-                    (cleaned_sid, tenant_id, user_id, agent_id, now, now),
+                       (session_id, tenant_id, user_id, agent_id, created_at, last_activity_at, title, title_source)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (cleaned_sid, tenant_id, user_id, agent_id, now, now, None, "auto"),
                 )
                 conn.commit()
     except HTTPException:
@@ -2146,7 +2175,15 @@ async def client_chat_endpoint(
         tenant_id=tenant_id,
         user_id=user_id,
         agent_id=req.agent_id,
+        create_if_missing=True,
     )
+
+    # Titrage automatique du moteur borné à 6 mots (KAN-83)
+    try:
+        from hermes_cli.web_routers.client_chat_history import maybe_auto_title_session
+        maybe_auto_title_session(session_id=cleaned_sid, prompt=req.message, agent_id=req.agent_id)
+    except Exception as _e:
+        _log.debug("Auto-title error: %s", _e)
 
     return StreamingResponse(
         _chat_stream_generator(agent_id=req.agent_id, prompt=req.message, session_id=cleaned_sid),
@@ -2182,6 +2219,7 @@ async def get_client_session_messages(
         tenant_id=tenant_id,
         user_id=user_id,
         agent_id=agent_id,
+        create_if_missing=False,
     )
 
     profile_dir = _find_profile_dir(agent_id)
@@ -2192,27 +2230,44 @@ async def get_client_session_messages(
 
     state_db_file = agent_home / "state.db"
     if not state_db_file.exists():
-        return {"session_id": cleaned_sid, "agent_id": agent_id, "messages": [], "count": 0}
+        return {"session_id": cleaned_sid, "agent_id": agent_id, "messages": [], "count": 0, "retention_days": 60}
 
     try:
         from hermes_state import SessionDB
         sdb = SessionDB(state_db_file)
-        raw_msgs = sdb.get_messages_as_conversation(cleaned_sid) or []
+        raw_msgs = sdb.get_messages_as_conversation(
+            cleaned_sid,
+            include_ancestors=True,
+            include_compacted=True,
+        ) or []
         formatted = []
         for m in raw_msgs:
             c = m.get("content")
             if isinstance(c, dict):
                 c = c.get("content", "")
-            formatted.append({"role": m.get("role"), "content": c})
+            ts = m.get("timestamp")
+            ts_str = None
+            if ts:
+                try:
+                    ts_str = datetime.fromtimestamp(ts).strftime("%H:%M")
+                except Exception:
+                    ts_str = str(ts)
+            formatted.append({
+                "role": m.get("role"),
+                "content": c,
+                "timestamp": ts_str,
+                "agent_id": agent_id if m.get("role") == "assistant" else None,
+            })
         return {
             "session_id": cleaned_sid,
             "agent_id": agent_id,
             "messages": formatted,
             "count": len(formatted),
+            "retention_days": 60,
         }
     except Exception as e:
         _log.warning("Erreur consultation messages session %s: %s", cleaned_sid, e)
-        return {"session_id": cleaned_sid, "agent_id": agent_id, "messages": [], "count": 0}
+        return {"session_id": cleaned_sid, "agent_id": agent_id, "messages": [], "count": 0, "retention_days": 60}
 
 
 # ── Endpoint d'exécution des Actions (1-Click) ──────────────────────────────
@@ -3078,3 +3133,12 @@ async def serve_client_assets(full_path: str):
     if index_file.is_file():
         return FileResponse(index_file)
     return JSONResponse({"error": "File not found"}, status_code=404)
+
+
+# Montage des routes d'historique des conversations (KAN-83)
+try:
+    from hermes_cli.web_routers.client_chat_history import history_router
+    router.include_router(history_router)
+except Exception as _err:
+    _log.error("Erreur montage history_router dans client_ui.py: %s", _err)
+
