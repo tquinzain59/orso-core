@@ -12,7 +12,7 @@ inputs:
     required: true
   attempts:
     description: Max attempts before giving up.
-    default: "3"
+    default: "5"
   delay:
     description: Seconds to wait between attempts.
     default: "10"

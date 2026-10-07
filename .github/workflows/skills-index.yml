@@ -39,7 +39,7 @@ jobs:
       - name: Install dependencies
         uses: ./.github/actions/retry
         with:
-          command: pip install httpx==0.28.1 pyyaml==6.0.2
+          command: pip install --retries 5 httpx==0.28.1 pyyaml==6.0.2
 
       - name: Build skills index
         env:

@@ -346,22 +346,28 @@ def _run_one_file(
         file, pytest_args, repo_root, file_timeout
     )
     attempt = 0
+    attempt_outputs = [output]
     while rc != 0 and attempt < retries:
         attempt += 1
-        first_output = output
         file, rc, output, summary, subproc_wall2 = _run_one_file_once(
             file, pytest_args, repo_root, file_timeout
         )
         subproc_wall += subproc_wall2
+        attempt_outputs.append(output)
         if rc == 0:
             output = (
                 f"⚠ FLAKY: failed on attempt 1, passed on retry "
                 f"(attempt {attempt + 1}). Fix the flake — do not ignore this.\n"
-                f"--- first-attempt output ---\n{first_output}\n"
+                f"--- first-attempt output ---\n{attempt_outputs[0]}\n"
                 f"--- retry output ---\n{output}"
             )
             with _flaky_lock:
                 _FLAKY_RESULTS.append((file, output))
+        elif attempt >= retries:
+            combined_history = []
+            for idx, out in enumerate(attempt_outputs):
+                combined_history.append(f"--- Attempt {idx + 1} output ---\n{out.rstrip()}")
+            output = "\n\n".join(combined_history)
     return file, rc, output, summary, subproc_wall
 
 
@@ -824,6 +830,12 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--fail-on-flake",
+        action="store_true",
+        default=os.environ.get("HERMES_FAIL_ON_FLAKE") == "1",
+        help="Exit non-zero if any test file required a retry to pass (strict determinism enforcement).",
+    )
+    parser.add_argument(
         "--slice",
         metavar="I/N",
         help=(
@@ -1185,8 +1197,11 @@ def main() -> int:
         print()
         print(f"=== ⚠ {len(_FLAKY_RESULTS)} FLAKY file{'s' if len(_FLAKY_RESULTS) != 1 else ''} (failed once, passed on retry — fix these) ===")
         for f, output in _FLAKY_RESULTS:
-            print(f"  {_format_file(f, repo_root)}")
+            formatted_file = _format_file(f, repo_root)
+            print(f"  {formatted_file}")
             print(output.rstrip())
+            if os.environ.get("GITHUB_ACTIONS") == "true":
+                print(f"::warning file={formatted_file}::FLAKY test file: failed on initial run, passed on retry.")
 
     # Save durations for future --slice runs. Each slice writes its own
     # partial test_durations.json; a CI merge step joins them later.
@@ -1253,6 +1268,11 @@ def main() -> int:
         return 1
 
     if no_tests_ran_at_all:
+        return 1
+
+    if _FLAKY_RESULTS and args.fail_on_flake:
+        print()
+        print(f"=== ❌ FAILED: --fail-on-flake is active and {len(_FLAKY_RESULTS)} flaky test file(s) were detected ===")
         return 1
 
     return 0
