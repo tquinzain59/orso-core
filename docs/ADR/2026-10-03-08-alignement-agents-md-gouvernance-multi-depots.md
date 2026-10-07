@@ -1,4 +1,4 @@
-# ADR 07 : Alignement d'AGENTS.md, Emplacement des Règles de Gouvernance et Survie Amont Multi-Dépôts
+# ADR 08 : Alignement d'AGENTS.md, Emplacement des Règles de Gouvernance et Survie Amont Multi-Dépôts
 
 - **Date** : 03 octobre 2026
 - **Auteurs** : Antigravity (Architecte-Développeur), validé par Thibaut (Sponsor & PO)
