@@ -34,11 +34,14 @@ COUNT=5
 # path so a symlinked or copied script still reads the checkout it lives in
 # rather than whatever repo the caller happens to be standing in.
 REPO=""
+ALLOW_EMPTY=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --count)
       [ "$#" -ge 2 ] || { echo 'error: --count needs a value' >&2; exit 1; }
       COUNT="$2"; shift 2 ;;
+    --allow-empty)
+      ALLOW_EMPTY=true; shift ;;
     --repo)
       [ "$#" -ge 2 ] || { echo 'error: --repo needs a value' >&2; exit 1; }
       REPO="$2"; shift 2 ;;
@@ -66,14 +69,29 @@ fi
 
 # sort -V orders v2026.4.8 before v2026.4.13 (numeric), which a plain
 # lexicographic sort gets wrong.
-mapfile -t tags < <(
-  git -C "$REPO" tag --list 'v*' \
-    | grep -E '^v[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?$' \
-    | sort -V
-)
+tags=()
+if command -v mapfile >/dev/null 2>&1; then
+  mapfile -t tags < <(
+    git -C "$REPO" tag --list 'v*' \
+      | grep -E '^v[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?$' \
+      | sort -V
+  )
+else
+  while IFS= read -r tag; do
+    [ -n "$tag" ] && tags+=("$tag")
+  done < <(
+    git -C "$REPO" tag --list 'v*' \
+      | grep -E '^v[0-9]{4}\.[0-9]+\.[0-9]+(\.[0-9]+)?$' \
+      | sort -V
+  )
+fi
 
 total="${#tags[@]}"
 if [ "$total" -eq 0 ]; then
+  if [ "$ALLOW_EMPTY" = true ]; then
+    printf '[]\n'
+    exit 0
+  fi
   echo "error: no release tags found in $REPO" >&2
   echo '       A shallow clone has no tags: fetch with tags (actions/checkout' >&2
   echo '       with fetch-depth: 0, or fetch-tags: true).' >&2
