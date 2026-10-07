@@ -1243,6 +1243,115 @@ async def client_status():
     }
 
 
+@router.get("/api/client/environment/status")
+async def get_client_environment_status(
+    request: Request,
+    tenant_slug: Optional[str] = None,
+):
+    """Retourne l'état de préparation de l'environnement client (KAN-105).
+
+    Permet à l'écran d'attente client (<EnvironmentWaitingView />) de sonder l'état de l'infrastructure :
+    - 'ready' : Conteneur instancié et opérationnel.
+    - 'provisioning' : En cours d'assemblage / déploiement (avec pourcentage et étape).
+    - 'sleeping' : Conteneur en veille (wake-on-demand disponible).
+    - 'error' : Erreur de déploiement (avec détail et contact support).
+    - 'not_configured' : Aucun environnement trouvé.
+    """
+    token_slug = None
+    token_tenant_id = None
+    app_meta = {}
+
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        token_str = auth_header.split(" ", 1)[1].strip()
+        try:
+            import jwt
+            payload = jwt.decode(token_str, options={"verify_signature": False})
+            token_slug = (
+                payload.get("tenant_slug")
+                or payload.get("slug")
+                or payload.get("app_metadata", {}).get("tenant_slug")
+            )
+            token_tenant_id = payload.get("tenant_id") or payload.get("app_metadata", {}).get("tenant_id")
+            app_meta = payload.get("app_metadata", {})
+        except Exception:
+            pass
+
+    resolved_slug = (
+        tenant_slug
+        or token_slug
+        or os.environ.get("ORSO_CLIENT_SLUG")
+        or (request.query_params.get("tenant_slug") if hasattr(request, "query_params") else None)
+    )
+
+    supabase_url = os.environ.get("SUPABASE_URL", "").strip()
+    service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+
+    target_env = _resolve_target_environment(
+        token_tenant_id=token_tenant_id,
+        token_tenant_slug=resolved_slug,
+        app_meta=app_meta,
+        supabase_url=supabase_url,
+        service_key=service_key,
+    )
+
+    if target_env:
+        raw_status = (target_env.get("environment_status") or target_env.get("status") or "ready").lower().strip()
+        if raw_status in ("ready", "running", "active", "online"):
+            return {
+                "status": "ready",
+                "ready": True,
+                "tenant_slug": resolved_slug,
+                "message": "Environnement opérationnel.",
+                "agents_enabled": target_env.get("agents_enabled", ["jerome"]),
+                "instance_url": target_env.get("instance_url"),
+            }
+        elif raw_status in ("provisioning", "pending", "pending_setup", "creating", "starting"):
+            return {
+                "status": "provisioning",
+                "ready": False,
+                "tenant_slug": resolved_slug,
+                "progress_percent": target_env.get("progress_percent", 55),
+                "current_step": target_env.get("current_step", "Déploiement des conteneurs isolés et calibration des agents IA"),
+                "estimated_remaining_seconds": target_env.get("estimated_remaining_seconds", 35),
+                "message": "Votre environnement souverain est en cours de création.",
+            }
+        elif raw_status in ("sleeping", "paused", "stopped"):
+            return {
+                "status": "sleeping",
+                "ready": False,
+                "tenant_slug": resolved_slug,
+                "wake_endpoint": f"/api/olympe/tenants/wake/{resolved_slug}" if resolved_slug else None,
+                "message": "Votre environnement sécurisé est en veille.",
+            }
+        elif raw_status in ("error", "failed", "incident"):
+            return {
+                "status": "error",
+                "ready": False,
+                "tenant_slug": resolved_slug,
+                "error_details": target_env.get("error_details", "Une anomalie est survenue pendant le déploiement."),
+                "support_contact": "support@orso-agents.fr",
+                "message": "Incident de provisionnement détecté.",
+            }
+
+    # Mode autonome / démo / local
+    if os.environ.get("ORSO_DEMO_MODE") == "1" or not os.environ.get("SUPABASE_URL"):
+        return {
+            "status": "ready",
+            "ready": True,
+            "tenant_slug": resolved_slug or "demo-tenant",
+            "message": "Environnement prêt (mode autonome / démo).",
+            "agents_enabled": ["jerome", "lucas", "clara", "victor"],
+        }
+
+    return {
+        "status": "not_configured",
+        "ready": False,
+        "tenant_slug": resolved_slug,
+        "message": "Aucun environnement n'est configuré pour cette organisation.",
+    }
+
+
 def _resolve_target_environment(
     token_tenant_id: Optional[str],
     token_tenant_slug: Optional[str],

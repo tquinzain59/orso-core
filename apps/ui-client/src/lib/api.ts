@@ -78,6 +78,55 @@ export async function wakeTenantEnvironment(tenantSlug?: string): Promise<{ succ
   }
 }
 
+export interface EnvironmentStatusResponse {
+  status: 'ready' | 'provisioning' | 'sleeping' | 'error' | 'not_configured';
+  ready: boolean;
+  tenant_slug?: string;
+  progress_percent?: number;
+  current_step?: string;
+  estimated_remaining_seconds?: number;
+  wake_endpoint?: string;
+  error_details?: string;
+  support_contact?: string;
+  message?: string;
+}
+
+export async function fetchEnvironmentStatus(tenantSlug?: string): Promise<EnvironmentStatusResponse> {
+  const token = getClientToken();
+  const slug = tenantSlug || getTenantSlug();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  const query = slug ? `?tenant_slug=${encodeURIComponent(slug)}` : '';
+  const url = `${getApiBaseUrl()}/api/client/environment/status${query}`;
+
+  try {
+    const res = await fetch(url, { headers });
+    if (!res.ok) {
+      if (res.status === 404) {
+        return {
+          status: 'not_configured',
+          ready: false,
+          message: 'Environnement non trouvé.',
+        };
+      }
+      throw new Error(`HTTP ${res.status}`);
+    }
+    return await res.json();
+  } catch (err: any) {
+    return {
+      status: 'error',
+      ready: false,
+      message: err?.message || 'Impossible de joindre le superviseur.',
+      error_details: 'Erreur réseau lors de la consultation du statut.',
+    };
+  }
+}
+
 // ── Gestion des Tokens & Authentification Client ────────────────────────────
 
 const TOKEN_STORAGE_KEY = 'orso_client_token';
@@ -195,6 +244,7 @@ export async function checkSessionMe(): Promise<{
   authenticated: boolean;
   user?: any;
   tenant?: any;
+  target_environment?: any;
 }> {
   const token = getClientToken();
   if (!token) return { authenticated: false };
@@ -214,6 +264,7 @@ export async function checkSessionMe(): Promise<{
         authenticated: true,
         user: data.user,
         tenant: data.tenant,
+        target_environment: data.target_environment,
       };
     }
     if (res.status === 401 || res.status === 403) {

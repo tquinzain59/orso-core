@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Agent, AgentId } from '@/types';
 import { AgentSelector } from '@/components/AgentSelector';
+import { EnvironmentWaitingView } from '@/components/EnvironmentWaitingView';
 import { ChatView } from '@/pages/ChatView';
 import { IntegrationsView } from '@/pages/IntegrationsView';
 import { ChannelsView } from '@/pages/ChannelsView';
@@ -48,6 +49,8 @@ export const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [authLoading, setAuthLoading] = useState<boolean>(true);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [environmentStatus, setEnvironmentStatus] = useState<string>('ready');
+  const [tenantSlug, setTenantSlug] = useState<string>('');
   const [isWaking, setIsWaking] = useState<boolean>(false);
   const [wakeMessage, setWakeMessage] = useState<string>('');
   const [loginEmail, setLoginEmail] = useState<string>('');
@@ -119,7 +122,15 @@ export const App: React.FC = () => {
       if (res.authenticated && res.user) {
         const isUserAdmin = resolveIsAdmin(res.user, res.tenant);
         setIsAuthenticated(true);
-        setCompanyName(res.tenant?.name || res.tenant?.tenant_slug?.replace('-', ' ').toUpperCase() || 'Financia Solutions');
+        const slug = res.tenant?.tenant_slug || res.tenant?.slug || '';
+        setTenantSlug(slug);
+        const envStatus = res.target_environment?.environment_status || res.target_environment?.status;
+        if (envStatus && envStatus !== 'ready' && envStatus !== 'active' && envStatus !== 'running') {
+          setEnvironmentStatus(envStatus);
+        } else {
+          setEnvironmentStatus('ready');
+        }
+        setCompanyName(res.tenant?.name || slug.replace('-', ' ').toUpperCase() || 'Financia Solutions');
         setUserName(res.user?.full_name || res.user?.email || 'Sophie Martin');
         setUserRole(res.user?.job_title || (isUserAdmin ? 'DAF' : 'Collaborateur'));
         setIsAdmin(isUserAdmin);
@@ -129,6 +140,14 @@ export const App: React.FC = () => {
         if (stored && getClientToken()) {
           const isUserAdmin = resolveIsAdmin(stored, stored?.tenant);
           setIsAuthenticated(true);
+          const slug = stored?.tenant?.tenant_slug || stored?.tenant_slug || '';
+          setTenantSlug(slug);
+          const envStatus = stored?.target_environment?.environment_status || stored?.target_environment?.status;
+          if (envStatus && envStatus !== 'ready' && envStatus !== 'active' && envStatus !== 'running') {
+            setEnvironmentStatus(envStatus);
+          } else {
+            setEnvironmentStatus('ready');
+          }
           setCompanyName(stored.tenant?.name || 'Financia Solutions');
           setUserName(stored.full_name || 'Sophie Martin');
           setUserRole(stored.job_title || (isUserAdmin ? 'DAF' : 'Collaborateur'));
@@ -156,11 +175,19 @@ export const App: React.FC = () => {
 
     if (res.success && res.user) {
       const envStatus = res.target_environment?.environment_status || res.target_environment?.status;
+      const slug = res.tenant?.tenant_slug || res.tenant?.slug || '';
+      setTenantSlug(slug);
+      if (envStatus && envStatus !== 'ready' && envStatus !== 'active' && envStatus !== 'running') {
+        setEnvironmentStatus(envStatus);
+      } else {
+        setEnvironmentStatus('ready');
+      }
+
       if (envStatus === 'sleeping') {
         setIsWaking(true);
         setWakeMessage("Votre environnement sécurisé est en veille. Olympe procède à son réveil...");
         try {
-          await wakeTenantEnvironment(res.tenant?.tenant_slug);
+          await wakeTenantEnvironment(slug);
         } catch {}
         setIsWaking(false);
       }
@@ -175,7 +202,7 @@ export const App: React.FC = () => {
       const isUserAdmin = resolveIsAdmin(res.user, res.tenant);
       setIsAuthenticated(true);
       setShowLoginModal(false);
-      setCompanyName(res.tenant?.name || res.tenant?.tenant_slug?.replace('-', ' ').toUpperCase() || 'Organisation');
+      setCompanyName(res.tenant?.name || slug.replace('-', ' ').toUpperCase() || 'Organisation');
       setUserName(res.user?.full_name || res.user?.email || 'Utilisateur');
       setUserRole(res.user?.job_title || (isUserAdmin ? 'DAF' : 'Collaborateur'));
       setIsAdmin(isUserAdmin);
@@ -191,6 +218,8 @@ export const App: React.FC = () => {
     await logoutClient();
     setIsAuthenticated(false);
     setIsAdmin(false);
+    setEnvironmentStatus('ready');
+    setTenantSlug('');
     setCompanyName('');
     setUserName('');
     setUserRole('');
@@ -198,6 +227,21 @@ export const App: React.FC = () => {
     setActiveAgentId('jerome');
     setShowLoginModal(true);
   };
+
+  if (isAuthenticated && environmentStatus !== 'ready') {
+    return (
+      <EnvironmentWaitingView
+        tenantSlug={tenantSlug}
+        tenantName={companyName}
+        initialStatus={environmentStatus}
+        onReady={() => {
+          setEnvironmentStatus('ready');
+          refreshAgents();
+        }}
+        onLogout={handleLogout}
+      />
+    );
+  }
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-950 text-slate-100 font-sans select-none">
