@@ -108,3 +108,12 @@ Si une régression ou un comportement inattendu apparaissait :
    ```bash
    docker restart <container_id>
    ```
+
+---
+
+## 7. Arbitrage sur la Remontée Upstream (Projet Hermes Amont)
+
+Conformément à la demande de clarification de la recette PO :
+> **Décision formelle** : *La remontée du défaut sous forme de patch ou de PR vers le projet amont `NousResearch/hermes-agent` est déclarée **SANS OBJET** et écartée sous le régime de l'Option A.*
+> *Dans l'écosystème d'origine d'Hermès (usage CLI personnel sur machine locale), la présence de `~/.hermes/SOUL.md` est le comportement nominal attendu pour un profil par défaut. Pousser une restriction amont briserait l'usage standalone de la communauté. L'étanchéité multi-tenant et la sanctuarisation souveraine sont exclusivement des exigences de plateforme B2B portées par Orso en Zone B (gardes-fous d'écriture, détection Fail-Closed au boot et surveillance active `PER-INTEGRITY-004`).*
+
