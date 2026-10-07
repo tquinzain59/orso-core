@@ -1,0 +1,55 @@
+agent_id: jerome
+agent_name: "Jérôme"
+role: "Credit Manager & Recouvrement"
+department: "Trésorerie & Finance"
+autonomy_level: "supervised"
+
+approval_policy:
+  approval_channel: "client_portal"
+  auto_reject_after_hours: 48
+  allowed_roles:
+    - "admin"
+    - "superadmin"
+    - "daf"
+    - "direction"
+
+supervised_actions:
+  - action_type: "send_email"
+    description: "Expédition d'un email de relance de paiement ou mise en demeure à un débiteur"
+    risk_level: "high"
+    requires_approval: true
+    timeout_hours: 48
+
+  - action_type: "send_sms"
+    description: "Envoi d'un SMS d'alerte de facture en retard"
+    risk_level: "high"
+    requires_approval: true
+    timeout_hours: 48
+
+  - action_type: "apply_discount"
+    description: "Accord d'escompte, remise de pénalités ou étalement de dette > 30 jours"
+    risk_level: "critical"
+    requires_approval: true
+    timeout_hours: 24
+
+  - action_type: "legal_escalation"
+    description: "Transmission du dossier à un huissier de justice ou cabinet de recouvrement contentieux"
+    risk_level: "critical"
+    requires_approval: true
+    timeout_hours: 72
+
+autonomous_actions:
+  - action_type: "analyze_aged_balance"
+    description: "Lecture et calcul de la balance âgée et des retards"
+    risk_level: "low"
+    requires_approval: false
+
+  - action_type: "draft_reminder"
+    description: "Rédaction d'un projet de relance amiable sans expédition"
+    risk_level: "low"
+    requires_approval: false
+
+  - action_type: "score_siren"
+    description: "Vérification légale BODACC / INPI / solvabilité"
+    risk_level: "low"
+    requires_approval: false

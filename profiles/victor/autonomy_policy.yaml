@@ -1,0 +1,43 @@
+agent_id: victor
+agent_name: "Victor"
+role: "Veille & Marchés Publics"
+department: "Appels d'Offres"
+autonomy_level: "supervised"
+
+approval_policy:
+  approval_channel: "client_portal"
+  auto_reject_after_hours: 72
+  allowed_roles:
+    - "admin"
+    - "superadmin"
+    - "direction"
+
+supervised_actions:
+  - action_type: "submit_bid"
+    description: "Dépôt d'une offre ou pli dématérialisé sur une plateforme acheteur (marches-publics.gouv)"
+    risk_level: "critical"
+    requires_approval: true
+    timeout_hours: 24
+
+  - action_type: "sign_document"
+    description: "Apposition d'une signature électronique sur un acte d'engagement (DC1/DC2)"
+    risk_level: "critical"
+    requires_approval: true
+    timeout_hours: 24
+
+  - action_type: "contact_buyer"
+    description: "Envoi d'une question ou demande de précision à l'acheteur public"
+    risk_level: "high"
+    requires_approval: true
+    timeout_hours: 48
+
+autonomous_actions:
+  - action_type: "monitor_boamp"
+    description: "Surveillance des avis de marchés et alertes mots-clés"
+    risk_level: "low"
+    requires_approval: false
+
+  - action_type: "parse_dce"
+    description: "Analyse documentaire et extraction des critères de sélection"
+    risk_level: "low"
+    requires_approval: false
