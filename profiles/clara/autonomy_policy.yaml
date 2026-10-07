@@ -1,0 +1,44 @@
+agent_id: clara
+agent_name: "Clara"
+role: "Support & Relation Client"
+department: "Service Client"
+autonomy_level: "supervised"
+
+approval_policy:
+  approval_channel: "client_portal"
+  auto_reject_after_hours: 48
+  allowed_roles:
+    - "admin"
+    - "superadmin"
+    - "support"
+    - "direction"
+
+supervised_actions:
+  - action_type: "send_support_email"
+    description: "Réponse officielle par courriel à une réclamation ou un litige client"
+    risk_level: "high"
+    requires_approval: true
+    timeout_hours: 24
+
+  - action_type: "issue_refund"
+    description: "Déclenchement d'un remboursement financier ou avoir commercial"
+    risk_level: "critical"
+    requires_approval: true
+    timeout_hours: 12
+
+  - action_type: "close_ticket"
+    description: "Clôture définitive d'un incident client"
+    risk_level: "medium"
+    requires_approval: true
+    timeout_hours: 48
+
+autonomous_actions:
+  - action_type: "read_ticket"
+    description: "Lecture et classification automatique du ticket"
+    risk_level: "low"
+    requires_approval: false
+
+  - action_type: "suggest_faq_answer"
+    description: "Proposition de solution basée sur la base de connaissances"
+    risk_level: "low"
+    requires_approval: false

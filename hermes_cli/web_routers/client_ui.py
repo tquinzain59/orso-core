@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from pydantic import BaseModel, Field
 
 from hermes_cli.dashboard_auth.client_jwt import verify_client_access
+from olympe.autonomy_manager import autonomy_manager
 
 _log = logging.getLogger("hermes_cli.client_ui")
 router = APIRouter()
@@ -73,6 +74,11 @@ class PasswordUpdateRequest(BaseModel):
 
 class SubscriptionUpdateRequest(BaseModel):
     tier_id: str = Field(..., description="Identifiant du palier sélectionné (1_agent, 2_agents, 3_agents, 4_agents)")
+
+
+class ActionDecisionRequest(BaseModel):
+    comment: Optional[str] = Field(default=None, description="Commentaire de validation ou instruction")
+    reason: Optional[str] = Field(default=None, description="Motif de refus ou rejet")
 
 
 # ── Catalogues des Agents, Interfaces et Données Métier en Base ────────────
@@ -2217,6 +2223,73 @@ async def get_client_session_messages(
 
 # ── Endpoint d'exécution des Actions (1-Click) ──────────────────────────────
 
+@router.get("/api/client/actions/pending")
+async def list_pending_actions(
+    auth: Dict[str, Any] = Depends(verify_client_access),
+):
+    """Retourne la liste des actions sensibles en attente d'approbation humaine (HITL KAN-106)."""
+    tenant = dict(auth.get("tenant") or auth.get("app_metadata") or {})
+    slug = tenant.get("tenant_slug") or os.environ.get("ORSO_CLIENT_SLUG")
+    actions = autonomy_manager.get_pending_actions(tenant_slug=slug, status="PENDING")
+    return {"actions": actions, "count": len(actions)}
+
+
+@router.get("/api/client/actions/policy/{agent_id}")
+async def get_agent_autonomy_policy(
+    agent_id: str,
+    auth: Dict[str, Any] = Depends(verify_client_access),
+):
+    """Retourne la politique d'autonomie configurée pour un agent donné (KAN-106)."""
+    policy = autonomy_manager.get_policy(agent_id)
+    return {"policy": policy}
+
+
+@router.post("/api/client/actions/{action_id}/approve")
+async def approve_client_action(
+    action_id: str,
+    req: Optional[ActionDecisionRequest] = None,
+    auth: Dict[str, Any] = Depends(verify_client_access),
+):
+    """Approuve formellement une action sensible (passage à APPROVED, KAN-106)."""
+    user_id = str(auth.get("sub") or auth.get("email") or "user")
+    role = str(auth.get("role") or auth.get("user_metadata", {}).get("role") or "admin")
+    comment = req.comment if req else None
+
+    try:
+        res = autonomy_manager.approve_action(
+            action_id=action_id,
+            reviewer_id=user_id,
+            reviewer_role=role,
+            comment=comment,
+        )
+        return res
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/api/client/actions/{action_id}/reject")
+async def reject_client_action(
+    action_id: str,
+    req: Optional[ActionDecisionRequest] = None,
+    auth: Dict[str, Any] = Depends(verify_client_access),
+):
+    """Rejette une action sensible (passage à REJECTED sans effet de bord, KAN-106)."""
+    user_id = str(auth.get("sub") or auth.get("email") or "user")
+    role = str(auth.get("role") or auth.get("user_metadata", {}).get("role") or "admin")
+    reason = (req.reason if req else None) or (req.comment if req else None)
+
+    try:
+        res = autonomy_manager.reject_action(
+            action_id=action_id,
+            reviewer_id=user_id,
+            reviewer_role=role,
+            reason=reason,
+        )
+        return res
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @router.post("/api/client/actions/execute")
 async def execute_client_action(
     req: ActionExecuteRequest,
@@ -2226,9 +2299,35 @@ async def execute_client_action(
     now = datetime.now().strftime("%d/%m/%Y à %H:%M")
     _log.info("Action client reçue : %s sur carte %s par %s", req.action_id, req.card_id, req.agent_id)
 
+    user_id = str(auth.get("sub") or auth.get("email") or "user")
+    role = str(auth.get("role") or auth.get("user_metadata", {}).get("role") or "admin")
+    tenant = dict(auth.get("tenant") or auth.get("app_metadata") or {})
+    tenant_slug = tenant.get("tenant_slug") or os.environ.get("ORSO_CLIENT_SLUG")
+
     if req.action_id == "send":
         dest = req.recipient or "le destinataire"
         msg = f"Relance envoyée avec succès à {dest} ({now})"
+
+        # Audit et traçabilité HITL
+        autonomy_manager.create_pending_action(
+            action_id=req.card_id,
+            agent_id=req.agent_id,
+            action_type="send_email" if "@" in (req.recipient or "") else "send",
+            tenant_slug=tenant_slug,
+            recipient=req.recipient,
+            draft_content=req.draft,
+            metadata=req.metadata,
+        )
+        autonomy_manager.approve_action(
+            action_id=req.card_id,
+            reviewer_id=user_id,
+            reviewer_role=role,
+        )
+        autonomy_manager.mark_executed(
+            action_id=req.card_id,
+            result={"recipient": req.recipient, "timestamp": now, "message": msg},
+        )
+
         return {
             "success": True,
             "status": "executed",
@@ -2237,6 +2336,15 @@ async def execute_client_action(
             "timestamp": now,
         }
     elif req.action_id == "delay":
+        autonomy_manager.create_pending_action(
+            action_id=req.card_id,
+            agent_id=req.agent_id,
+            action_type="delay",
+            tenant_slug=tenant_slug,
+            recipient=req.recipient,
+            draft_content=req.draft,
+            metadata=req.metadata,
+        )
         return {
             "success": True,
             "status": "delayed",
@@ -2245,6 +2353,21 @@ async def execute_client_action(
             "timestamp": now,
         }
     elif req.action_id == "skip":
+        autonomy_manager.create_pending_action(
+            action_id=req.card_id,
+            agent_id=req.agent_id,
+            action_type="skip",
+            tenant_slug=tenant_slug,
+            recipient=req.recipient,
+            draft_content=req.draft,
+            metadata=req.metadata,
+        )
+        autonomy_manager.reject_action(
+            action_id=req.card_id,
+            reviewer_id=user_id,
+            reviewer_role=role,
+            reason="Classé sans suite par l'utilisateur",
+        )
         return {
             "success": True,
             "status": "cancelled",

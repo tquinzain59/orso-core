@@ -1,0 +1,44 @@
+agent_id: lucas
+agent_name: "Lucas"
+role: "Commercial & Prospection (SDR)"
+department: "Développement Commercial"
+autonomy_level: "supervised"
+
+approval_policy:
+  approval_channel: "client_portal"
+  auto_reject_after_hours: 48
+  allowed_roles:
+    - "admin"
+    - "superadmin"
+    - "commercial"
+    - "direction"
+
+supervised_actions:
+  - action_type: "send_outreach_email"
+    description: "Envoi d'un email de prospection à froid ou relance de lead"
+    risk_level: "high"
+    requires_approval: true
+    timeout_hours: 48
+
+  - action_type: "send_quote"
+    description: "Transmission d'une proposition commerciale ou d'un devis chiffré"
+    risk_level: "critical"
+    requires_approval: true
+    timeout_hours: 24
+
+  - action_type: "update_crm_deal"
+    description: "Modification du statut d'une opportunité ou clôture d'affaire dans le CRM"
+    risk_level: "medium"
+    requires_approval: true
+    timeout_hours: 48
+
+autonomous_actions:
+  - action_type: "search_prospects"
+    description: "Recherche et qualification de cibles B2B"
+    risk_level: "low"
+    requires_approval: false
+
+  - action_type: "draft_quote"
+    description: "Préparation d'un projet de devis"
+    risk_level: "low"
+    requires_approval: false
