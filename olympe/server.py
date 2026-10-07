@@ -11,7 +11,7 @@ import json
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from fastapi import Depends, FastAPI, HTTPException, Request, Security
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials
@@ -34,6 +34,7 @@ from olympe.auth import (
 from olympe.lifecycle_manager import DockerLifecycleManager
 from olympe.ops_manager import OpsManager
 from olympe.ovh_client import ovh_client
+from olympe.remote_host_client import RemoteDockerHostManager
 from olympe.telemetry_client import telemetry_client
 
 logging.basicConfig(level=logging.INFO)
@@ -56,6 +57,7 @@ app.add_middleware(
 
 manager = DockerLifecycleManager()
 ops_manager = OpsManager()
+remote_manager = RemoteDockerHostManager()
 
 @app.exception_handler(RuntimeError)
 async def runtime_error_handler(request: Request, exc: RuntimeError):
@@ -246,6 +248,8 @@ async def wake_tenant(tenant_slug: str, actor: Dict[str, Any] = Depends(require_
             status_code=status_code,
             detail=f"{err_msg} [{err_code}] [mode={mode}] [action_taken={action_taken}]",
         )
+    if res.get("success"):
+        remote_manager.register_tenant_route(tenant_slug, status="active")
     return res
 
 
@@ -257,6 +261,8 @@ async def suspend_tenant(tenant_slug: str, actor: Dict[str, Any] = Depends(requi
     res = manager.suspend_tenant(tenant_slug)
     if not res.get("success") and res.get("status") == "not_found":
         raise HTTPException(status_code=404, detail="Conteneur introuvable.")
+    if res.get("success"):
+        remote_manager.register_tenant_route(tenant_slug, status="sleeping")
     return res
 
 
@@ -305,6 +311,8 @@ async def provision_tenant(req: ProvisionRequest, admin: Dict[str, Any] = Depend
             status_code=status_code,
             detail=f"Provisioning refusé : {err_msg} [{err_code}] [mode={mode}] [action_taken={action_taken}]",
         )
+    if res.get("success"):
+        remote_manager.register_tenant_route(req.tenant_slug, status="active")
     return res
 
 
@@ -526,7 +534,12 @@ async def get_tenant(tenant_id: str, actor: Dict[str, Any] = Depends(require_ops
 async def delete_tenant(tenant_id: str, actor: Dict[str, Any] = Depends(require_ops_actor("tenants:teardown:sandbox"))):
     """Détruit proprement et de manière idempotente un tenant (restreint au périmètre sandbox - L3/CA2)."""
     check_sandbox_tenant_access(actor, tenant_id, ops_mgr=ops_manager)
-    return ops_manager.delete_tenant(tenant_id)
+    detail = ops_manager.get_tenant_detail(tenant_id) or {}
+    slug = detail.get("slug") or tenant_id
+    res = ops_manager.delete_tenant(tenant_id)
+    if slug:
+        remote_manager.unregister_tenant_route(slug)
+    return res
 
 
 @app.post("/api/olympe/ops/tenants/{tenant_id}/agents")
@@ -857,6 +870,104 @@ async def get_telemetry_alerts(agent_id: Optional[int] = None, admin: Dict[str, 
     """Retourne les alertes actives."""
     alerts = telemetry_client.get_alerts(resolved=False, agent_id=agent_id)
     return {"alerts": alerts, "count": len(alerts)}
+
+
+# ── Passerelle L7 Multi-Hôtes & Ingress Router (KAN-97) ──────────────────────
+
+@app.get("/api/olympe/ingress/routes")
+async def get_ingress_routing_table(actor: Dict[str, Any] = Depends(require_ops_actor("tenants:read"))):
+    """Retourne la table de routage L7 active de la flotte multi-hôtes (CA4 KAN-97)."""
+    return remote_manager.get_routing_table()
+
+
+@app.api_route(
+    "/api/olympe/gateway/t/{tenant_slug}/{subpath:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
+)
+async def proxy_tenant_l7_gateway(
+    tenant_slug: str,
+    subpath: str,
+    request: Request,
+):
+    """Achemine une requête HTTP cliente vers son conteneur dédié sur l'hôte d'exécution (KAN-97 CA1-CA4)."""
+    # 1. Vérification étanchéité de jeton (CA3)
+    auth_header = request.headers.get("authorization", "")
+    token_slug = None
+    if auth_header.startswith("Bearer "):
+        token_str = auth_header.split(" ", 1)[1].strip()
+        try:
+            import jwt
+            payload = jwt.decode(token_str, options={"verify_signature": False})
+            token_slug = (
+                payload.get("tenant_slug")
+                or payload.get("slug")
+                or payload.get("app_metadata", {}).get("tenant_slug")
+            )
+        except Exception:
+            pass
+
+    # Si le jeton porte une identité d'espace différente du slug demandé -> HTTP 403 (CA3)
+    if token_slug and token_slug != tenant_slug:
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "ERR_CROSS_TENANT_ACCESS_FORBIDDEN",
+                "message": (
+                    f"Accès refusé : le jeton pour l'espace '{token_slug}' "
+                    f"ne correspond pas à la route demandée '{tenant_slug}' (CA3 KAN-97)."
+                ),
+            },
+        )
+
+    # 2. Résolution dans la table de routage (CA2)
+    decision = remote_manager.authorize_and_resolve_slug(tenant_slug)
+    if not decision.get("allowed"):
+        status_code = 404 if decision.get("status") == "REJECTED_UNPROVISIONED" else 503
+        return JSONResponse(status_code=status_code, content=decision)
+
+    # 3. Acheminement L7 réel vers l'hôte et le port cible (CA1)
+    target_base = decision.get("target_url")
+    clean_subpath = subpath if subpath.startswith("/") else f"/{subpath}"
+    target_url = f"{target_base}{clean_subpath}"
+    if request.url.query:
+        target_url = f"{target_url}?{request.url.query}"
+
+    body = await request.body()
+    forward_headers = {k: v for k, v in request.headers.items() if k.lower() not in ("host", "content-length")}
+    forward_headers["host"] = f"localhost:{decision.get('port')}"
+    forward_headers["x-forwarded-for"] = request.client.host if request.client else "127.0.0.1"
+    forward_headers["x-forwarded-proto"] = request.url.scheme
+    forward_headers["x-tenant-slug"] = tenant_slug
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.request(
+                method=request.method,
+                url=target_url,
+                headers=forward_headers,
+                content=body,
+            )
+            excluded_resp_headers = {"content-length", "content-encoding", "transfer-encoding", "connection"}
+            resp_headers = {k: v for k, v in resp.headers.items() if k.lower() not in excluded_resp_headers}
+            resp_headers["x-orso-routed-host"] = str(decision.get("host_id", ""))
+            resp_headers["x-orso-routed-port"] = str(decision.get("port", ""))
+
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                headers=resp_headers,
+                media_type=resp.headers.get("content-type"),
+            )
+    except Exception as e:
+        _log.error("Échec de l'acheminement L7 vers %s: %s", target_url, e)
+        return JSONResponse(
+            status_code=502,
+            content={
+                "error": "ERR_GATEWAY_UPSTREAM_UNREACHABLE",
+                "message": f"Impossible de joindre l'espace client sur {target_url} : {e}",
+            },
+        )
 
 
 # ── Service Frontend SPA Orso Ops (apps/ui-ops/dist) ─────────────────────────
