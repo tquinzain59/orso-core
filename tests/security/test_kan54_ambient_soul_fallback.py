@@ -142,8 +142,11 @@ def test_ca3_runtime_rogue_soul_detection_and_stable_event_code(isolated_kan54_e
 
 
 def test_ca3_runtime_emergency_stop_executed_when_no_violation_handler(isolated_kan54_env, monkeypatch):
-    """CA3 : En cas d'altération en cours de route et en l'absence de gestionnaire personnalisé,
-    le moniteur exécute l'arrêt d'urgence : drapeau disque, kill du conteneur et sortie sys.exit(1)."""
+    """CA3 : Vérifie l'invocation ordonnée des primitives d'arrêt d'urgence par le moniteur
+    en cas d'altération en cours de route et en l'absence de gestionnaire personnalisé :
+    création du drapeau disque EMERGENCY_STOP_PER_INTEGRITY, commande d'arrêt, os.kill(1) et sys.exit(1).
+    Note méthodologique : Les primitives sont interceptées pour vérifier leur invocation effective
+    sans émettre de signal SIGKILL réel destructeur sur le processus du runner pytest."""
     p_dir = isolated_kan54_env["profiles_dir"]
     l_file = isolated_kan54_env["lock_file"]
     hermes_home = isolated_kan54_env["hermes_home"]
