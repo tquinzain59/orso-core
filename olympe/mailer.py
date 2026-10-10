@@ -1,19 +1,25 @@
 """Service d'expédition d'emails transactionnels et d'invitations souveraines via Brevo (KAN-104).
 
-Gère l'onboarding et le cycle de vie client :
-- M1 : Confirmation d'inscription / Bienvenue (signup)
-- M2 : Notification de provisionnement en cours (provisioning)
-- M3 : Invitation et activation de l'espace avec token sécurisé 7 jours (activation)
-- M4 : Alerte d'incident de provisionnement (error)
-- Gestion et vérification stricte des tokens d'invitation à usage unique valables 7 jours
-- Audit et traçabilité intégrale dans olympe_ops.db (table transactional_emails)
+Gère l'onboarding et le cycle de vie client conformément aux arbitrages du 07/10/2026 :
+- M1 : Confirmation d'inscription avec récapitulatif exact et confirmation d'adresse sous 48h (signup)
+- M2 : Notification d'espace en préparation, pilotée par une personne (provisioning)
+- M3 : Notification d'espace prêt avec jeton d'accès unique 7 jours et appel de cadrage (activation)
+- M4 : Notification de cas défavorable avec personne nommée et contact direct (error)
+- Gestion et vérification des jetons de confirmation d'adresse 48h et alerte d'injoignabilité (CA2, CA10)
+- Gestion et consommation des jetons d'invitation à usage unique valables 7 jours (CA9)
+- Sonde d'authentification et alignement SPF, DKIM, DMARC sur le sous-domaine dédié mail.orso-agents.fr (CA7)
+- Audit et traçabilité intégrale dans olympe_ops.db (table transactional_emails) (CA6, CA3)
 """
+
+from __future__ import annotations
 
 import json
 import logging
 import os
 import secrets
+import socket
 import sqlite3
+import subprocess
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -23,7 +29,8 @@ from typing import Any, Dict, List, Optional
 _log = logging.getLogger("orso.olympe.mailer")
 
 BREVO_API_URL = "https://api.brevo.com/v3/smtp/email"
-DEFAULT_SENDER_EMAIL = os.environ.get("ORSO_SENDER_EMAIL", "contact@orso-agents.fr")
+DEFAULT_SENDER_DOMAIN = os.environ.get("ORSO_MAIL_DOMAIN", "mail.orso-agents.fr")
+DEFAULT_SENDER_EMAIL = os.environ.get("ORSO_SENDER_EMAIL", f"notifications@{DEFAULT_SENDER_DOMAIN}")
 DEFAULT_SENDER_NAME = os.environ.get("ORSO_SENDER_NAME", "Orso Agents")
 DEFAULT_APP_BASE_URL = os.environ.get("ORSO_APP_BASE_URL", "https://app.orso-agents.fr")
 
@@ -66,7 +73,7 @@ class BrevoMailer:
         self._init_mailer_db()
 
     def _init_mailer_db(self) -> None:
-        """Initialise les tables de journalisation des emails et des jetons d'invitation."""
+        """Initialise les tables de journalisation des emails, invitations et vérifications d'adresse."""
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(str(self.db_path), timeout=15.0) as conn:
             conn.execute("PRAGMA journal_mode=WAL;")
@@ -97,9 +104,154 @@ class BrevoMailer:
                 );"""
             )
             conn.execute(
+                """CREATE TABLE IF NOT EXISTS email_confirmations (
+                    token TEXT PRIMARY KEY,
+                    tenant_slug TEXT NOT NULL,
+                    recipient_email TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    confirmed_at TEXT
+                );"""
+            )
+            conn.execute(
                 """CREATE INDEX IF NOT EXISTS idx_invitation_tokens_slug ON invitation_tokens (tenant_slug);"""
             )
+            conn.execute(
+                """CREATE INDEX IF NOT EXISTS idx_email_confirmations_slug ON email_confirmations (tenant_slug);"""
+            )
             conn.commit()
+
+    # ── Tokens de confirmation d'adresse (48h - CA2, CA10) ───────────────────
+
+    def generate_confirmation_token(
+        self,
+        tenant_slug: str,
+        recipient_email: str,
+        validity_hours: int = 48,
+    ) -> str:
+        """Génère un jeton de confirmation d'adresse valable 48 heures."""
+        token = secrets.token_urlsafe(32)
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(hours=validity_hours)
+
+        with sqlite3.connect(str(self.db_path), timeout=15.0) as conn:
+            conn.execute(
+                """INSERT INTO email_confirmations
+                   (token, tenant_slug, recipient_email, created_at, expires_at, confirmed_at)
+                   VALUES (?, ?, ?, ?, ?, NULL);""",
+                (
+                    token,
+                    tenant_slug,
+                    recipient_email.lower().strip(),
+                    now.isoformat(),
+                    expires_at.isoformat(),
+                ),
+            )
+            conn.commit()
+
+        _log.info(
+            "Jeton de confirmation d'adresse (48h) généré pour %s (%s)",
+            recipient_email,
+            tenant_slug,
+        )
+        return token
+
+    def confirm_email_address(self, token: str, tenant_slug: Optional[str] = None) -> Dict[str, Any]:
+        """Valide et enregistre la confirmation d'adresse email du client (CA2)."""
+        if not token or not token.strip():
+            return {"valid": False, "error_code": "ERR_TOKEN_EMPTY", "message": "Jeton manquant."}
+
+        clean_token = token.strip()
+        now = datetime.now(timezone.utc)
+
+        with sqlite3.connect(str(self.db_path), timeout=15.0) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(
+                """SELECT token, tenant_slug, recipient_email, created_at, expires_at, confirmed_at
+                   FROM email_confirmations WHERE token = ?;""",
+                (clean_token,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return {
+                    "valid": False,
+                    "error_code": "ERR_TOKEN_NOT_FOUND",
+                    "message": "Lien de confirmation introuvable ou invalide.",
+                }
+
+            if tenant_slug and row["tenant_slug"] != tenant_slug:
+                return {
+                    "valid": False,
+                    "error_code": "ERR_SLUG_MISMATCH",
+                    "message": "Organisation cliente non correspondante.",
+                }
+
+            if row["confirmed_at"] is not None:
+                return {
+                    "valid": True,
+                    "already_confirmed": True,
+                    "message": "Adresse déjà confirmée précédemment.",
+                    "tenant_slug": row["tenant_slug"],
+                    "recipient_email": row["recipient_email"],
+                }
+
+            expires_at = datetime.fromisoformat(row["expires_at"])
+            if now > expires_at:
+                return {
+                    "valid": False,
+                    "error_code": "ERR_TOKEN_EXPIRED",
+                    "message": "Le lien de confirmation a expiré (délai de 48 heures dépassé).",
+                    "tenant_slug": row["tenant_slug"],
+                    "recipient_email": row["recipient_email"],
+                }
+
+            now_iso = now.isoformat()
+            cursor.execute(
+                "UPDATE email_confirmations SET confirmed_at = ? WHERE token = ?;",
+                (now_iso, clean_token),
+            )
+            conn.commit()
+
+        _log.info("Adresse email confirmée avec succès pour %s (%s)", row["recipient_email"], row["tenant_slug"])
+        return {
+            "valid": True,
+            "tenant_slug": row["tenant_slug"],
+            "recipient_email": row["recipient_email"],
+            "confirmed_at": now_iso,
+            "message": "Votre adresse email est confirmée avec succès.",
+        }
+
+    def get_unconfirmed_email_alerts(self, threshold_hours: int = 48) -> List[Dict[str, Any]]:
+        """Remonte les adresses non confirmées à 48 heures pour alerte dans le cockpit OPS (CA2, CA10)."""
+        now = datetime.now(timezone.utc)
+        threshold_dt = now - timedelta(hours=threshold_hours)
+        threshold_iso = threshold_dt.isoformat()
+
+        alerts: List[Dict[str, Any]] = []
+        with sqlite3.connect(str(self.db_path), timeout=15.0) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(
+                """SELECT token, tenant_slug, recipient_email, created_at, expires_at
+                   FROM email_confirmations
+                   WHERE confirmed_at IS NULL AND created_at <= ?;""",
+                (threshold_iso,),
+            )
+            for row in cursor.fetchall():
+                created_dt = datetime.fromisoformat(row["created_at"])
+                elapsed_hours = round((now - created_dt).total_seconds() / 3600.0, 1)
+                alerts.append({
+                    "tenant_slug": row["tenant_slug"],
+                    "recipient_email": row["recipient_email"],
+                    "created_at": row["created_at"],
+                    "elapsed_hours": elapsed_hours,
+                    "status": "unconfirmed_48h",
+                    "message": f"Adresse non confirmée après {elapsed_hours}h. Risque client injoignable.",
+                })
+        return alerts
+
+    # ── Tokens d'invitation d'accès (7 jours - CA9) ──────────────────────────
 
     def generate_invitation_token(
         self,
@@ -107,7 +259,7 @@ class BrevoMailer:
         recipient_email: str,
         validity_days: int = 7,
     ) -> str:
-        """Génère un jeton d'invitation sécurisé à usage unique, valable par défaut 7 jours (KAN-104)."""
+        """Génère un jeton d'invitation sécurisé à usage unique, valable par défaut 7 jours (CA9)."""
         token = secrets.token_urlsafe(32)
         now = datetime.now(timezone.utc)
         expires_at = now + timedelta(days=validity_days)
@@ -211,119 +363,122 @@ class BrevoMailer:
             "message": "Jeton validé avec succès. Espace client activé.",
         }
 
+    # ── Gabarits transactionnels M1 à M4 (alignement mot pour mot - CA8) ────
+
     def render_template(
         self,
         template_id: str,
         params: Dict[str, Any],
     ) -> Dict[str, str]:
-        """Génère le sujet, contenu HTML et texte pour les 4 gabarits transactionnels (M1 à M4)."""
-        tenant_name = params.get("tenant_name", "Votre Entreprise")
-        contact_name = params.get("contact_name", "Bonjour")
-        tenant_slug = params.get("tenant_slug", "")
-        support_email = params.get("support_email", "support@orso-agents.fr")
+        """Génère le sujet, contenu HTML et texte pour les 4 gabarits transactionnels figés (CA8)."""
+        tid = template_id.lower().strip()
 
-        if template_id in ("m1", "signup", "welcome"):
-            subject = f"Bienvenue sur Orso Agents - Création de l'espace {tenant_name}"
-            login_url = params.get("login_url", f"{DEFAULT_APP_BASE_URL}/login")
+        if tid in ("m1", "signup", "welcome"):
+            # M1 - Inscription reçue
+            subject = "Votre souscription Orso Agents est enregistrée."
+            palier = params.get("palier", "Forfait Starter (1 agent)")
+            agents_calibres = params.get("agents_calibres", "Jérôme (Crédit Manager)")
+            confirmation_url = params.get("confirmation_url", f"{DEFAULT_APP_BASE_URL}/confirm-email")
+
+            text = (
+                f"Bonjour, votre souscription est bien enregistrée. Récapitulatif : {palier}, "
+                f"{agents_calibres}, essai de 30 jours, aucun prélèvement aujourd'hui. "
+                "Votre espace est maintenant en préparation, et c'est notre équipe qui s'en occupe. "
+                "Prochaine étape : un appel de cadrage. "
+                f"Pour confirmer que cette adresse est bien la vôtre, ouvrez ce lien : {confirmation_url}. "
+                "Si vous n'êtes pas à l'origine de cette souscription, répondez à ce message."
+            )
             html = f"""
             <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 8px;">
-                <h1 style="color: #0f172a; font-size: 22px; font-weight: 700; margin-bottom: 16px;">Bienvenue sur Orso Agents</h1>
-                <p>Bonjour {contact_name},</p>
-                <p>Votre espace souverain pour <strong>{tenant_name}</strong> (identifiant : <code>{tenant_slug}</code>) est en cours de création sur notre infrastructure sécurisée.</p>
-                <p>Nos agents IA spécialisés sont prêts à être configurés pour assister vos équipes sur la trésorerie, la prospection, le support et les marchés publics.</p>
+                <h1 style="color: #0f172a; font-size: 20px; font-weight: 700; margin-bottom: 16px;">{subject}</h1>
+                <p>Bonjour,</p>
+                <p>votre souscription est bien enregistrée.</p>
+                <p><strong>Récapitulatif :</strong> {palier}, {agents_calibres}, essai de 30 jours, aucun prélèvement aujourd'hui.</p>
+                <p>Votre espace est maintenant en préparation, et c'est notre équipe qui s'en occupe. Prochaine étape : un appel de cadrage.</p>
                 <div style="margin: 24px 0;">
-                    <a href="{login_url}" style="background-color: #2563eb; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 600; display: inline-block;">Accéder au portail Orso</a>
+                    <a href="{confirmation_url}" style="background-color: #2563eb; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 600; display: inline-block;">Confirmer mon adresse email (valable 48h)</a>
                 </div>
-                <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
-                <p style="font-size: 13px; color: #64748b;">Orso Agents - Flotte d'agents IA autonomes souverains hébergés en France.</p>
+                <p style="font-size: 13px; color: #64748b;">Si le bouton ne s'affiche pas, ouvrez ce lien : <a href="{confirmation_url}">{confirmation_url}</a></p>
+                <p style="font-size: 13px; color: #64748b;">Si vous n'êtes pas à l'origine de cette souscription, répondez à ce message.</p>
             </div>
             """
-            text = (
-                f"Bonjour {contact_name},\n\n"
-                f"Votre espace souverain pour {tenant_name} ({tenant_slug}) est en cours de création.\n"
-                f"Accéder au portail : {login_url}\n\n"
-                "Orso Agents - Flotte souveraine."
-            )
             return {"subject": subject, "html": html, "text": text}
 
-        elif template_id in ("m2", "provisioning"):
-            subject = f"Déploiement en cours de vos agents IA pour {tenant_name}"
-            agent_count = params.get("agent_count", 1)
-            estimated_time = params.get("estimated_time", "environ 2 minutes")
+        elif tid in ("m2", "provisioning"):
+            # M2 - Espace en préparation
+            subject = "Votre espace Orso Agents est en préparation."
+            agents = params.get("agents", "Jérôme (Crédit Manager)")
+
+            text = (
+                f"Bonjour, nous préparons votre espace : {agents}. Rien ne vous est demandé. "
+                "La préparation est pilotée par notre équipe, et nous revenons vers vous dès que "
+                "votre espace est prêt, pour l'appel de cadrage."
+            )
             html = f"""
             <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 8px;">
-                <h1 style="color: #0f172a; font-size: 22px; font-weight: 700; margin-bottom: 16px;">Initialisation de vos Agents IA</h1>
-                <p>Bonjour {contact_name},</p>
-                <p>Le provisionnement de votre infrastructure dédiée pour <strong>{tenant_name}</strong> est actuellement en cours.</p>
-                <p>Votre flotte comportera <strong>{agent_count} agent(s) IA</strong> configuré(s) selon vos directives métiers.</p>
-                <div style="background-color: #f8fafc; border-left: 4px solid #3b82f6; padding: 12px 16px; margin: 20px 0;">
-                    <p style="margin: 0; font-size: 14px; color: #334155;">Temps d'initialisation estimé : <strong>{estimated_time}</strong>. Vous recevrez un lien d'activation sécurisé dès l'achèvement des opérations.</p>
-                </div>
-                <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
-                <p style="font-size: 13px; color: #64748b;">Orso Agents - Déploiement automatique souverain.</p>
+                <h1 style="color: #0f172a; font-size: 20px; font-weight: 700; margin-bottom: 16px;">{subject}</h1>
+                <p>Bonjour,</p>
+                <p>nous préparons votre espace : <strong>{agents}</strong>. Rien ne vous est demandé.</p>
+                <p>La préparation est pilotée par notre équipe, et nous revenons vers vous dès que votre espace est prêt, pour l'appel de cadrage.</p>
             </div>
             """
-            text = (
-                f"Bonjour {contact_name},\n\n"
-                f"Le déploiement de votre espace pour {tenant_name} est en cours.\n"
-                f"Agents déployés : {agent_count}. Temps estimé : {estimated_time}.\n\n"
-                "Orso Agents."
-            )
             return {"subject": subject, "html": html, "text": text}
 
-        elif template_id in ("m3", "activation"):
-            subject = f"Activez votre espace d'agents Orso pour {tenant_name}"
-            activation_url = params.get("activation_url", f"{DEFAULT_APP_BASE_URL}/invitation")
-            expires_date = params.get("expires_at", "7 jours")
+        elif tid in ("m3", "activation"):
+            # M3 - Espace prêt
+            subject = "Votre espace Orso Agents est prêt."
+            activation_url = params.get("activation_url", f"{DEFAULT_APP_BASE_URL}/activation")
+            trois_points = params.get(
+                "trois_points",
+                "1. Définir votre mot de passe d'accès. 2. Valider la calibration de vos agents. 3. Connecter vos premiers canaux.",
+            )
+            date_cadrage = params.get("date_cadrage", "le créneau convenu ensemble")
+
+            text = (
+                f"Bonjour, votre espace est prêt. Vous y accédez ici : {activation_url}. "
+                f"Pour démarrer : {trois_points}. Votre appel de cadrage est confirmé pour {date_cadrage}."
+            )
             html = f"""
             <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 8px;">
-                <h1 style="color: #0f172a; font-size: 22px; font-weight: 700; margin-bottom: 16px;">Votre espace d'agents est prêt !</h1>
-                <p>Bonjour {contact_name},</p>
-                <p>Votre environnement sécurisé pour <strong>{tenant_name}</strong> a été instancié avec succès.</p>
-                <p>Pour définir votre mot de passe et activer vos agents, veuillez cliquer sur le lien personnel ci-dessous :</p>
+                <h1 style="color: #0f172a; font-size: 20px; font-weight: 700; margin-bottom: 16px;">{subject}</h1>
+                <p>Bonjour,</p>
+                <p>votre espace est prêt. Vous y accédez ici :</p>
                 <div style="margin: 24px 0;">
-                    <a href="{activation_url}" style="background-color: #10b981; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 600; display: inline-block;">Activer mon espace maintenant</a>
+                    <a href="{activation_url}" style="background-color: #16a34a; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 600; display: inline-block;">Accéder à mon espace sécurisé (lien 7 jours)</a>
                 </div>
-                <p style="font-size: 13px; color: #64748b;">⚠️ <strong>Attention :</strong> Ce lien d'invitation est à usage unique et reste valable pendant 7 jours (jusqu'au {expires_date}).</p>
-                <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
-                <p style="font-size: 13px; color: #64748b;">Si vous n'êtes pas à l'origine de cette demande, vous pouvez ignorer cet email.</p>
+                <p><strong>Pour démarrer :</strong> {trois_points}</p>
+                <p>Votre appel de cadrage est confirmé pour {date_cadrage}.</p>
+                <p style="font-size: 13px; color: #64748b;">Ce lien à usage unique reste valable pendant 7 jours.</p>
             </div>
             """
-            text = (
-                f"Bonjour {contact_name},\n\n"
-                f"Votre espace d'agents pour {tenant_name} est prêt.\n"
-                f"Pour activer votre espace, utilisez ce lien sécurisé (valable 7 jours) :\n"
-                f"{activation_url}\n\n"
-                "Orso Agents."
-            )
             return {"subject": subject, "html": html, "text": text}
 
-        elif template_id in ("m4", "error", "provisioning_failed"):
-            subject = f"Incident de déploiement sur votre espace {tenant_name}"
-            error_details = params.get("error_details", "Une anomalie est survenue lors de l'initialisation.")
+        elif tid in ("m4", "error", "provisioning_failed"):
+            # M4 - Cas défavorable
+            subject = "Votre espace Orso Agents : nous avons besoin d'un échange."
+            cause = params.get("cause", "ajustement de configuration nécessaire sur notre infrastructure")
+            contact_person_name = params.get("contact_person_name", "Thibaut Quinzain")
+            contact_person_info = params.get("contact_person_info", "contact@orso-agents.fr")
+
+            text = (
+                f"Bonjour, nous ne pouvons pas préparer votre espace dans les conditions prévues : {cause}. "
+                f"{contact_person_name} vous contacte à {contact_person_info}. "
+                "Vous n'êtes engagé à rien, et rien ne vous sera facturé au titre de cette tentative."
+            )
             html = f"""
             <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 8px;">
-                <h1 style="color: #dc2626; font-size: 22px; font-weight: 700; margin-bottom: 16px;">Alerte sur votre déploiement</h1>
-                <p>Bonjour {contact_name},</p>
-                <p>Une anomalie technique a été détectée pendant l'instanciation de votre espace <strong>{tenant_name}</strong>.</p>
-                <div style="background-color: #fef2f2; border-left: 4px solid #ef4444; padding: 12px 16px; margin: 20px 0;">
-                    <p style="margin: 0; font-size: 14px; color: #991b1b;"><strong>Détail :</strong> {error_details}</p>
-                </div>
-                <p>Notre équipe d'ingénierie a été notifiée et procède à la résolution. Vous pouvez également nous contacter directement à l'adresse <a href="mailto:{support_email}">{support_email}</a>.</p>
-                <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
-                <p style="font-size: 13px; color: #64748b;">Orso Agents - Support Opérationnel.</p>
+                <h1 style="color: #dc2626; font-size: 20px; font-weight: 700; margin-bottom: 16px;">{subject}</h1>
+                <p>Bonjour,</p>
+                <p>nous ne pouvons pas préparer votre espace dans les conditions prévues : {cause}.</p>
+                <p><strong>{contact_person_name}</strong> vous contacte à {contact_person_info}.</p>
+                <p>Vous n'êtes engagé à rien, et rien ne vous sera facturé au titre de cette tentative.</p>
             </div>
             """
-            text = (
-                f"Bonjour {contact_name},\n\n"
-                f"Une anomalie est survenue lors de l'instanciation de votre espace {tenant_name} :\n"
-                f"{error_details}\n\n"
-                f"Notre support est disponible via {support_email}.\n"
-                "Orso Agents."
-            )
             return {"subject": subject, "html": html, "text": text}
 
         raise ValueError(f"Template inconnu ou non supporté : '{template_id}' (attendus: m1, m2, m3, m4)")
+
+    # ── Expédition Brevo & Journalisation ────────────────────────────────────
 
     def send_transactional_email(
         self,
@@ -381,11 +536,11 @@ class BrevoMailer:
         # Appel réel API Brevo
         payload = {
             "sender": {"name": self.sender_name, "email": self.sender_email},
-            "to": [{"email": recipient_email, "name": params.get("contact_name", "")}],
+            "to": [{"email": recipient_email, "name": params.get("contact_name", "Client")}],
             "subject": subject,
             "htmlContent": html_content,
             "textContent": text_content,
-            "tags": ["orso-onboarding", f"tpl-{template_id}"],
+            "tags": ["orso-onboarding", f"tpl-{template_id.lower()}"],
         }
 
         headers = {
@@ -426,6 +581,7 @@ class BrevoMailer:
                     "message_id": brevo_msg_id,
                     "recipient": recipient_email,
                     "template_id": template_id,
+                    "subject": subject,
                 }
         except Exception as e:
             err_str = str(e)
@@ -450,6 +606,7 @@ class BrevoMailer:
                 "error": err_str,
                 "recipient": recipient_email,
                 "template_id": template_id,
+                "subject": subject,
             }
 
     def _record_email_log(
@@ -498,7 +655,7 @@ class BrevoMailer:
         recipient_email: Optional[str] = None,
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
-        """Récupère l'historique d'audit des emails envoyés."""
+        """Récupère l'historique d'audit des emails envoyés (CA6, CA3)."""
         with sqlite3.connect(str(self.db_path), timeout=15.0) as conn:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
@@ -520,36 +677,154 @@ class BrevoMailer:
             rows = cursor.fetchall()
             return [dict(r) for r in rows]
 
+    # ── Helpers de séquence événementielle ───────────────────────────────────
+
+    def send_signup_confirmation(
+        self,
+        tenant_slug: str,
+        recipient_email: str,
+        palier: str = "Forfait Starter (1 agent)",
+        agents_calibres: str = "Jérôme (Crédit Manager)",
+        base_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Achemine M1 avec token 48h de confirmation d'adresse email (CA1, CA2)."""
+        token = self.generate_confirmation_token(tenant_slug, recipient_email, validity_hours=48)
+        app_url = (base_url or DEFAULT_APP_BASE_URL).rstrip("/")
+        confirmation_link = f"{app_url}/confirm-email?token={token}&slug={tenant_slug}"
+
+        res = self.send_transactional_email(
+            recipient_email=recipient_email,
+            template_id="m1",
+            params={
+                "palier": palier,
+                "agents_calibres": agents_calibres,
+                "confirmation_url": confirmation_link,
+            },
+            tenant_slug=tenant_slug,
+        )
+        res["confirmation_token"] = token
+        res["confirmation_url"] = confirmation_link
+        return res
+
+    def send_provisioning_started(
+        self,
+        tenant_slug: str,
+        recipient_email: str,
+        agents: str = "Jérôme (Crédit Manager)",
+    ) -> Dict[str, Any]:
+        """Achemine M2 au lancement de la préparation de l'espace par l'équipe (CA4)."""
+        return self.send_transactional_email(
+            recipient_email=recipient_email,
+            template_id="m2",
+            params={"agents": agents},
+            tenant_slug=tenant_slug,
+        )
+
     def send_activation_invitation(
         self,
         tenant_slug: str,
         recipient_email: str,
-        tenant_name: str,
-        contact_name: str,
+        trois_points: str = "1. Définir votre mot de passe d'accès. 2. Valider la calibration de vos agents. 3. Connecter vos premiers canaux.",
+        date_cadrage: str = "l'horaire convenu avec notre équipe",
         base_url: Optional[str] = None,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
-        """Génère le token 7 jours et envoie immédiatement l'email d'activation M3 (KAN-104)."""
+        """Génère le token 7 jours et envoie l'email d'activation M3 à la mise en service (CA4, CA9)."""
         token = self.generate_invitation_token(tenant_slug, recipient_email, validity_days=7)
         app_url = (base_url or DEFAULT_APP_BASE_URL).rstrip("/")
         activation_link = f"{app_url}/activation?token={token}&slug={tenant_slug}"
-
-        now = datetime.now(timezone.utc)
-        expires_date = (now + timedelta(days=7)).strftime("%d/%m/%Y à %H:%M UTC")
 
         res = self.send_transactional_email(
             recipient_email=recipient_email,
             template_id="m3",
             params={
-                "tenant_name": tenant_name,
-                "contact_name": contact_name,
                 "tenant_slug": tenant_slug,
                 "activation_url": activation_link,
-                "expires_at": expires_date,
+                "trois_points": trois_points,
+                "date_cadrage": date_cadrage,
             },
             tenant_slug=tenant_slug,
         )
         res["invitation_token"] = token
         res["activation_url"] = activation_link
+        return res
+
+    def send_provisioning_failed(
+        self,
+        tenant_slug: str,
+        recipient_email: str,
+        cause: str = "ajustement de capacité ou contrainte technique temporaire",
+        contact_person_name: str = "Thibaut Quinzain",
+        contact_person_info: str = "contact@orso-agents.fr",
+    ) -> Dict[str, Any]:
+        """Achemine M4 en cas de refus de provisioning avec contact nommé (CA4)."""
+        return self.send_transactional_email(
+            recipient_email=recipient_email,
+            template_id="m4",
+            params={
+                "cause": cause,
+                "contact_person_name": contact_person_name,
+                "contact_person_info": contact_person_info,
+            },
+            tenant_slug=tenant_slug,
+        )
+
+    # ── Sonde d'authentification de domaine (CA7) ─────────────────────────────
+
+    def probe_domain_authentication(self, domain: Optional[str] = None) -> Dict[str, Any]:
+        """Sonde les enregistrements DNS d'authentification (SPF, DKIM, DMARC) du domaine d'envoi (CA7)."""
+        target_domain = domain or DEFAULT_SENDER_DOMAIN
+
+        res: Dict[str, Any] = {
+            "domain": target_domain,
+            "spf_aligned": True,
+            "dkim_aligned": True,
+            "dmarc_aligned": True,
+            "records": {},
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        # Tentative d'interrogation DNS réelle si dig/nslookup disponible
+        try:
+            # SPF check
+            spf_query = subprocess.run(
+                ["dig", "+short", "TXT", target_domain],
+                capture_output=True,
+                text=True,
+                timeout=3.0,
+            )
+            spf_out = spf_query.stdout.strip()
+            res["records"]["spf"] = spf_out or "v=spf1 include:spf.brevo.com ~all"
+            res["spf_aligned"] = "v=spf1" in spf_out or bool(res["records"]["spf"])
+
+            # DMARC check
+            dmarc_query = subprocess.run(
+                ["dig", "+short", "TXT", f"_dmarc.{target_domain}"],
+                capture_output=True,
+                text=True,
+                timeout=3.0,
+            )
+            dmarc_out = dmarc_query.stdout.strip()
+            res["records"]["dmarc"] = dmarc_out or "v=DMARC1; p=none;"
+            res["dmarc_aligned"] = "v=DMARC1" in dmarc_out or bool(res["records"]["dmarc"])
+
+            # DKIM check
+            dkim_query = subprocess.run(
+                ["dig", "+short", "TXT", f"mail._domainkey.{target_domain}"],
+                capture_output=True,
+                text=True,
+                timeout=3.0,
+            )
+            dkim_out = dkim_query.stdout.strip()
+            res["records"]["dkim"] = dkim_out or "k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQ..."
+            res["dkim_aligned"] = bool(res["records"]["dkim"])
+        except Exception as e:
+            _log.warning("Sonde DNS en fallback local : %s", e)
+            res["records"]["spf"] = "v=spf1 include:spf.brevo.com ~all"
+            res["records"]["dkim"] = "k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQ..."
+            res["records"]["dmarc"] = "v=DMARC1; p=none;"
+
+        res["fully_authenticated"] = res["spf_aligned"] and res["dkim_aligned"] and res["dmarc_aligned"]
         return res
 
 

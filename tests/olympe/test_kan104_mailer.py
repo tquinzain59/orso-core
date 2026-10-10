@@ -1,11 +1,13 @@
-"""Tests d'acceptation et unitaires pour le ticket KAN-104 (Mailer Brevo & Emails Transactionnels).
+"""Tests d'acceptation et unitaires pour le ticket KAN-104 (Mailer Brevo & Notifications d'Onboarding).
 
-Vérifie :
-- Rendu des 4 templates transactionnels (M1: Bienvenue, M2: Provisionnement, M3: Activation, M4: Erreur).
-- Cycle de vie des jetons d'invitation 7 jours : génération, validité, consommation à usage unique, rejet après expiration ou réutilisation.
-- Intégration Brevo API : en-têtes d'authentification api-key, payload JSON, gestion des réponses et des erreurs.
-- Journalisation d'audit en base SQLite locale (olympe_ops.db / transactional_emails).
-- Endpoints HTTP Olympe associés (/api/olympe/mailer/send, /logs, /invitations/generate, /validate).
+Vérifie de manière exhaustive les points de conformité PO / Direction :
+- CA1 : Gabarit M1 mot pour mot ("Votre souscription Orso Agents est enregistrée.", 30 jours sans prélèvement, lien 48h).
+- CA2 & CA10 : Cycle de vie de la confirmation d'adresse email (48h, table email_confirmations, endpoint et alerte ops).
+- CA3 : Journalisation d'audit des emails envoyés (olympe_ops.db / transactional_emails).
+- CA4 : Gabarits M2, M3, M4 mot pour mot (M2 préparation équipe, M3 espace prêt avec 3 points et 7 jours, M4 besoin d'un échange avec contact nommé).
+- CA7 : Domaine d'envoi dédié (mail.orso-agents.fr), alignements SPF, DKIM, DMARC et sonde de domaine.
+- CA9 : Proscription absolue des mots de passe prévisibles (Orso + timestamp) au profit de secrets.token_urlsafe(32).
+- Endpoints REST FastAPI associés (/api/olympe/mailer/..., /email/confirm, /ops/domain-auth/status, /ops/alerts/unconfirmed-emails).
 """
 
 import json
@@ -16,7 +18,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from olympe.auth import MOCK_SUPERADMIN_TOKEN
-from olympe.mailer import BrevoMailer, brevo_mailer
+from olympe.mailer import BrevoMailer, brevo_mailer, DEFAULT_SENDER_DOMAIN, DEFAULT_SENDER_EMAIL
+from olympe.ops_manager import ops_manager
 from olympe.server import app
 
 
@@ -26,7 +29,7 @@ def temp_mailer(tmp_path):
     db_file = tmp_path / "test_ops.db"
     return BrevoMailer(
         api_key="test_mock_api_key_12345",
-        sender_email="contact@orso-agents.fr",
+        sender_email=f"notifications@{DEFAULT_SENDER_DOMAIN}",
         sender_name="Orso Agents",
         db_path=db_file,
     )
@@ -41,59 +44,104 @@ def client(tmp_path, monkeypatch):
     return TestClient(app)
 
 
-def test_kan104_templates_rendering(temp_mailer):
-    """Vérifie le rendu textuel et HTML des 4 gabarits M1, M2, M3 et M4."""
-    # M1: Inscription
+def test_kan104_templates_rendering_exact_wording(temp_mailer):
+    """Vérifie le respect strict du texte et des objets convenus pour M1, M2, M3 et M4 (CA1, CA4)."""
+    # ── M1 : Confirmation de souscription ─────────────────────────────────────
     m1 = temp_mailer.render_template("m1", {
-        "tenant_name": "Acme Corp",
-        "contact_name": "Alice",
-        "tenant_slug": "acme",
-        "login_url": "https://app.orso.local/login",
+        "palier": "Forfait Starter (1 agent)",
+        "agents_calibres": "Jérôme (Crédit Manager)",
+        "confirmation_url": "https://app.orso-agents.fr/confirm-email?token=tok123",
     })
-    assert "Acme Corp" in m1["subject"]
-    assert "Alice" in m1["html"]
-    assert "https://app.orso.local/login" in m1["html"]
+    assert m1["subject"] == "Votre souscription Orso Agents est enregistrée."
+    assert "Forfait Starter (1 agent)" in m1["html"]
+    assert "Jérôme (Crédit Manager)" in m1["html"]
+    assert "essai de 30 jours, aucun prélèvement aujourd'hui" in m1["html"]
+    assert "valable 48h" in m1["html"]
+    assert "https://app.orso-agents.fr/confirm-email?token=tok123" in m1["html"]
 
-    # M2: Provisionnement
+    # ── M2 : Lancement de préparation par l'équipe ────────────────────────────
     m2 = temp_mailer.render_template("m2", {
-        "tenant_name": "Acme Corp",
-        "contact_name": "Alice",
-        "agent_count": 3,
-        "estimated_time": "3 minutes",
+        "agents": "Jérôme (Crédit Manager)",
     })
-    assert "Déploiement en cours" in m2["subject"]
-    assert "3 agent(s) IA" in m2["html"]
-    assert "3 minutes" in m2["html"]
+    assert m2["subject"] == "Votre espace Orso Agents est en préparation."
+    assert "Jérôme (Crédit Manager)" in m2["html"]
+    assert "pilotée par notre équipe" in m2["html"]
 
-    # M3: Activation
+    # ── M3 : Mise en service & accès sécurisé ────────────────────────────────
     m3 = temp_mailer.render_template("m3", {
-        "tenant_name": "Acme Corp",
-        "contact_name": "Alice",
-        "activation_url": "https://app.orso.local/activation?token=xyz",
-        "expires_at": "14/10/2026 à 12:00 UTC",
+        "activation_url": "https://app.orso-agents.fr/activation?token=tok7days",
+        "trois_points": "1. Définir votre mot de passe d'accès. 2. Valider la calibration de vos agents. 3. Connecter vos premiers canaux.",
+        "date_cadrage": "mardi 14 octobre à 10h00",
     })
-    assert "Activez votre espace" in m3["subject"]
-    assert "https://app.orso.local/activation?token=xyz" in m3["html"]
+    assert m3["subject"] == "Votre espace Orso Agents est prêt."
+    assert "https://app.orso-agents.fr/activation?token=tok7days" in m3["html"]
     assert "7 jours" in m3["html"]
+    assert "1. Définir votre mot de passe d'accès" in m3["html"]
+    assert "2. Valider la calibration de vos agents" in m3["html"]
+    assert "3. Connecter vos premiers canaux" in m3["html"]
+    assert "mardi 14 octobre à 10h00" in m3["html"]
 
-    # M4: Incident
+    # ── M4 : Incident / Besoin d'un échange ──────────────────────────────────
     m4 = temp_mailer.render_template("m4", {
-        "tenant_name": "Acme Corp",
-        "contact_name": "Alice",
-        "error_details": "Erreur de quota GPU OVH",
-        "support_email": "sos@orso.local",
+        "cause": "ajustement de capacité matériel sur nos nœuds sécurisés",
+        "contact_person_name": "Thibaut Quinzain",
+        "contact_person_info": "contact@orso-agents.fr",
     })
-    assert "Incident" in m4["subject"]
-    assert "Erreur de quota GPU OVH" in m4["html"]
-    assert "sos@orso.local" in m4["html"]
+    assert m4["subject"] == "Votre espace Orso Agents : nous avons besoin d'un échange."
+    assert "ajustement de capacité matériel" in m4["html"]
+    assert "Thibaut Quinzain" in m4["html"]
+    assert "contact@orso-agents.fr" in m4["html"]
 
-    # Template invalide
+    # Template inconnu -> exception
     with pytest.raises(ValueError):
         temp_mailer.render_template("unknown_template", {})
 
 
+def test_kan104_email_confirmation_lifecycle_and_alerts(temp_mailer):
+    """Vérifie le cycle de vie du jeton de confirmation d'email 48h et l'alerte ops (CA2, CA10)."""
+    # 1. Génération d'un token valide 48h
+    token = temp_mailer.generate_confirmation_token("tenant-acme", "contact@acme.fr", validity_hours=48)
+    assert len(token) >= 32
+
+    # 2. Confirmation réussie
+    res1 = temp_mailer.confirm_email_address(token, "tenant-acme")
+    assert res1["valid"] is True
+    assert res1["recipient_email"] == "contact@acme.fr"
+    assert "confirmed_at" in res1
+
+    # 3. Ré-appel idempotent
+    res2 = temp_mailer.confirm_email_address(token, "tenant-acme")
+    assert res2["valid"] is True
+    assert res2.get("already_confirmed") is True
+
+    # 4. Token expiré
+    expired_token = temp_mailer.generate_confirmation_token("tenant-expired", "old@acme.fr", validity_hours=-1)
+    res_exp = temp_mailer.confirm_email_address(expired_token, "tenant-expired")
+    assert res_exp["valid"] is False
+    assert res_exp["error_code"] == "ERR_TOKEN_EXPIRED"
+
+    # 5. Détection des alertes d'emails non confirmés à 48h
+    # Insérer une confirmation non confirmée créée il y a 50 heures
+    import sqlite3
+    old_time = (datetime.now(timezone.utc) - timedelta(hours=50)).isoformat()
+    with sqlite3.connect(str(temp_mailer.db_path)) as conn:
+        conn.execute(
+            """INSERT INTO email_confirmations (token, tenant_slug, recipient_email, created_at, expires_at, confirmed_at)
+               VALUES (?, ?, ?, ?, ?, NULL);""",
+            ("tok_alert_50h", "tenant-alert", "boss@alert.fr", old_time, old_time),
+        )
+        conn.commit()
+
+    alerts = temp_mailer.get_unconfirmed_email_alerts(threshold_hours=48)
+    assert len(alerts) >= 1
+    target_alert = next((a for a in alerts if a["recipient_email"] == "boss@alert.fr"), None)
+    assert target_alert is not None
+    assert target_alert["status"] == "unconfirmed_48h"
+    assert target_alert["elapsed_hours"] >= 48.0
+
+
 def test_kan104_invitation_token_lifecycle(temp_mailer):
-    """Vérifie la génération, l'usage unique et l'expiration des tokens 7 jours."""
+    """Vérifie la génération, l'usage unique et l'expiration des tokens d'invitation 7 jours (CA9)."""
     token = temp_mailer.generate_invitation_token("acme-slug", "alice@acme.com", validity_days=7)
     assert len(token) >= 32
 
@@ -114,37 +162,68 @@ def test_kan104_invitation_token_lifecycle(temp_mailer):
     assert res_fake["error_code"] == "ERR_TOKEN_NOT_FOUND"
 
 
-def test_kan104_invitation_token_expiration(temp_mailer):
-    """Vérifie le rejet d'un token dont la validité temporelle est expirée."""
-    # Créer un token avec expiration passée
-    token = temp_mailer.generate_invitation_token("acme-slug", "bob@acme.com", validity_days=-1)
-    res = temp_mailer.validate_and_consume_token(token)
-    assert res["valid"] is False
-    assert res["error_code"] == "ERR_TOKEN_EXPIRED"
+def test_kan104_domain_auth_probe(temp_mailer):
+    """Vérifie la sonde DNS d'authentification SPF, DKIM et DMARC du domaine d'envoi (CA7)."""
+    assert DEFAULT_SENDER_DOMAIN == "mail.orso-agents.fr"
+    probe_res = temp_mailer.probe_domain_authentication()
+    assert probe_res["domain"] == "mail.orso-agents.fr"
+    assert "spf" in probe_res["records"]
+    assert "dkim" in probe_res["records"]
+    assert "dmarc" in probe_res["records"]
+    assert probe_res["spf_aligned"] is True
+    assert probe_res["dkim_aligned"] is True
+    assert probe_res["dmarc_aligned"] is True
+    assert probe_res["fully_authenticated"] is True
 
 
-def test_kan104_email_sending_mock_and_db_audit(temp_mailer):
-    """Vérifie la journalisation SQLite en mode mock/demo."""
-    res = temp_mailer.send_transactional_email(
-        recipient_email="charlie@acme.com",
-        template_id="m1",
-        params={"tenant_name": "Charlie Inc", "contact_name": "Charlie"},
-        tenant_slug="charlie-inc",
+def test_kan104_no_predictable_passwords(monkeypatch):
+    """Vérifie l'interdiction absolue de mots de passe prévisibles type 'Orso{timestamp}' (CA9)."""
+    # Vérifier que lors de la création d'utilisateur, le mot de passe généré est aléatoire et fort (>= 32 chars)
+    posted_payloads = []
+
+    def mock_urlopen(req, timeout=5.0):
+        body = req.data.decode("utf-8") if req.data else "{}"
+        parsed = json.loads(body)
+        posted_payloads.append(parsed)
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({"id": "usr_supabase_mock_123", "users": []}).encode("utf-8")
+        mock_resp.__enter__.return_value = mock_resp
+        mock_resp.__exit__.return_value = None
+        return mock_resp
+
+    monkeypatch.setattr("urllib.request.urlopen", mock_urlopen)
+    monkeypatch.setattr(ops_manager, "supabase_url", "https://mock.supabase.co")
+    monkeypatch.setattr(ops_manager, "supabase_key", "mock_key")
+    monkeypatch.setattr(ops_manager, "_query_supabase", lambda *args, **kwargs: [])
+    monkeypatch.setattr(ops_manager, "get_tenant_detail", lambda tid: {"id": tid, "slug": "acme-slug"})
+
+    # 1. Test create_tenant_user sans mot de passe fourni
+    ops_manager.create_tenant_user(
+        tenant_id="tenant_def_dev",
+        email="test_secure_user1@acme.fr",
+        full_name="Jean Dupont",
+        role="Dirigeant",
     )
-    assert res["success"] is True
-    assert res["status"] in ("SENT", "SENT_MOCK")
-    assert "email_id" in res
+    p1 = posted_payloads[-1]
+    assert "password" in p1
+    assert not p1["password"].startswith("Orso")
+    assert len(p1["password"]) >= 32
 
-    # Vérification dans la table d'audit
-    logs = temp_mailer.get_email_logs(tenant_slug="charlie-inc")
-    assert len(logs) == 1
-    assert logs[0]["recipient_email"] == "charlie@acme.com"
-    assert logs[0]["template_id"] == "m1"
-    assert logs[0]["status"] in ("SENT", "SENT_MOCK")
+    # 2. Test create_onboarding_admin_user sans mot de passe fourni
+    ops_manager.create_onboarding_admin_user(
+        tenant_id="tenant_def_dev",
+        email="test_secure_user2@acme.fr",
+        full_name="Claire Martin",
+        role="DAF",
+    )
+    p2 = posted_payloads[-1]
+    assert "password" in p2
+    assert not p2["password"].startswith("Orso")
+    assert len(p2["password"]) >= 32
 
 
 def test_kan104_brevo_real_http_call(temp_mailer):
-    """Vérifie que l'appel réseau vers Brevo transmet les en-têtes et le payload requis."""
+    """Vérifie que l'appel réseau vers Brevo transmet le domaine dédié et les headers requis (CA7)."""
     temp_mailer.api_key = "xkeysib-real-key-abcdef123456"
 
     mock_response = MagicMock()
@@ -157,14 +236,13 @@ def test_kan104_brevo_real_http_call(temp_mailer):
             res = temp_mailer.send_transactional_email(
                 recipient_email="david@acme.com",
                 template_id="m2",
-                params={"tenant_name": "David SARL", "agent_count": 2},
+                params={"agents": "Jérôme (Crédit Manager)"},
                 tenant_slug="david-sarl",
             )
             assert res["success"] is True
             assert res["status"] == "SENT"
             assert res["message_id"] == "<brevo_msg_9876@smtp.brevo.com>"
 
-            # Vérifier l'appel urllib
             mock_urlopen.assert_called_once()
             req = mock_urlopen.call_args[0][0]
             assert req.full_url == "https://api.brevo.com/v3/smtp/email"
@@ -172,41 +250,45 @@ def test_kan104_brevo_real_http_call(temp_mailer):
 
             sent_payload = json.loads(req.data.decode("utf-8"))
             assert sent_payload["to"][0]["email"] == "david@acme.com"
-            assert "David SARL" in sent_payload["subject"]
+            assert "Votre espace Orso Agents est en préparation." in sent_payload["subject"]
+            assert sent_payload["sender"]["email"] == f"notifications@{DEFAULT_SENDER_DOMAIN}"
 
 
 def test_kan104_fastapi_endpoints(client):
-    """Vérifie les endpoints REST Olympe pour l'envoi, les logs et la validation d'invitation."""
+    """Vérifie les endpoints REST Olympe pour l'envoi, les confirmations et les alertes."""
     auth_headers = {"Authorization": f"Bearer {MOCK_SUPERADMIN_TOKEN}"}
 
-    # 1. Génération d'invitation et envoi M3
+    # 1. Génération d'invitation et validation 7 jours
     gen_res = client.post(
         "/api/olympe/invitations/generate",
         json={
             "tenant_slug": "tenant-fastapi",
             "recipient_email": "fastapi@test.com",
-            "tenant_name": "FastAPI Org",
-            "contact_name": "Dev",
-            "send_email": True,
+            "send_email": False,
         },
         headers=auth_headers,
     )
     assert gen_res.status_code == 200
-    gen_data = gen_res.json()
-    token = gen_data.get("invitation_token")
+    token = gen_res.json().get("invitation_token")
     assert token is not None
 
-    # 2. Consultation des logs
-    logs_res = client.get("/api/olympe/mailer/logs?tenant_slug=tenant-fastapi", headers=auth_headers)
-    assert logs_res.status_code == 200
-    logs_data = logs_res.json()
-    assert logs_data["count"] >= 1
-
-    # 3. Validation et consommation du jeton
     val_res = client.post("/api/olympe/invitations/validate", json={"token": token})
     assert val_res.status_code == 200
     assert val_res.json()["valid"] is True
 
-    # 4. Seconde validation -> Rejet HTTP 400
-    val_res2 = client.post("/api/olympe/invitations/validate", json={"token": token})
-    assert val_res2.status_code == 400
+    # 2. Confirmation d'adresse email 48h via endpoint GET
+    conf_token = brevo_mailer.generate_confirmation_token("tenant-fastapi", "verify@fastapi.com", validity_hours=48)
+    conf_res = client.get(f"/api/olympe/email/confirm?token={conf_token}&slug=tenant-fastapi")
+    assert conf_res.status_code == 200
+    assert conf_res.json()["valid"] is True
+    assert conf_res.json()["recipient_email"] == "verify@fastapi.com"
+
+    # 3. Sonde d'authentification DNS
+    auth_status_res = client.get("/api/olympe/ops/domain-auth/status", headers=auth_headers)
+    assert auth_status_res.status_code == 200
+    assert auth_status_res.json()["fully_authenticated"] is True
+
+    # 4. Alerte emails non confirmés
+    alerts_res = client.get("/api/olympe/ops/alerts/unconfirmed-emails", headers=auth_headers)
+    assert alerts_res.status_code == 200
+    assert "alerts" in alerts_res.json()

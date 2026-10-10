@@ -7,6 +7,7 @@ des périodes d'essai et des abonnements Stripe (99€, 169€, 279€ HT).
 import json
 import logging
 import os
+import secrets
 import sqlite3
 import time
 import urllib.error
@@ -1248,19 +1249,20 @@ class OpsManager:
                 existing_slugs = {item.get("slug") for item in result if item.get("slug")}
 
                 # Consolidation avec la base SQLite locale (data/olympe_ops.db)
-                # Garantit que les demandes d'onboarding / leads locaux sont visibles dans le Cockpit
-                db_tenants = self._db_list_tenants()
-                for d_t in db_tenants:
-                    if d_t.get("id") not in existing_ids and d_t.get("slug") not in existing_slugs:
-                        result.append(d_t)
-                        existing_ids.add(d_t.get("id"))
-                        if d_t.get("slug"):
-                            existing_slugs.add(d_t.get("slug"))
+                # Uniquement hors production : garantit que les demandes d'onboarding / leads locaux sont visibles dans le Cockpit
+                if not self.is_production and not is_production():
+                    db_tenants = self._db_list_tenants()
+                    for d_t in db_tenants:
+                        if d_t.get("id") not in existing_ids and d_t.get("slug") not in existing_slugs:
+                            result.append(d_t)
+                            existing_ids.add(d_t.get("id"))
+                            if d_t.get("slug"):
+                                existing_slugs.add(d_t.get("slug"))
 
-                # Inclure les sandboxes créés en mémoire non présents en base
-                for m_id, m_data in self._mock_tenants.items():
-                    if m_data.get("is_sandbox") and m_data.get("id") not in existing_ids and m_data.get("slug") not in existing_slugs:
-                        result.append(m_data)
+                    # Inclure les sandboxes créés en mémoire non présents en base
+                    for m_id, m_data in self._mock_tenants.items():
+                        if m_data.get("is_sandbox") and m_data.get("id") not in existing_ids and m_data.get("slug") not in existing_slugs:
+                            result.append(m_data)
 
                 return result
 
@@ -1331,7 +1333,7 @@ class OpsManager:
         actual_tenant_id = tenant_detail["id"]
         tenant_slug = tenant_detail.get("slug", "")
 
-        user_password = password or f"Orso{int(time.time())}!"
+        user_password = password or secrets.token_urlsafe(32)
 
         # 1. Mode Supabase si configuré
         if self.supabase_url and self.supabase_key:
@@ -1423,6 +1425,7 @@ class OpsManager:
         role: str = "Dirigeant",
         phone: Optional[str] = None,
         password: Optional[str] = None,
+        send_confirmation_email: bool = False,
     ) -> Dict[str, Any]:
         """Crée ou rattache le profil administrateur principal d'un client lors de l'onboarding."""
         tenant_detail = self.get_tenant_detail(tenant_id)
@@ -1496,7 +1499,7 @@ class OpsManager:
                 except Exception as e:
                     _log.warning("Avis mise à jour app_metadata auth.user %s: %s", user_id, e)
             else:
-                user_password = clean_password if (clean_password and len(clean_password) >= 6) else f"Orso{int(time.time())}!"
+                user_password = clean_password if (clean_password and len(clean_password) >= 6) else secrets.token_urlsafe(32)
                 payload = {
                     "email": clean_email,
                     "password": user_password,
@@ -1581,6 +1584,15 @@ class OpsManager:
             }
             if actual_tenant_id in self._mock_tenants:
                 self._mock_tenants[actual_tenant_id].setdefault("users", []).append(created_user)
+            if send_confirmation_email:
+                try:
+                    from olympe.mailer import brevo_mailer
+                    brevo_mailer.send_signup_confirmation(
+                        tenant_slug=tenant_slug,
+                        recipient_email=clean_email,
+                    )
+                except Exception as mail_err:
+                    _log.warning("Notice envoi email M1 onboarding confirmation: %s", mail_err)
             return created_user
 
         # 2. Mode Mock Local
@@ -1603,6 +1615,15 @@ class OpsManager:
                 "phone": clean_phone,
                 "role": clean_role,
             }
+        if send_confirmation_email:
+            try:
+                from olympe.mailer import brevo_mailer
+                brevo_mailer.send_signup_confirmation(
+                    tenant_slug=tenant_slug,
+                    recipient_email=clean_email,
+                )
+            except Exception as mail_err:
+                _log.warning("Notice envoi email M1 onboarding confirmation: %s", mail_err)
         return created_user
 
     def rewrite_mission_letter(
@@ -3020,5 +3041,10 @@ class OpsManager:
             "current_period_end": sub.get("current_period_end"),
             "price_id": price_id,
         }
+
+
+# Instance globale partagée
+ops_manager = OpsManager()
+
 
 
