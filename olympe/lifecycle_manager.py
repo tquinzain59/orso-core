@@ -568,8 +568,9 @@ class DockerLifecycleManager:
         self,
         args: List[str],
         timeout: float = 15.0,
+        input_data: Optional[str] = None,
     ) -> subprocess.CompletedProcess:
-        """Exécute une commande docker sécurisée avec timeout, en local ou sur hôte distant (KAN-61)."""
+        """Exécute une commande docker sécurisée avec timeout, en local ou sur hôte distant (KAN-61 / KAN-65)."""
         if not self.has_docker:
             raise RuntimeError("Le binaire Docker n'est pas accessible sur le système hôte.")
 
@@ -577,6 +578,7 @@ class DockerLifecycleManager:
             return self.remote_manager.exec_docker(
                 args=args,
                 timeout=timeout,
+                input_data=input_data,
             )
 
         cmd = ["docker"]
@@ -586,6 +588,7 @@ class DockerLifecycleManager:
 
         return subprocess.run(
             cmd,
+            input=input_data,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -1369,8 +1372,13 @@ class DockerLifecycleManager:
                     "--label", "com.orso.artifact.mounted_ro=true",
                 ])
 
-        for k, v in base_envs.items():
-            run_args.extend(["-e", f"{k}={v}"])
+        # Règle absolue de sécurité (Arbitrage KAN-65) :
+        # Aucun secret ni variable d'environnement sensible ne doit transiter par les arguments de processus (argv / ps aux).
+        # L'injection des secrets au conteneur s'effectue exclusivement par l'entrée standard chiffrée (--env-file /dev/stdin).
+        # L'emplacement canonique /etc/orso/engine.env (0600 root:root) sur l'hôte distant sert d'entrepôt persistant pour audit
+        # et vérification d'intégrité statique.
+        env_content = "\n".join(f"{k}={v}" for k, v in base_envs.items()) + "\n"
+        run_args.extend(["--env-file", "/dev/stdin"])
 
         run_args.append(target_image)
 
@@ -1396,7 +1404,7 @@ class DockerLifecycleManager:
             }
 
         _log.info("Lancement du provisioning pour %s (%s)", tenant_slug, container_name)
-        proc = self._exec_docker(run_args, timeout=20.0)
+        proc = self._exec_docker(run_args, timeout=20.0, input_data=env_content)
         if proc.returncode != 0:
             err = proc.stderr.strip()
             _log.error("Échec du docker run pour %s: %s", container_name, err)

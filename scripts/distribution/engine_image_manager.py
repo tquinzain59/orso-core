@@ -24,6 +24,7 @@ import argparse
 import subprocess
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -291,6 +292,15 @@ class EngineDistributionManager:
         if not validate_digest(new_digest):
             raise ValueError(f"Digest invalide : {new_digest}")
 
+        # Validation Fail-Closed préalable du secret (CA4 / KAN-65) :
+        # L'absence du secret bloque immédiatement l'opération SANS toucher aux conteneurs en service.
+        hmac_key = os.environ.get("ORSO_PERSONA_HMAC_KEY")
+        if not hmac_key:
+            raise ValueError(
+                "Opération refusée (Fail-Closed) : variable ORSO_PERSONA_HMAC_KEY requise "
+                "dans l'environnement du plan de gestion pour sécuriser le démarrage du conteneur."
+            )
+
         ssh_target = host_spec.get("ssh_target")
         target_image = format_pinned_image(self.registry_base, new_digest, tag=human_tag)
 
@@ -307,18 +317,26 @@ class EngineDistributionManager:
         rm_cmd = f"docker rm -f {container_name} 2>/dev/null || true"
         run_remote_or_local_cmd(rm_cmd, ssh_target)
 
-        # 4. Relance du conteneur avec l'image épinglée et clé d'intégrité personas (KAN-33 / KAN-64)
-        # Règle absolue de sécurité (Arbitrage PO / Commentaire 18) :
+        # 4. Relance du conteneur avec l'image épinglée et clé d'intégrité personas (KAN-33 / KAN-64 / KAN-65)
+        # Règle absolue de sécurité (Arbitrage KAN-65) :
         # Le secret ORSO_PERSONA_HMAC_KEY ne figure JAMAIS dans la ligne de commande (argv) ni dans les traces.
         # Sur SSH, comme l'environnement n'est pas transmis par défaut par sshd, le secret est transporté
         # via l'entrée standard chiffrée (stdin) et lu par Docker avec `--env-file /dev/stdin`.
-        # Sur l'hôte client pour un lancement local/manuel, il peut également résider dans /etc/orso/engine.env (0600 root:root).
-        hmac_key = os.environ.get("ORSO_PERSONA_HMAC_KEY")
-        if not hmac_key:
-            raise ValueError(
-                "Opération refusée (Fail-Closed) : variable ORSO_PERSONA_HMAC_KEY requise "
-                "dans l'environnement du plan de gestion pour sécuriser le démarrage du conteneur."
-            )
+        # Sur l'hôte client, l'emplacement canonique /etc/orso/engine.env (0600 root:root) est déposé
+        # et maintenu par ce même canal étanche.
+        env_lines = [f"ORSO_PERSONA_HMAC_KEY={hmac_key}"]
+        db_user = os.environ.get("HERMES_DASHBOARD_BASIC_AUTH_USERNAME")
+        db_pass = (
+            os.environ.get("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD")
+            or os.environ.get("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH")
+        )
+        if db_user and db_pass:
+            env_lines.append(f"HERMES_DASHBOARD_BASIC_AUTH_USERNAME={db_user}")
+            if os.environ.get("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"):
+                env_lines.append(f"HERMES_DASHBOARD_BASIC_AUTH_PASSWORD={os.environ['HERMES_DASHBOARD_BASIC_AUTH_PASSWORD']}")
+            elif os.environ.get("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH"):
+                env_lines.append(f"HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH={os.environ['HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH']}")
+        input_env_content = "\n".join(env_lines) + "\n"
 
         run_cmd = (
             f"docker run -d --name {container_name} "
@@ -333,7 +351,7 @@ class EngineDistributionManager:
             run_cmd,
             ssh_target,
             timeout=30,
-            input_data=f"ORSO_PERSONA_HMAC_KEY={hmac_key}\n",
+            input_data=input_env_content,
         )
 
         # 5. Sonde de santé sur la boucle locale
@@ -357,6 +375,7 @@ class EngineDistributionManager:
             "target_image": target_image,
             "state_before": state_before,
             "state_after": state_after,
+            "run_cmd": run_cmd,
             "pull_output": stdout_pull or stderr_pull,
             "run_output": stdout_run,
             "health_http_code": health_code,
@@ -371,26 +390,46 @@ class EngineDistributionManager:
         health_check_port: int = 9119,
     ) -> Dict[str, Any]:
         """
-        CA4 : Exécute le rollback en direct sur l'hôte distant vers l'empreinte précédente.
+        CA3 / CA4 : Exécute le rollback en direct sur l'hôte distant vers l'empreinte précédente.
         """
         if not validate_digest(rollback_digest):
             raise ValueError(f"Digest invalide pour rollback : {rollback_digest}")
 
-        ssh_target = host_spec.get("ssh_target")
-        target_image = format_pinned_image(self.registry_base, rollback_digest)
-
-        state_before = probe_docker_host(host_spec)
-
-        # Relance instantanée (image déjà présente en cache local)
-        stop_cmd = f"docker stop -t 5 {container_name} 2>/dev/null && docker rm -f {container_name} 2>/dev/null || true"
-        run_remote_or_local_cmd(stop_cmd, ssh_target)
-
+        # Validation Fail-Closed préalable du secret (CA4 / KAN-65) :
+        # L'absence du secret bloque immédiatement l'opération SANS toucher aux conteneurs en service.
         hmac_key = os.environ.get("ORSO_PERSONA_HMAC_KEY")
         if not hmac_key:
             raise ValueError(
                 "Opération refusée (Fail-Closed) : variable ORSO_PERSONA_HMAC_KEY requise "
                 "dans l'environnement du plan de gestion pour sécuriser le démarrage du conteneur."
             )
+
+        ssh_target = host_spec.get("ssh_target")
+        target_image = format_pinned_image(self.registry_base, rollback_digest)
+
+        state_before = probe_docker_host(host_spec)
+
+        # S'assurer que l'image de rollback est disponible (pull préalable si absente du cache)
+        check_image_cmd = f"docker image inspect {target_image} >/dev/null 2>&1 || docker pull {target_image}"
+        run_remote_or_local_cmd(check_image_cmd, ssh_target, timeout=120)
+
+        # Relance instantanée
+        stop_cmd = f"docker stop -t 5 {container_name} 2>/dev/null && docker rm -f {container_name} 2>/dev/null || true"
+        run_remote_or_local_cmd(stop_cmd, ssh_target)
+
+        env_lines = [f"ORSO_PERSONA_HMAC_KEY={hmac_key}"]
+        db_user = os.environ.get("HERMES_DASHBOARD_BASIC_AUTH_USERNAME")
+        db_pass = (
+            os.environ.get("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD")
+            or os.environ.get("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH")
+        )
+        if db_user and db_pass:
+            env_lines.append(f"HERMES_DASHBOARD_BASIC_AUTH_USERNAME={db_user}")
+            if os.environ.get("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"):
+                env_lines.append(f"HERMES_DASHBOARD_BASIC_AUTH_PASSWORD={os.environ['HERMES_DASHBOARD_BASIC_AUTH_PASSWORD']}")
+            elif os.environ.get("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH"):
+                env_lines.append(f"HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH={os.environ['HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH']}")
+        input_env_content = "\n".join(env_lines) + "\n"
 
         run_cmd = (
             f"docker run -d --name {container_name} "
@@ -405,7 +444,7 @@ class EngineDistributionManager:
             run_cmd,
             ssh_target,
             timeout=20,
-            input_data=f"ORSO_PERSONA_HMAC_KEY={hmac_key}\n",
+            input_data=input_env_content,
         )
 
         # Sonde de santé sur la boucle locale
@@ -428,9 +467,96 @@ class EngineDistributionManager:
             "target_image": target_image,
             "state_before": state_before,
             "state_after": state_after,
+            "run_cmd": run_cmd,
             "run_output": stdout_run,
             "health_http_code": health_code,
             "success": success,
+        }
+
+    def deploy_canonical_engine_env(
+        self,
+        host_spec: Dict[str, Any],
+        env_vars: Optional[Dict[str, str]] = None,
+        canonical_path: str = "/etc/orso/engine.env",
+    ) -> Dict[str, Any]:
+        """
+        CA5 / KAN-65 : Dépose de manière étanche le secret des personas dans l'emplacement canonique sur l'hôte client :
+        `/etc/orso/engine.env` (permissions 0600, propriétaire root:root).
+
+        Règle inviolable :
+        La valeur du secret transite exclusivement par l'entrée standard chiffrée (stdin de sudo tee).
+        Elle n'apparaît JAMAIS dans la ligne de commande, ni dans les arguments de processus (argv),
+        ni dans l'historique ou les journaux.
+        """
+        ssh_target = host_spec.get("ssh_target")
+        host_id = host_spec.get("host_id", "unknown")
+
+        if env_vars is None:
+            hmac_key = os.environ.get("ORSO_PERSONA_HMAC_KEY")
+            if not hmac_key:
+                raise ValueError(
+                    "Opération refusée (Fail-Closed) : variable ORSO_PERSONA_HMAC_KEY requise "
+                    "dans l'environnement du plan de gestion pour sécuriser le déploiement du secret d'intégrité."
+                )
+            env_vars = {"ORSO_PERSONA_HMAC_KEY": hmac_key}
+            db_user = os.environ.get("HERMES_DASHBOARD_BASIC_AUTH_USERNAME")
+            db_pass = (
+                os.environ.get("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD")
+                or os.environ.get("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH")
+            )
+            if db_user and db_pass:
+                env_vars["HERMES_DASHBOARD_BASIC_AUTH_USERNAME"] = db_user
+                if os.environ.get("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"):
+                    env_vars["HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"] = os.environ["HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"]
+                elif os.environ.get("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH"):
+                    env_vars["HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH"] = os.environ["HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH"]
+        else:
+            if "ORSO_PERSONA_HMAC_KEY" not in env_vars or not env_vars["ORSO_PERSONA_HMAC_KEY"]:
+                raise ValueError(
+                    "Opération refusée (Fail-Closed) : variable ORSO_PERSONA_HMAC_KEY obligatoire "
+                    "dans le jeu de variables d'environnement à déployer."
+                )
+
+        env_content = "\n".join(f"{k}={v}" for k, v in env_vars.items()) + "\n"
+
+        parent_dir = str(Path(canonical_path).parent)
+        deploy_cmd = (
+            f"sudo mkdir -p {parent_dir} && "
+            f"sudo chmod 0755 {parent_dir} && "
+            f"sudo tee {canonical_path} > /dev/null && "
+            f"sudo chmod 0600 {canonical_path} && "
+            f"sudo chown root:root {canonical_path}"
+        )
+
+        rc, stdout, stderr = run_remote_or_local_cmd(
+            deploy_cmd,
+            ssh_target,
+            timeout=30,
+            input_data=env_content,
+        )
+
+        if rc != 0:
+            return {
+                "action": "DEPLOY_ENGINE_ENV",
+                "host_id": host_id,
+                "canonical_path": canonical_path,
+                "success": False,
+                "error": stderr or stdout,
+                "returncode": rc,
+            }
+
+        verify_cmd = f"sudo stat -c '%a %U:%G' {canonical_path} 2>/dev/null || stat -f '%Lp %Su:%Sg' {canonical_path} 2>/dev/null"
+        rc_v, stdout_v, _ = run_remote_or_local_cmd(verify_cmd, ssh_target, timeout=10)
+        stat_out = stdout_v.strip() if rc_v == 0 else "unknown"
+
+        return {
+            "action": "DEPLOY_ENGINE_ENV",
+            "host_id": host_id,
+            "canonical_path": canonical_path,
+            "stat": stat_out,
+            "permissions_ok": ("600" in stat_out and "root:root" in stat_out),
+            "success": True,
+            "message": f"Secret d'intégrité personas déposé avec succès dans {canonical_path} (0600 root:root) via entrée standard chiffrée.",
         }
 
     @staticmethod
@@ -651,6 +777,11 @@ def main():
     rb_parser.add_argument("--container", default="orso_client_demo")
     rb_parser.add_argument("--local", action="store_true", help="Exécute le rollback directement en local sans SSH")
 
+    env_parser = sub.add_parser("deploy-env", parents=[common_parser], help="Dépose le secret d'intégrité personas dans /etc/orso/engine.env (0600 root:root) via stdin chiffré")
+    env_parser.add_argument("--host-id", required=True)
+    env_parser.add_argument("--local", action="store_true", help="Déploiement en local")
+    env_parser.add_argument("--path", default="/etc/orso/engine.env", help="Chemin canonique de destination")
+
     args = parser.parse_args()
 
     mgr = EngineDistributionManager(target_digest=args.target_digest, registry_base=args.registry_base)
@@ -702,9 +833,13 @@ def main():
             if not target_host:
                 print(f"Hôte inconnu : {args.host_id}")
                 sys.exit(1)
-        res = mgr.execute_live_host_update(target_host, new_digest=args.new_digest, container_name=args.container)
-        print(json.dumps(res, indent=2))
-        sys.exit(0 if res.get("success") else 1)
+        try:
+            res = mgr.execute_live_host_update(target_host, new_digest=args.new_digest, container_name=args.container)
+            print(json.dumps(res, indent=2))
+            sys.exit(0 if res.get("success") else 1)
+        except ValueError as e:
+            print(f"[FAIL-CLOSED] {e}", file=sys.stderr)
+            sys.exit(2)
 
     elif args.command == "rollback":
         if getattr(args, "local", False):
@@ -719,9 +854,34 @@ def main():
             if not target_host:
                 print(f"Hôte inconnu : {args.host_id}")
                 sys.exit(1)
-        res = mgr.execute_live_host_rollback(target_host, rollback_digest=args.rollback_digest, container_name=args.container)
-        print(json.dumps(res, indent=2))
-        sys.exit(0 if res.get("success") else 1)
+        try:
+            res = mgr.execute_live_host_rollback(target_host, rollback_digest=args.rollback_digest, container_name=args.container)
+            print(json.dumps(res, indent=2))
+            sys.exit(0 if res.get("success") else 1)
+        except ValueError as e:
+            print(f"[FAIL-CLOSED] {e}", file=sys.stderr)
+            sys.exit(2)
+
+    elif args.command == "deploy-env":
+        if getattr(args, "local", False):
+            target_host = {
+                "host_id": args.host_id,
+                "host_name": f"Hôte Local ({args.host_id})",
+                "ssh_target": None,
+                "container_filter": "orso_client",
+            }
+        else:
+            target_host = next((h for h in DEFAULT_HOSTS if h["host_id"] == args.host_id), None)
+            if not target_host:
+                print(f"Hôte inconnu : {args.host_id}")
+                sys.exit(1)
+        try:
+            res = mgr.deploy_canonical_engine_env(target_host, canonical_path=args.path)
+            print(json.dumps(res, indent=2))
+            sys.exit(0 if res.get("success") else 1)
+        except ValueError as e:
+            print(f"[FAIL-CLOSED] {e}", file=sys.stderr)
+            sys.exit(2)
 
     else:
         print("Moteur Orso épinglé :", mgr.get_target_pinned_image(human_tag="v1.0.0"))
