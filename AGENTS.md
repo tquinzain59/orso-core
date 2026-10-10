@@ -1,4 +1,59 @@
-# Hermes Agent - Development Guide
+# Orso agents / Hermes Agent - Development Guide
+
+<!-- ORSO_GOVERNANCE_START -->
+## 🚨 Orso agents - Charte de Gouvernance, Règles de Livraison & Essentiels Opérationnels (Priorité Absolue)
+
+> **Source unique de vérité** : [Page Confluence 26 - Charte globale du développeur Orso agents](https://orso-agents.atlassian.net/wiki/spaces/Orsoagents/pages/5668865).
+> **Clause de primauté absolue** : En cas de contradiction entre les règles Orso ci-dessous et le guide amont Hermes (sections suivantes), **les règles Orso prévalent impérativement**. Les pratiques amont relatives au flux git (squash-merge direct, cherry-pick de sauvetage, commits directs sur main, promotion externe) sont formellement proscrites sur les dépôts Orso.
+
+### 1. Séparation des rôles (Qui décide quoi - F1.1 & F1.2)
+- **Thibaut (Sponsor & Propriétaire du Produit)** : Décide de la priorité, de la marque, des prix, du cadre juridique, du budget et de la mise en production des sujets sensibles.
+- **Jarvis (Product Owner)** : Décide du contenu et de la qualité des tickets, des critères d'acceptation (CA), du verdict de revue (Accepté / Réserves / Refusé), de la tenue du backlog et des documents. Ne décide pas de la priorité (il propose) ni de l'argent.
+- **Antigravity (Architecte puis Développeur)** : Décide des choix d'implémentation, du découpage technique et du design détaillé dans le cadre strict de la gouvernance du fork. Ne décide pas du périmètre produit, de la priorité, de la marque, ni de la mise en production.
+- **Kimi K3 (Conseil et Contestation)** : Propose des analyses et contestations critiques ; ne décide de rien.
+
+### 2. Règles du Sanctuaire du Fork & Règle d'Arrêt Immédiate (Inviolable)
+- **Le Sanctuaire (Zone A - Interdit d'altération métier)** : La boucle d'exécution (`agent/turn_*.py`, `run_agent.py`, `conversation_loop.py`), la persistance (`hermes_state*.py`), l'invariance absolue du cache de prompt et les connecteurs modèles (`providers/`, `tools/registry.py`).
+- **La Zone d'Évolution (Zone B - Périmètre Orso)** : Interfaces et PWA mobile (`apps/ui-client`, `apps/ui-ops`), routeurs d'API (`hermes_cli/web_routers/`), superviseur (`olympe/`), profils métiers (`profiles/`), compétences (`skills/`, `plugins/`), Docker (`Dockerfile.orso`).
+- **Règle d'arrêt et de signalement immédiat** : Si une consigne ou un besoin métier tend à altérer le Sanctuaire, l'agent DOIT s'arrêter immédiatement, alerter par écrit sur les risques (surcoût, régression, perte de sync amont) et rediriger la solution vers les bords (skills, profils, plugins, routeurs).
+- **Référence** : `docs/3_Technique/charte_gouvernance_fork.md`.
+
+### 3. Conventions de Flux Git & GitHub (G1.1 à G1.4)
+- **Nommage des branches** : Strictement `KAN-<n>-<slug>` (ex: `KAN-92-alignement-agents-md-gouvernance`). Préfixes libres (`feat/`, `fix/`, `dev/`) strictement proscrits.
+- **Zéro commit direct sur main** : Toute modification passe obligatoirement par une branche et une pull request (PR).
+- **Titre des pull requests** : Strictement `[KAN-<n>] <Description explicite>`.
+- **Messages de commit normalisés** : `<type>(<domaine>): <sujet à l'impératif> (KAN-<n>)` (types : `feat`, `fix`, `sec`, `refactor`, `test`, `docs`, `chore`, `ci`).
+- **Taille de PR** : Moins de 400 lignes modifiées hors fichiers générés. Au-delà, justifier ou découper.
+
+### 4. Definition of Ready (DoR) & Definition of Done (DoD) (Section 1.3)
+- **Definition of Ready (Un ticket est prêt quand)** :
+  1. L'objectif tient en une phrase avec la valeur attendue ;
+  2. Les critères d'acceptation (CA1 à CAn) sont observables de l'extérieur ;
+  3. Le périmètre ET le hors-périmètre sont écrits ;
+  4. Les documents sources sont référencés (décision, audit, brief, ADR) ;
+  5. Les contraintes techniques sont listées (sanctuaire, secrets, dépendances) ;
+  6. Aucune dépendance non levée ne subsiste.
+- **Definition of Done (Une livraison est terminée quand)** :
+  1. Livraison sur branche dédiée `KAN-<n>-<slug>` et PR `[KAN-<n>]`, zéro commit direct sur `main` ;
+  2. Chaque critère d'acceptation est coché avec sa preuve vérifiable dans la section Handoff ;
+  3. Le verdict du PO (Jarvis) est signé (`Accepté` ou `Accepté avec réserves`) ;
+  4. Le service déployé a été vérifié en direct en ligne ;
+  5. La documentation impactée est à jour (Confluence et ADR) et le ticket porte la version livrée (SHA du commit / tag).
+
+### 5. Standard de Preuve & Section Handoff (P1.1 à P1.5, G1.4)
+- **Contrat vérifiable** : Une livraison est un contrat vérifiable, pas un récit. Tout critère d'acceptation doit comporter sa sonde reproductible (commande shell, test automatisé, appel HTTP avec code de statut, requête SQL ou inspection brute).
+- **Mesure sur le code brut servi (P1.4)** : La preuve se mesure sur le code brut servi (HTML/JSON téléchargé, état en base, journaux), jamais sur un rendu écran ou une impression visuelle.
+- **Structure obligatoire du Handoff (dans la PR et le commentaire Jira)** :
+  1. Tableau / liste de chaque critère d'acceptation (CA1 à CAn) coché avec sa commande exacte de test et son résultat ;
+  2. Modifications fichier par fichier ;
+  3. Preuve d'absence de régression et sanctuarisation (0 fichier du Sanctuaire modifié) ;
+  4. Limites déclarées et procédure de retour arrière (rollback).
+
+### 6. Règle de Survie lors des Synchronisations Amont (Procédure KAN-92)
+Le bloc délimité par les balises ORSO_GOVERNANCE_START et ORSO_GOVERNANCE_END constitue l'ancrage local Orso. Lors d'un `git merge upstream/main` ou `git rebase upstream/main`, ce bloc doit impérativement être conservé en tête du fichier `AGENTS.md`. Si un conflit survient à la racine de `AGENTS.md`, le bloc Orso prévaut et le texte amont mis à jour est réinséré à sa suite.
+<!-- ORSO_GOVERNANCE_END -->
+
+## Guide Amont Hermes Agent (Documentation Technique)
 
 Instructions for AI coding assistants and developers working on the hermes-agent codebase.
 This root file holds only what applies everywhere. Each area has its own `AGENTS.md` (aim for
@@ -7,13 +62,6 @@ past that); see the **routing table** at the end and read the area file before e
 
 **Never give up on the right solution.**
 
-## 🚨 Orso agents - Charte de Gouvernance & Règle de Vigilance (Inviolable)
-
-Le projet **Orso agents** est un fork de `hermes-agent` (Nous Research). Pour préserver l'intégrité, la stabilité et l'alignement upstream :
-- **Le Sanctuaire (Interdit d'altération métier)** : La boucle d'exécution (`agent/turn_*.py`, `run_agent.py`, `conversation_loop.py`), la persistance (`hermes_state*.py`), l'invariance absolue du cache de prompt et les connecteurs modèles (`providers/`, `tools/registry.py`).
-- **La Zone d'Évolution (Périmètre Orso)** : Interfaces et PWA mobile (`App_Hermes Core`), routeurs d'API (`hermes_cli/web_routers/`), profils métiers (`profiles/`), compétences (`skills/`, `plugins/`), Docker (`Dockerfile.orso`).
-- **Règle de Vigilance Active (Mandat Assistant IA)** : Si une consigne ou demande utilisateur tend à altérer le Sanctuaire pour un besoin métier, l'assistant DOIT alerter immédiatement l'utilisateur sur les risques (surcoût, régression, perte de sync upstream) et rediriger la solution vers les bords (skills, profils, plugins, routeurs).
-Détail complet : `docs/3_Technique/charte_gouvernance_fork.md`.
 
 ## What Hermes Is
 
