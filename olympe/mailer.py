@@ -30,8 +30,10 @@ _log = logging.getLogger("orso.olympe.mailer")
 
 BREVO_API_URL = "https://api.brevo.com/v3/smtp/email"
 DEFAULT_SENDER_DOMAIN = os.environ.get("ORSO_MAIL_DOMAIN", "mail.orso-agents.fr")
-DEFAULT_SENDER_EMAIL = os.environ.get("ORSO_SENDER_EMAIL", f"notifications@{DEFAULT_SENDER_DOMAIN}")
-DEFAULT_SENDER_NAME = os.environ.get("ORSO_SENDER_NAME", "Orso Agents")
+DEFAULT_SENDER_EMAIL = os.environ.get("ORSO_SENDER_EMAIL", "contact@orso-agents.fr")
+DEFAULT_SENDER_NAME = os.environ.get("ORSO_SENDER_NAME", "Thibaut Quinzain — Orso Agents")
+DEFAULT_REPLY_TO_EMAIL = os.environ.get("ORSO_REPLY_TO_EMAIL", "contact@orso-agents.fr")
+DEFAULT_REPLY_TO_NAME = os.environ.get("ORSO_REPLY_TO_NAME", "Thibaut Quinzain — Orso Agents")
 DEFAULT_APP_BASE_URL = os.environ.get("ORSO_APP_BASE_URL", "https://app.orso-agents.fr")
 
 
@@ -381,7 +383,11 @@ class BrevoMailer:
             confirmation_url = params.get("confirmation_url", f"{DEFAULT_APP_BASE_URL}/confirm-email")
 
             text = (
-                f"Bonjour, votre souscription est bien enregistrée. Récapitulatif : {palier}, "
+                "Bonjour,\n\n"
+                "Je suis tout particulièrement heureux de vous accueillir sur la plateforme Orso Agents.\n"
+                "Notre mission est de vous libérer du temps opérationnel grâce à des agents IA fiables, rigoureux et directement connectés à vos outils métiers. Nous mettons tout en œuvre pour vous accompagner au plus près.\n"
+                "— Thibaut Quinzain, Fondateur d'Orso Agents\n\n"
+                f"Votre souscription est bien enregistrée. Récapitulatif : {palier}, "
                 f"{agents_calibres}, essai de 30 jours, aucun prélèvement aujourd'hui. "
                 "Votre espace est maintenant en préparation, et c'est notre équipe qui s'en occupe. "
                 "Prochaine étape : un appel de cadrage. "
@@ -392,6 +398,14 @@ class BrevoMailer:
             <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 8px;">
                 <h1 style="color: #0f172a; font-size: 20px; font-weight: 700; margin-bottom: 16px;">{subject}</h1>
                 <p>Bonjour,</p>
+                <div style="margin: 16px 0; padding: 16px; background-color: #f8fafc; border-left: 4px solid #2563eb; border-radius: 4px;">
+                    <p style="margin: 0; font-size: 14px; line-height: 1.6; color: #334155; font-style: italic;">
+                        « Je suis tout particulièrement heureux de vous accueillir sur la plateforme Orso Agents. Notre mission est de vous libérer du temps opérationnel grâce à des agents IA fiables, rigoureux et directement connectés à vos outils métiers. Nous mettons tout en œuvre pour vous accompagner au plus près. »
+                    </p>
+                    <p style="margin: 8px 0 0 0; font-size: 13px; font-weight: 600; color: #1e293b;">
+                        — Thibaut Quinzain, Fondateur d'Orso Agents
+                    </p>
+                </div>
                 <p>votre souscription est bien enregistrée.</p>
                 <p><strong>Récapitulatif :</strong> {palier}, {agents_calibres}, essai de 30 jours, aucun prélèvement aujourd'hui.</p>
                 <p>Votre espace est maintenant en préparation, et c'est notre équipe qui s'en occupe. Prochaine étape : un appel de cadrage.</p>
@@ -435,7 +449,10 @@ class BrevoMailer:
             date_cadrage = params.get("date_cadrage", "le créneau convenu ensemble")
 
             text = (
-                f"Bonjour, votre espace est prêt. Vous y accédez ici : {activation_url}. "
+                "Bonjour,\n\n"
+                f"votre espace est prêt. Vous y accédez ici : {activation_url}.\n\n"
+                "« Je suis tout particulièrement heureux de vous accueillir sur la plateforme Orso Agents. Notre équipe est mobilisée pour faire de vos agents des alliés au quotidien. »\n"
+                "— Thibaut Quinzain, Fondateur d'Orso Agents\n\n"
                 f"Pour démarrer : {trois_points}. Votre appel de cadrage est confirmé pour {date_cadrage}."
             )
             html = f"""
@@ -445,6 +462,14 @@ class BrevoMailer:
                 <p>votre espace est prêt. Vous y accédez ici :</p>
                 <div style="margin: 24px 0;">
                     <a href="{activation_url}" style="background-color: #16a34a; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: 600; display: inline-block;">Accéder à mon espace sécurisé (lien 7 jours)</a>
+                </div>
+                <div style="margin: 16px 0; padding: 16px; background-color: #f8fafc; border-left: 4px solid #16a34a; border-radius: 4px;">
+                    <p style="margin: 0; font-size: 14px; line-height: 1.6; color: #334155; font-style: italic;">
+                        « Je suis tout particulièrement heureux de vous accueillir sur la plateforme Orso Agents. Notre équipe est mobilisée pour faire de vos agents des alliés au quotidien. »
+                    </p>
+                    <p style="margin: 8px 0 0 0; font-size: 13px; font-weight: 600; color: #1e293b;">
+                        — Thibaut Quinzain, Fondateur d'Orso Agents
+                    </p>
                 </div>
                 <p><strong>Pour démarrer :</strong> {trois_points}</p>
                 <p>Votre appel de cadrage est confirmé pour {date_cadrage}.</p>
@@ -536,6 +561,7 @@ class BrevoMailer:
         # Appel réel API Brevo
         payload = {
             "sender": {"name": self.sender_name, "email": self.sender_email},
+            "replyTo": {"name": DEFAULT_REPLY_TO_NAME, "email": DEFAULT_REPLY_TO_EMAIL},
             "to": [{"email": recipient_email, "name": params.get("contact_name", "Client")}],
             "subject": subject,
             "htmlContent": html_content,

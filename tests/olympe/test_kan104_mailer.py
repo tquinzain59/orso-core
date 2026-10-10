@@ -18,7 +18,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from olympe.auth import MOCK_SUPERADMIN_TOKEN
-from olympe.mailer import BrevoMailer, brevo_mailer, DEFAULT_SENDER_DOMAIN, DEFAULT_SENDER_EMAIL
+from olympe.mailer import (
+    BrevoMailer,
+    brevo_mailer,
+    DEFAULT_SENDER_DOMAIN,
+    DEFAULT_SENDER_EMAIL,
+    DEFAULT_SENDER_NAME,
+)
 from olympe.ops_manager import ops_manager
 from olympe.server import app
 
@@ -29,8 +35,8 @@ def temp_mailer(tmp_path):
     db_file = tmp_path / "test_ops.db"
     return BrevoMailer(
         api_key="test_mock_api_key_12345",
-        sender_email=f"notifications@{DEFAULT_SENDER_DOMAIN}",
-        sender_name="Orso Agents",
+        sender_email=DEFAULT_SENDER_EMAIL,
+        sender_name=DEFAULT_SENDER_NAME,
         db_path=db_file,
     )
 
@@ -58,6 +64,8 @@ def test_kan104_templates_rendering_exact_wording(temp_mailer):
     assert "essai de 30 jours, aucun prélèvement aujourd'hui" in m1["html"]
     assert "valable 48h" in m1["html"]
     assert "https://app.orso-agents.fr/confirm-email?token=tok123" in m1["html"]
+    assert "Je suis tout particulièrement heureux de vous accueillir" in m1["html"]
+    assert "Thibaut Quinzain, Fondateur d'Orso Agents" in m1["html"]
 
     # ── M2 : Lancement de préparation par l'équipe ────────────────────────────
     m2 = temp_mailer.render_template("m2", {
@@ -80,6 +88,8 @@ def test_kan104_templates_rendering_exact_wording(temp_mailer):
     assert "2. Valider la calibration de vos agents" in m3["html"]
     assert "3. Connecter vos premiers canaux" in m3["html"]
     assert "mardi 14 octobre à 10h00" in m3["html"]
+    assert "Je suis tout particulièrement heureux de vous accueillir" in m3["html"]
+    assert "Thibaut Quinzain, Fondateur d'Orso Agents" in m3["html"]
 
     # ── M4 : Incident / Besoin d'un échange ──────────────────────────────────
     m4 = temp_mailer.render_template("m4", {
@@ -250,8 +260,8 @@ def test_kan104_brevo_real_http_call(temp_mailer):
 
             sent_payload = json.loads(req.data.decode("utf-8"))
             assert sent_payload["to"][0]["email"] == "david@acme.com"
-            assert "Votre espace Orso Agents est en préparation." in sent_payload["subject"]
-            assert sent_payload["sender"]["email"] == f"notifications@{DEFAULT_SENDER_DOMAIN}"
+            assert sent_payload["sender"]["email"] == "contact@orso-agents.fr"
+            assert sent_payload["replyTo"]["email"] == "contact@orso-agents.fr"
 
 
 def test_kan104_fastapi_endpoints(client):
