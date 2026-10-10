@@ -1,0 +1,70 @@
+{
+  "ticket": "KAN-65",
+  "title": "Acheminement du secret d'intégrité des personas vers les hôtes clients",
+  "timestamp_utc": "2026-10-06T10:21:03.319728+00:00",
+  "target_host": {
+    "host_id": "prod-fr-003",
+    "host_name": "Serveur Clients OVH (Hôte 2)",
+    "ssh_target": "ubuntu@57.131.196.106",
+    "container_filter": "orso_client"
+  },
+  "remote_identity": {
+    "hostname": "vps-9df18c40",
+    "uname": "Linux vps-9df18c40 7.0.0-28-generic #28-Ubuntu SMP PREEMPT_DYNAMIC Sun Jun 21 01:01:36 UTC 2026 x86_64 GNU/Linux",
+    "ip": "57.131.196.106",
+    "returncode": 0
+  },
+  "ca5_canonical_env": {
+    "action": "DEPLOY_ENGINE_ENV",
+    "path": "/etc/orso/engine.env",
+    "stat_output": "600 root:root",
+    "ls_output": "-rw------- 1 root root 195 Oct  6 10:21 /etc/orso/engine.env",
+    "permissions_verified": true,
+    "transport_method": "stdin via sudo tee /etc/orso/engine.env (zéro secret en ligne de commande)",
+    "returncode": 0,
+    "success": true
+  },
+  "ca4_fail_closed_absence_secret": {
+    "fail_closed_triggered": true,
+    "error_message": "Opération refusée (Fail-Closed) : variable ORSO_PERSONA_HMAC_KEY requise dans l'environnement du plan de gestion pour sécuriser le démarrage du conteneur.",
+    "containers_before_count": 4,
+    "containers_after_count": 4,
+    "containers_list_strictly_identical": true,
+    "new_container_created": false,
+    "success": true
+  },
+  "ca2_live_update": {
+    "action": "LIVE_UPDATE",
+    "target_digest": "sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
+    "container_name": "orso_client_demo",
+    "container_inspect": "running | Healthy=healthy | RestartCount=0",
+    "health_http_code": "200",
+    "active_digest": "sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
+    "success": true
+  },
+  "ca1_zero_secret_exposure": {
+    "secret_in_process_table": false,
+    "secret_in_container_logs": false,
+    "persona_integrity_log_evidence": true,
+    "cmdline_uses_stdin_env_file": true,
+    "success": true
+  },
+  "ca3_live_rollback": {
+    "action": "LIVE_ROLLBACK",
+    "rollback_digest": "sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
+    "state_before": "sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
+    "state_after": "sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
+    "health_http_code": "200",
+    "success": true
+  },
+  "ca6_remote_path_verification": {
+    "remote_host": "prod-fr-003.orso-agents.fr",
+    "remote_ip": "57.131.196.106",
+    "remote_machine_name": "vps-9df18c40",
+    "transport_channel": "SSH transport (BatchMode=yes, ConnectTimeout=10) with encrypted stdin",
+    "all_criteria_measured_on_remote_host": true,
+    "success": true
+  },
+  "overall_status": "PASSED",
+  "summary": "Les 6 critères d'acceptation CA1 à CA6 du ticket KAN-65 sont 100% validés sur l'hôte client réel PROD-FR-003."
+}

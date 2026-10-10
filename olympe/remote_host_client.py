@@ -148,8 +148,9 @@ class RemoteDockerHostManager:
         timeout: float = 25.0,
         tenant_slug: Optional[str] = None,
         operation: str = "custom",
+        input_data: Optional[str] = None,
     ) -> subprocess.CompletedProcess:
-        """Exécute une commande Docker sur l'hôte distant de manière non-interactive (CA1/CA3)."""
+        """Exécute une commande Docker sur l'hôte distant de manière non-interactive (CA1/CA3 / KAN-65)."""
         host_cfg = self.get_host_config(host_id)
         # Utilisation de -H ssh://user@ip pour le transport Docker natif non-interactif
         cmd = ["docker", "-H", host_cfg.docker_host] + args
@@ -158,6 +159,7 @@ class RemoteDockerHostManager:
         try:
             proc = subprocess.run(
                 cmd,
+                input=input_data,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
