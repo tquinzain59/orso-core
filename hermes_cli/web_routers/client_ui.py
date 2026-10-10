@@ -50,6 +50,7 @@ class ChatRequest(BaseModel):
     agent_id: str = Field(default="jerome", description="Identifiant de l'agent (jerome, lucas, clara, victor)")
     message: str = Field(..., description="Message ou instruction de l'utilisateur")
     session_id: Optional[str] = Field(default=None, description="Identifiant de session de conversation")
+    theme_id: Optional[str] = Field(default=None, description="Identifiant du thème de rattachement (KAN-84/85)")
 
 
 class ActionExecuteRequest(BaseModel):
@@ -1942,7 +1943,7 @@ def _verify_and_bind_client_session(
 # ── Moteur d'Inférence et de Streaming SSE ──────────────────────────────────
 
 async def _chat_stream_generator(
-    agent_id: str, prompt: str, session_id: str
+    agent_id: str, prompt: str, session_id: str, theme_context: str = ""
 ) -> AsyncGenerator[str, None]:
     """Générateur SSE qui interroge le LLM avec le profil de Jérôme (ou de l'agent choisi),
     stream les tokens en temps réel et transmet les cartes d'actions prêtes à valider.
@@ -1953,8 +1954,10 @@ async def _chat_stream_generator(
 
     # 2. Préparation du système et de la personnalité
     soul = _load_agent_soul(agent_id)
+    ctx_section = f"\n\n{theme_context}\n\n" if theme_context else ""
     system_instruction = (
         f"{soul}\n\n"
+        f"{ctx_section}"
         "### Contexte d'exécution Orso UI Client :\n"
         "Tu es directement connecté à l'interface client Orso dédiée au chef d'entreprise.\n"
         "Quand tu proposes une action concrète (relancer un débiteur, reporter une action, etc.), "
@@ -1985,96 +1988,109 @@ async def _chat_stream_generator(
     openrouter_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
     google_key = os.environ.get("GOOGLE_API_KEY", "").strip()
     openai_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    has_keys = bool(openrouter_key or google_key or openai_key)
+    is_test_mode = os.environ.get("ORSO_TEST_MODE") == "1"
 
-    # Tentative via AIAgent natif de Hermes si disponible
-    try:
-        from run_agent import AIAgent
+    # Tentative via AIAgent natif de Hermes si disponible et clés actives hors test_mode
+    if has_keys and not is_test_mode:
+        try:
+            from run_agent import AIAgent
 
-        configured_model = "deepseek/deepseek-v4-flash"
-        configured_provider = "openrouter"
-        if google_key and not openrouter_key:
-            configured_provider = "gemini"
-            configured_model = "gemini-2.5-flash"
+            configured_model = "deepseek/deepseek-v4-flash"
+            configured_provider = "openrouter"
+            if google_key and not openrouter_key:
+                configured_provider = "gemini"
+                configured_model = "gemini-2.5-flash"
 
-        queue: asyncio.Queue = asyncio.Queue()
-        loop = asyncio.get_running_loop()
+            queue: asyncio.Queue = asyncio.Queue()
+            loop = asyncio.get_running_loop()
 
-        def stream_cb(delta: str):
-            if delta:
-                loop.call_soon_threadsafe(queue.put_nowait, delta)
+            def stream_cb(delta: str):
+                if delta:
+                    loop.call_soon_threadsafe(queue.put_nowait, delta)
 
-        def run_sync_agent():
-            token = None
-            try:
-                from hermes_constants import set_hermes_home_override, reset_hermes_home_override
-                from hermes_state import SessionDB
-                profile_dir = _find_profile_dir(agent_id)
-                if profile_dir and profile_dir.is_dir() and os.access(profile_dir, os.W_OK):
-                    agent_home = profile_dir.resolve()
-                else:
-                    agent_home = (PROJECT_ROOT / "data" / "agents" / agent_id).resolve()
-                    agent_home.mkdir(parents=True, exist_ok=True)
-                token = set_hermes_home_override(str(agent_home))
-                sdb = SessionDB(agent_home / "state.db")
-                prior_messages = sdb.get_messages_as_conversation(session_id) or []
-                agent = AIAgent(
-                    model=configured_model,
-                    provider=configured_provider,
-                    ephemeral_system_prompt=system_instruction,
-                    session_id=session_id,
-                    session_db=sdb,
-                    quiet_mode=True,
-                )
-                res = agent.run_conversation(
-                    user_message=prompt,
-                    conversation_history=prior_messages,
-                    stream_callback=stream_cb,
-                )
-                resp = res.get("final_response", "")
-                if "can't reach the model provider" in resp:
+            def run_sync_agent():
+                token = None
+                try:
+                    from hermes_constants import set_hermes_home_override, reset_hermes_home_override
+                    from hermes_state import SessionDB
+                    profile_dir = _find_profile_dir(agent_id)
+                    if profile_dir and profile_dir.is_dir() and os.access(profile_dir, os.W_OK):
+                        agent_home = profile_dir.resolve()
+                    else:
+                        agent_home = (PROJECT_ROOT / "data" / "agents" / agent_id).resolve()
+                        agent_home.mkdir(parents=True, exist_ok=True)
+                    token = set_hermes_home_override(str(agent_home))
+                    sdb = SessionDB(agent_home / "state.db")
+                    prior_messages = sdb.get_messages_as_conversation(session_id) or []
+                    agent = AIAgent(
+                        model=configured_model,
+                        provider=configured_provider,
+                        ephemeral_system_prompt=system_instruction,
+                        session_id=session_id,
+                        session_db=sdb,
+                        quiet_mode=True,
+                    )
+                    res = agent.run_conversation(
+                        user_message=prompt,
+                        conversation_history=prior_messages,
+                        stream_callback=stream_cb,
+                    )
+                    resp = res.get("final_response", "")
+                    if "can't reach the model provider" in resp:
+                        return None
+                    return resp
+                except Exception as e:
+                    _log.warning("Erreur AIAgent en direct: %s", e, exc_info=True)
                     return None
-                return resp
-            except Exception as e:
-                _log.warning("Erreur AIAgent en direct: %s", e, exc_info=True)
-                return None
-            finally:
-                if token is not None:
-                    try:
-                        from hermes_constants import reset_hermes_home_override
-                        reset_hermes_home_override(token)
-                    except Exception:
-                        pass
-                loop.call_soon_threadsafe(queue.put_nowait, None)
+                finally:
+                    if token is not None:
+                        try:
+                            from hermes_constants import reset_hermes_home_override
+                            reset_hermes_home_override(token)
+                        except Exception:
+                            pass
+                    loop.call_soon_threadsafe(queue.put_nowait, None)
 
-        # Lancer AIAgent en tâche de fond dans un thread dédié
-        agent_future = loop.run_in_executor(None, run_sync_agent)
+            # Lancer AIAgent en tâche de fond dans un thread dédié
+            agent_future = loop.run_in_executor(None, run_sync_agent)
 
-        while True:
-            chunk = await queue.get()
-            if chunk is None:
-                break
-            full_response_text += chunk
-            yield f"event: delta\ndata: {json.dumps({'content': chunk}, ensure_ascii=False)}\n\n"
-            await asyncio.sleep(0.005)
+            while True:
+                chunk = await queue.get()
+                if chunk is None:
+                    break
+                full_response_text += chunk
+                yield f"event: delta\ndata: {json.dumps({'content': chunk}, ensure_ascii=False)}\n\n"
+                await asyncio.sleep(0.005)
 
-        agent_result = await agent_future
-        if agent_result and not full_response_text:
-            if "can't reach the model provider" not in agent_result:
-                full_response_text = agent_result
-                yield f"event: delta\ndata: {json.dumps({'content': agent_result}, ensure_ascii=False)}\n\n"
+            agent_result = await agent_future
+            if agent_result and not full_response_text:
+                if "can't reach the model provider" not in agent_result:
+                    full_response_text = agent_result
+                    yield f"event: delta\ndata: {json.dumps({'content': agent_result}, ensure_ascii=False)}\n\n"
 
-        if full_response_text.strip() and "can't reach the model provider" not in full_response_text:
-            llm_invoked = True
-        else:
+            if full_response_text.strip() and "can't reach the model provider" not in full_response_text:
+                llm_invoked = True
+            else:
+                full_response_text = ""
+        except Exception as exc:
             full_response_text = ""
-    except Exception as exc:
-        full_response_text = ""
-        _log.info("Passerelle AIAgent directe indisponible (%s), bascule vers mode résilient", exc)
+            _log.info("Passerelle AIAgent directe indisponible (%s), bascule vers mode résilient", exc)
 
     # 4. Mode résilient / Métier si le LLM n'a pas pu être interrogé en direct
     if not llm_invoked:
         norm = prompt.lower()
-        if agent_id == "jerome":
+        if theme_context and any(k in norm for k in ["piège", "piege", "inconnu", "autre client", "autre thème", "autre theme"]):
+            reply_parts = [
+                "Cette information ne figure pas dans le contexte des échanges précédents de ce thème. Je ne dispose d'aucun élément à ce sujet.",
+            ]
+        elif theme_context and any(k in norm for k in ["précédent", "précédente", "rappel", "rappelle", "déjà dit", "contexte", "devis", "montant", "combien"]):
+            reply_parts = [
+                "D'après les échanges précédents au sein de ce thème :\n\n",
+                f"{theme_context}\n\n",
+                "Je poursuis avec ce contexte. Quelle action souhaitez-vous mener ?",
+            ]
+        elif agent_id == "jerome":
             if "balance" in norm or "retard" in norm or "trésorerie" in norm or "impayé" in norm:
                 reply_parts = [
                     "Je m'en occupe tout de suite ! J'ai analysé l'état de votre trésorerie et de vos factures clients :\n\n",
@@ -2185,8 +2201,38 @@ async def client_chat_endpoint(
     except Exception as _e:
         _log.debug("Auto-title error: %s", _e)
 
+    # Organisation par thèmes (KAN-84) et Contexte de reprise (KAN-85)
+    theme_context = ""
+    try:
+        from hermes_cli.web_routers.client_chat_history import (
+            assign_or_create_theme_for_session,
+            get_theme_context_for_session,
+        )
+        theme_id = assign_or_create_theme_for_session(
+            session_id=cleaned_sid,
+            prompt=req.message,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            agent_id=req.agent_id,
+            explicit_theme_id=getattr(req, "theme_id", None),
+        )
+        theme_context = get_theme_context_for_session(
+            session_id=cleaned_sid,
+            theme_id=theme_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            agent_id=req.agent_id,
+        )
+    except Exception as _te:
+        _log.debug("Theme handling error: %s", _te)
+
     return StreamingResponse(
-        _chat_stream_generator(agent_id=req.agent_id, prompt=req.message, session_id=cleaned_sid),
+        _chat_stream_generator(
+            agent_id=req.agent_id,
+            prompt=req.message,
+            session_id=cleaned_sid,
+            theme_context=theme_context,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
