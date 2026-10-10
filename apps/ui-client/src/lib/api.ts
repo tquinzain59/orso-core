@@ -10,6 +10,8 @@ import {
   BillingData,
   ClientSubscription,
   ClientSession,
+  ClientTheme,
+  ClientThemeContext,
 } from '@/types';
 import { ORSO_AGENTS, SAMPLE_INTEGRATIONS, SAMPLE_CHANNELS } from '@/lib/data';
 
@@ -296,7 +298,8 @@ export async function sendUserPrompt(
   agentId: AgentId,
   prompt: string,
   onDelta?: (text: string) => void,
-  sessionId?: string
+  sessionId?: string,
+  themeId?: string
 ): Promise<ChatMessage> {
   const timestamp = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
   const cleanSessionId = (sessionId || '').trim();
@@ -318,6 +321,7 @@ export async function sendUserPrompt(
         agent_id: agentId,
         message: prompt,
         session_id: cleanSessionId,
+        theme_id: themeId || undefined,
       }),
     });
 
@@ -588,6 +592,152 @@ export async function deleteClientSession(
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
     throw new Error(`Erreur suppression conversation (${res.status}): ${errText || res.statusText}`);
+  }
+  return res.json();
+}
+
+// ── Gestion des Thèmes de Conversation (KAN-84, KAN-85) ─────────────────────
+
+export async function listClientThemes(
+  agentId?: string
+): Promise<{ themes: ClientTheme[]; total: number }> {
+  const base = getApiBaseUrl();
+  const query = new URLSearchParams();
+  if (agentId) query.append('agent_id', agentId);
+
+  const res = await fetch(`${base}/api/client/chat/themes?${query.toString()}`, {
+    method: 'GET',
+    headers: {
+      'Accept': 'application/json',
+      ...getAuthHeaders(),
+    },
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Erreur récupération thèmes (${res.status}): ${errText || res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function createClientTheme(
+  title?: string,
+  agentId: string = 'jerome'
+): Promise<{ success: boolean; theme: ClientTheme }> {
+  const base = getApiBaseUrl();
+  const res = await fetch(`${base}/api/client/chat/themes`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      ...getAuthHeaders(),
+    },
+    body: JSON.stringify({ title, agent_id: agentId }),
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Erreur création thème (${res.status}): ${errText || res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function renameClientTheme(
+  themeId: string,
+  title: string
+): Promise<{ success: boolean; theme_id: string; title: string; title_source: string }> {
+  const base = getApiBaseUrl();
+  const res = await fetch(`${base}/api/client/chat/themes/${encodeURIComponent(themeId)}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      ...getAuthHeaders(),
+    },
+    body: JSON.stringify({ title }),
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Erreur renommage thème (${res.status}): ${errText || res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function deleteClientTheme(
+  themeId: string,
+  deleteSessions: boolean = false
+): Promise<{ success: boolean; theme_id: string; deleted: boolean }> {
+  const base = getApiBaseUrl();
+  const res = await fetch(`${base}/api/client/chat/themes/${encodeURIComponent(themeId)}?delete_sessions=${deleteSessions}`, {
+    method: 'DELETE',
+    headers: {
+      'Accept': 'application/json',
+      ...getAuthHeaders(),
+    },
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Erreur suppression thème (${res.status}): ${errText || res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function moveSessionToTheme(
+  themeId: string,
+  sessionId: string
+): Promise<{ success: boolean; theme_id: string; session_id: string }> {
+  const base = getApiBaseUrl();
+  const res = await fetch(`${base}/api/client/chat/themes/${encodeURIComponent(themeId)}/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'POST',
+    headers: {
+      'Accept': 'application/json',
+      ...getAuthHeaders(),
+    },
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Erreur rattachement session au thème (${res.status}): ${errText || res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function mergeClientThemes(
+  sourceThemeId: string,
+  targetThemeId: string
+): Promise<{ success: boolean; source_theme_id: string; target_theme_id: string }> {
+  const base = getApiBaseUrl();
+  const res = await fetch(`${base}/api/client/chat/themes/${encodeURIComponent(sourceThemeId)}/merge/${encodeURIComponent(targetThemeId)}`, {
+    method: 'POST',
+    headers: {
+      'Accept': 'application/json',
+      ...getAuthHeaders(),
+    },
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Erreur fusion de thèmes (${res.status}): ${errText || res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function getClientThemeContext(
+  themeId: string,
+  sessionId?: string,
+  agentId: string = 'jerome'
+): Promise<ClientThemeContext> {
+  const base = getApiBaseUrl();
+  const query = new URLSearchParams();
+  if (sessionId) query.append('session_id', sessionId);
+  query.append('agent_id', agentId);
+
+  const res = await fetch(`${base}/api/client/chat/themes/${encodeURIComponent(themeId)}/context?${query.toString()}`, {
+    method: 'GET',
+    headers: {
+      'Accept': 'application/json',
+      ...getAuthHeaders(),
+    },
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Erreur récupération contexte thème (${res.status}): ${errText || res.statusText}`);
   }
   return res.json();
 }

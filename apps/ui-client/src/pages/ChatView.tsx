@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Agent, AgentId, ChatMessage, ActionCardData, ClientSession } from '@/types';
+import { Agent, AgentId, ChatMessage, ActionCardData, ClientSession, ClientTheme } from '@/types';
 import { ORSO_AGENTS } from '@/lib/data';
 import {
   sendUserPrompt,
@@ -9,6 +9,11 @@ import {
   renameClientSession,
   deleteClientSession,
   getSessionMessages,
+  listClientThemes,
+  createClientTheme,
+  renameClientTheme,
+  deleteClientTheme,
+  getClientThemeContext,
 } from '@/lib/api';
 import { ActionCard } from '@/components/ActionCard';
 import { QuickActions } from '@/components/QuickActions';
@@ -24,8 +29,12 @@ import {
   Check,
   X,
   ChevronLeft,
+  ChevronDown,
+  ChevronRight,
   Folder,
+  FolderPlus,
   Plus,
+  Sparkles,
 } from 'lucide-react';
 
 interface ChatViewProps {
@@ -76,13 +85,25 @@ export const ChatView: React.FC<ChatViewProps> = ({ activeAgentId, availableAgen
   const [streamingText, setStreamingText] = useState('');
   const [backendStatus, setBackendStatus] = useState<{ online: boolean; llmConnected?: boolean }>({ online: false });
 
-  // Gestion de l'historique des conversations (KAN-83)
+  // Gestion de l'historique des conversations et thèmes (KAN-83, KAN-84, KAN-85)
   const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(true);
   const [sessionsList, setSessionsList] = useState<ClientSession[]>([]);
+  const [themesList, setThemesList] = useState<ClientTheme[]>([]);
+  const [activeThemeId, setActiveThemeId] = useState<string | null>(null);
+  const [collapsedThemes, setCollapsedThemes] = useState<Record<string, boolean>>({});
   const [isSessionsLoading, setIsSessionsLoading] = useState<boolean>(false);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editTitleInput, setEditTitleInput] = useState<string>('');
   const [sessionToDelete, setSessionToDelete] = useState<ClientSession | null>(null);
+
+  // États pour les thèmes (KAN-84, KAN-85)
+  const [isCreatingTheme, setIsCreatingTheme] = useState<boolean>(false);
+  const [newThemeTitleInput, setNewThemeTitleInput] = useState<string>('');
+  const [editingThemeId, setEditingThemeId] = useState<string | null>(null);
+  const [editThemeTitleInput, setEditThemeTitleInput] = useState<string>('');
+  const [themeToDelete, setThemeToDelete] = useState<ClientTheme | null>(null);
+  const [deleteThemeWithSessions, setDeleteThemeWithSessions] = useState<boolean>(false);
+  const [themeContextInfo, setThemeContextInfo] = useState<{ hasContext: boolean; lengthChars: number; tokensEst: number } | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const storedUser = getStoredUser();
@@ -97,14 +118,18 @@ export const ChatView: React.FC<ChatViewProps> = ({ activeAgentId, availableAgen
     return () => clearInterval(interval);
   }, []);
 
-  // Charger la liste des sessions pour l'agent actif
+  // Charger la liste des sessions et thèmes pour l'agent actif
   const loadSessionsHistory = async (_preferredSid?: string) => {
     setIsSessionsLoading(true);
     try {
-      const data = await listClientSessions(activeAgentId);
-      setSessionsList(data.sessions || []);
+      const [sessionsData, themesData] = await Promise.all([
+        listClientSessions(activeAgentId),
+        listClientThemes(activeAgentId),
+      ]);
+      setSessionsList(sessionsData.sessions || []);
+      setThemesList(themesData.themes || []);
     } catch (err) {
-      console.warn("Impossible de charger la liste des conversations:", err);
+      console.warn("Impossible de charger la liste des conversations ou thèmes:", err);
     } finally {
       setIsSessionsLoading(false);
     }
@@ -156,6 +181,17 @@ export const ChatView: React.FC<ChatViewProps> = ({ activeAgentId, availableAgen
 
     setCurrentSessionId(session.session_id);
     localStorage.setItem(getSessionStorageKey(activeAgentId), session.session_id);
+    const themeId = session.dossier_metier_id || null;
+    setActiveThemeId(themeId);
+
+    if (themeId) {
+      getClientThemeContext(themeId, session.session_id, activeAgentId)
+        .then((ctx) => setThemeContextInfo({ hasContext: ctx.has_context, lengthChars: ctx.length_chars, tokensEst: ctx.tokens_est }))
+        .catch(() => setThemeContextInfo(null));
+    } else {
+      setThemeContextInfo(null);
+    }
+
     setIsLoading(true);
 
     try {
@@ -236,7 +272,8 @@ export const ChatView: React.FC<ChatViewProps> = ({ activeAgentId, availableAgen
         (delta) => {
           setStreamingText(delta);
         },
-        sid
+        sid,
+        activeThemeId || undefined
       );
       setMessages((prev) => {
         const next = [...prev, assistantMsg];
@@ -244,7 +281,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ activeAgentId, availableAgen
         return next;
       });
       setStreamingText('');
-      // Rafraîchir l'historique pour afficher le nouveau titre automatique (CA1)
+      // Rafraîchir l'historique et les thèmes pour afficher le nouveau thème en 4 mots (KAN-84)
       loadSessionsHistory(sid);
     } catch (err: any) {
       console.error("Erreur lors de l'envoi du message :", err);
@@ -273,15 +310,53 @@ export const ChatView: React.FC<ChatViewProps> = ({ activeAgentId, availableAgen
   };
 
   const handleResetChat = () => {
-    // CA4: Le bouton Nouvelle discussion ouvre une nouvelle session différente
-    // sans détruire la précédente, qui reste dans le magasin du moteur
+    // CA4: Nouvelle discussion neutre / hors-thème
     const newSid = generateNewSessionId(activeAgentId);
     localStorage.setItem(getSessionStorageKey(activeAgentId), newSid);
     setCurrentSessionId(newSid);
+    setActiveThemeId(null);
+    setThemeContextInfo(null);
     setMessages([]);
     setStreamingText('');
     setIsLoading(false);
     setEditingSessionId(null);
+  };
+
+  const handleStartSessionInTheme = (themeId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const newSid = generateNewSessionId(activeAgentId);
+    localStorage.setItem(getSessionStorageKey(activeAgentId), newSid);
+    setCurrentSessionId(newSid);
+    setActiveThemeId(themeId);
+    setMessages([]);
+    setStreamingText('');
+    setIsLoading(false);
+    setEditingSessionId(null);
+
+    // Charger immédiatement le contexte de reprise pour ce thème (KAN-85)
+    getClientThemeContext(themeId, newSid, activeAgentId)
+      .then((ctx) => setThemeContextInfo({ hasContext: ctx.has_context, lengthChars: ctx.length_chars, tokensEst: ctx.tokens_est }))
+      .catch(() => setThemeContextInfo(null));
+  };
+
+  const handleCreateTheme = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanTitle = newThemeTitleInput.trim();
+    if (!cleanTitle) return;
+
+    try {
+      const res = await createClientTheme(cleanTitle, activeAgentId);
+      if (res.success && res.theme) {
+        setThemesList((prev) => [res.theme, ...prev]);
+        setNewThemeTitleInput('');
+        setIsCreatingTheme(false);
+        // Démarrer une conversation directement rattachée à ce thème
+        handleStartSessionInTheme(res.theme.theme_id);
+      }
+    } catch (err) {
+      console.error("Erreur création thème:", err);
+      alert("Impossible de créer le thème.");
+    }
   };
 
   const handleStartRename = (session: ClientSession, e: React.MouseEvent) => {
@@ -301,7 +376,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ activeAgentId, availableAgen
       );
       setEditingSessionId(null);
     } catch (err) {
-      console.error("Erreur renommage:", err);
+      console.error("Erreur renommage session:", err);
       alert("Impossible de renommer la discussion.");
     }
   };
@@ -323,6 +398,61 @@ export const ChatView: React.FC<ChatViewProps> = ({ activeAgentId, availableAgen
       console.error("Erreur suppression session:", err);
       alert("Impossible de supprimer la discussion.");
     }
+  };
+
+  const handleStartThemeRename = (theme: ClientTheme, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingThemeId(theme.theme_id);
+    setEditThemeTitleInput(theme.title);
+  };
+
+  const handleSaveThemeRename = async (themeId: string, e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!editThemeTitleInput.trim()) return;
+
+    try {
+      const res = await renameClientTheme(themeId, editThemeTitleInput.trim());
+      if (res.success) {
+        setThemesList((prev) =>
+          prev.map((t) => (t.theme_id === themeId ? { ...t, title: res.title, title_source: 'user' } : t))
+        );
+        setEditingThemeId(null);
+      }
+    } catch (err) {
+      console.error("Erreur renommage thème:", err);
+      alert("Impossible de renommer le thème.");
+    }
+  };
+
+  const handleConfirmDeleteTheme = async () => {
+    if (!themeToDelete) return;
+    const tid = themeToDelete.theme_id;
+
+    try {
+      await deleteClientTheme(tid, deleteThemeWithSessions);
+      setThemesList((prev) => prev.filter((t) => t.theme_id !== tid));
+      if (deleteThemeWithSessions) {
+        setSessionsList((prev) => prev.filter((s) => s.dossier_metier_id !== tid));
+      } else {
+        setSessionsList((prev) =>
+          prev.map((s) => (s.dossier_metier_id === tid ? { ...s, dossier_metier_id: null } : s))
+        );
+      }
+
+      if (activeThemeId === tid) {
+        handleResetChat();
+      }
+      setThemeToDelete(null);
+      setDeleteThemeWithSessions(false);
+    } catch (err) {
+      console.error("Erreur suppression thème:", err);
+      alert("Impossible de supprimer le thème.");
+    }
+  };
+
+  const toggleThemeCollapse = (themeId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setCollapsedThemes((prev) => ({ ...prev, [themeId]: !prev[themeId] }));
   };
 
   const handleUpdateActionStatus = (actionId: string, status: ActionCardData['status'], feedback?: string) => {
@@ -370,121 +500,360 @@ export const ChatView: React.FC<ChatViewProps> = ({ activeAgentId, availableAgen
           </button>
         </div>
 
-        {/* Bouton Nouvelle Discussion dans le volet */}
-        <div className="p-3 border-b border-slate-800/60">
-          <button
-            onClick={handleResetChat}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/30 text-emerald-300 text-xs font-semibold transition-all shadow-sm"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Nouvelle discussion</span>
-          </button>
+        {/* Boutons d'actions rapides dans le volet : Nouvelle discussion & Nouveau thème */}
+        <div className="p-3 border-b border-slate-800/60 space-y-2">
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={handleResetChat}
+              className={`flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-lg border text-xs font-semibold transition-all shadow-sm ${
+                activeThemeId === null && messages.length === 0
+                  ? 'bg-emerald-600 text-white border-emerald-500'
+                  : 'bg-emerald-600/15 hover:bg-emerald-600/25 border-emerald-500/30 text-emerald-300'
+              }`}
+              title="Ouvrir une nouvelle discussion libre"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Discussion</span>
+            </button>
+            <button
+              onClick={() => setIsCreatingTheme(!isCreatingTheme)}
+              className="flex items-center justify-center gap-1.5 px-2.5 py-2 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/30 text-indigo-300 text-xs font-semibold transition-all shadow-sm"
+              title="Créer un nouveau thème de conversation"
+            >
+              <FolderPlus className="w-3.5 h-3.5" />
+              <span>Thème</span>
+            </button>
+          </div>
+
+          {/* Formulaire inline de création de thème */}
+          {isCreatingTheme && (
+            <form onSubmit={handleCreateTheme} className="p-2 rounded-lg bg-slate-950 border border-indigo-500/40 space-y-1.5">
+              <div className="flex items-center justify-between text-[11px] text-indigo-300 font-medium">
+                <span>Nouveau thème (4 mots max)</span>
+                <button type="button" onClick={() => setIsCreatingTheme(false)} className="text-slate-400 hover:text-white">
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+              <div className="flex items-center gap-1">
+                <input
+                  type="text"
+                  placeholder="Ex: Audit Trésorerie 2026"
+                  value={newThemeTitleInput}
+                  onChange={(e) => setNewThemeTitleInput(e.target.value)}
+                  autoFocus
+                  className="flex-1 text-xs bg-slate-900 border border-slate-700 rounded px-2 py-1 text-white focus:outline-none focus:border-indigo-400"
+                />
+                <button
+                  type="submit"
+                  disabled={!newThemeTitleInput.trim()}
+                  className="px-2 py-1 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-semibold rounded transition-all"
+                >
+                  Créer
+                </button>
+              </div>
+            </form>
+          )}
         </div>
 
         {/* Bandeau de Rétention 60 Jours (CA7) */}
-        <div className="px-3 py-2 bg-slate-950/60 border-b border-slate-800/40 flex items-center gap-1.5 text-[11px] text-slate-400">
-          <Clock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-          <span>Conservation : <strong className="text-slate-300 font-semibold">60 jours</strong></span>
+        <div className="px-3 py-1.5 bg-slate-950/60 border-b border-slate-800/40 flex items-center justify-between text-[11px] text-slate-400">
+          <div className="flex items-center gap-1.5">
+            <Clock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            <span>Conservation : <strong className="text-slate-300 font-semibold">60j</strong></span>
+          </div>
+          <span className="text-[10px] text-slate-500">{themesList.length} thèmes</span>
         </div>
 
-        {/* Liste des conversations de l'agent */}
-        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+        {/* Liste des conversations organisées par blocs de thèmes (KAN-84, KAN-85) */}
+        <div className="flex-1 overflow-y-auto p-2 space-y-3">
           {isSessionsLoading ? (
             <div className="py-8 text-center text-xs text-slate-500">Chargement de l'historique...</div>
-          ) : sessionsList.length === 0 ? (
-            <div className="py-8 px-4 text-center text-xs text-slate-500">
-              Aucune conversation archivée pour cet agent.
-            </div>
           ) : (
-            sessionsList.map((s) => {
-              const isSelected = s.session_id === currentSessionId;
-              const isEditing = editingSessionId === s.session_id;
+            <>
+              {/* Carte provisoire : Nouvelle discussion en cours (non écrite en DB - CA7) */}
+              {messages.length === 0 && !sessionsList.some((s) => s.session_id === currentSessionId) && (
+                <div className="p-2 rounded-lg border border-dashed border-emerald-500/40 bg-emerald-950/10 text-slate-300">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-3.5 h-3.5 text-emerald-400 animate-pulse shrink-0" />
+                    <span className="text-xs font-semibold text-emerald-300">
+                      {activeThemeId ? `Nouvelle discussion dans le thème` : `Nouvelle discussion`}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-0.5">
+                    {activeThemeId
+                      ? `Le contexte des échanges précédents sera repris pour répondre.`
+                      : `Le thème en 4 mots sera généré dès le premier message.`}
+                  </p>
+                </div>
+              )}
 
-              return (
-                <div
-                  key={s.session_id}
-                  onClick={() => !isEditing && handleSelectSession(s)}
-                  className={`group relative flex flex-col p-2.5 rounded-lg text-left transition-all cursor-pointer border ${
-                    isSelected
-                      ? 'bg-slate-800/90 border-emerald-500/50 text-white shadow-sm'
-                      : 'hover:bg-slate-800/50 border-transparent text-slate-300'
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-1.5 w-full">
-                    <div className="flex items-center gap-2 overflow-hidden flex-1">
-                      <MessageSquare className={`w-3.5 h-3.5 shrink-0 ${isSelected ? 'text-emerald-400' : 'text-slate-500'}`} />
-                      {isEditing ? (
-                        <form
-                          onSubmit={(e) => handleSaveRename(s.session_id, e)}
-                          className="flex items-center gap-1 flex-1"
-                          onClick={(e) => e.stopPropagation()}
+              {/* Blocs de Thèmes (KAN-84) */}
+              {themesList.map((theme) => {
+                const isCollapsed = Boolean(collapsedThemes[theme.theme_id]);
+                const themeSessions = sessionsList.filter((s) => s.dossier_metier_id === theme.theme_id);
+                const isEditingTheme = editingThemeId === theme.theme_id;
+                const isThemeActive = activeThemeId === theme.theme_id;
+
+                return (
+                  <div
+                    key={theme.theme_id}
+                    className={`rounded-xl border transition-all ${
+                      isThemeActive
+                        ? 'border-indigo-500/50 bg-indigo-950/20 shadow-sm'
+                        : 'border-slate-800/80 bg-slate-900/60'
+                    }`}
+                  >
+                    {/* Entête du Thème */}
+                    <div className="group flex items-center justify-between p-2 hover:bg-slate-800/40 rounded-t-xl transition-colors">
+                      <div
+                        className="flex items-center gap-1.5 flex-1 min-w-0 cursor-pointer"
+                        onClick={(e) => toggleThemeCollapse(theme.theme_id, e)}
+                      >
+                        <button
+                          type="button"
+                          className="p-0.5 text-slate-400 hover:text-white"
+                          title={isCollapsed ? 'Déplier le thème' : 'Plier le thème'}
                         >
-                          <input
-                            type="text"
-                            value={editTitleInput}
-                            onChange={(e) => setEditTitleInput(e.target.value)}
-                            autoFocus
-                            className="w-full text-xs bg-slate-950 border border-emerald-500 rounded px-1.5 py-0.5 text-white focus:outline-none"
-                          />
-                          <button
-                            type="submit"
-                            className="p-1 hover:text-emerald-400 text-slate-300"
-                            title="Enregistrer"
+                          {isCollapsed ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                        </button>
+                        <Folder className={`w-3.5 h-3.5 shrink-0 ${isThemeActive ? 'text-indigo-400' : 'text-slate-400'}`} />
+
+                        {isEditingTheme ? (
+                          <form
+                            onSubmit={(e) => handleSaveThemeRename(theme.theme_id, e)}
+                            className="flex items-center gap-1 flex-1"
+                            onClick={(e) => e.stopPropagation()}
                           >
-                            <Check className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setEditingSessionId(null)}
-                            className="p-1 hover:text-rose-400 text-slate-400"
-                            title="Annuler"
-                          >
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        </form>
-                      ) : (
-                        <span className="text-xs font-medium truncate flex-1" title={s.title}>
-                          {s.title}
+                            <input
+                              type="text"
+                              value={editThemeTitleInput}
+                              onChange={(e) => setEditThemeTitleInput(e.target.value)}
+                              autoFocus
+                              className="w-full text-xs bg-slate-950 border border-indigo-500 rounded px-1.5 py-0.5 text-white focus:outline-none"
+                            />
+                            <button type="submit" className="p-1 hover:text-emerald-400 text-slate-300">
+                              <Check className="w-3 h-3" />
+                            </button>
+                            <button type="button" onClick={() => setEditingThemeId(null)} className="p-1 hover:text-rose-400 text-slate-400">
+                              <X className="w-3 h-3" />
+                            </button>
+                          </form>
+                        ) : (
+                          <span className="text-xs font-bold text-slate-200 truncate" title={theme.title}>
+                            {theme.title}
+                          </span>
+                        )}
+                        <span className="text-[10px] text-slate-500 font-mono px-1 rounded bg-slate-800">
+                          {themeSessions.length}
                         </span>
+                      </div>
+
+                      {/* Actions du thème : Nouveau dans ce thème (+), renommer, supprimer */}
+                      {!isEditingTheme && (
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            onClick={(e) => handleStartSessionInTheme(theme.theme_id, e)}
+                            className="p-1 text-emerald-400 hover:text-emerald-300 rounded hover:bg-emerald-950/40 transition-colors"
+                            title="Nouvelle conversation au sein de ce thème (continuité de contexte KAN-85)"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={(e) => handleStartThemeRename(theme, e)}
+                            className="p-1 text-slate-500 hover:text-slate-300 rounded hover:bg-slate-700/40 opacity-0 group-hover:opacity-100 transition-opacity"
+                            title="Renommer le thème"
+                          >
+                            <Edit3 className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setThemeToDelete(theme);
+                            }}
+                            className="p-1 text-slate-500 hover:text-rose-400 rounded hover:bg-slate-700/40 opacity-0 group-hover:opacity-100 transition-opacity"
+                            title="Supprimer le thème"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
                       )}
                     </div>
 
-                    {!isEditing && (
-                      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button
-                          onClick={(e) => handleStartRename(s, e)}
-                          className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-700/60"
-                          title="Renommer"
-                        >
-                          <Edit3 className="w-3 h-3" />
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSessionToDelete(s);
-                          }}
-                          className="p-1 text-slate-400 hover:text-rose-400 rounded hover:bg-slate-700/60"
-                          title="Supprimer"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
+                    {/* Liste des conversations au sein du thème */}
+                    {!isCollapsed && (
+                      <div className="p-1.5 pt-0 space-y-1">
+                        {themeSessions.length === 0 ? (
+                          <div className="py-2 px-2 text-center text-[10px] text-slate-500">
+                            Aucune discussion archivée. Cliquez sur <span className="text-emerald-400 font-bold">+</span> pour démarrer.
+                          </div>
+                        ) : (
+                          themeSessions.map((s) => {
+                            const isSelected = s.session_id === currentSessionId;
+                            const isEditing = editingSessionId === s.session_id;
+
+                            return (
+                              <div
+                                key={s.session_id}
+                                onClick={() => !isEditing && handleSelectSession(s)}
+                                className={`group relative flex flex-col p-2 rounded-lg text-left transition-all cursor-pointer border ${
+                                  isSelected
+                                    ? 'bg-slate-800/90 border-emerald-500/50 text-white shadow-sm'
+                                    : 'hover:bg-slate-800/40 border-transparent text-slate-300'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-1.5 w-full">
+                                  <div className="flex items-center gap-1.5 overflow-hidden flex-1">
+                                    <MessageSquare className={`w-3 h-3 shrink-0 ${isSelected ? 'text-emerald-400' : 'text-slate-500'}`} />
+                                    {isEditing ? (
+                                      <form
+                                        onSubmit={(e) => handleSaveRename(s.session_id, e)}
+                                        className="flex items-center gap-1 flex-1"
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        <input
+                                          type="text"
+                                          value={editTitleInput}
+                                          onChange={(e) => setEditTitleInput(e.target.value)}
+                                          autoFocus
+                                          className="w-full text-xs bg-slate-950 border border-emerald-500 rounded px-1.5 py-0.5 text-white focus:outline-none"
+                                        />
+                                        <button type="submit" className="p-1 hover:text-emerald-400 text-slate-300">
+                                          <Check className="w-3 h-3" />
+                                        </button>
+                                        <button type="button" onClick={() => setEditingSessionId(null)} className="p-1 hover:text-rose-400 text-slate-400">
+                                          <X className="w-3 h-3" />
+                                        </button>
+                                      </form>
+                                    ) : (
+                                      <span className="text-xs font-medium truncate flex-1" title={s.title}>
+                                        {s.title}
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  {!isEditing && (
+                                    <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                      <button
+                                        onClick={(e) => handleStartRename(s, e)}
+                                        className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-700/60"
+                                        title="Renommer la discussion"
+                                      >
+                                        <Edit3 className="w-2.5 h-2.5" />
+                                      </button>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setSessionToDelete(s);
+                                        }}
+                                        className="p-1 text-slate-400 hover:text-rose-400 rounded hover:bg-slate-700/60"
+                                        title="Supprimer la discussion"
+                                      >
+                                        <Trash2 className="w-2.5 h-2.5" />
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="text-[10px] text-slate-500 mt-0.5">
+                                  {formatSessionDate(s.last_activity_at || s.created_at)}
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
                       </div>
                     )}
                   </div>
+                );
+              })}
 
-                  {/* Date et Dossier métier */}
-                  <div className="flex items-center justify-between text-[10px] text-slate-500 mt-1">
-                    <span>{formatSessionDate(s.last_activity_at || s.created_at)}</span>
-                    {s.dossier_metier_id && (
-                      <span className="flex items-center gap-1 text-indigo-400">
-                        <Folder className="w-2.5 h-2.5" />
-                        <span className="truncate max-w-[80px]">{s.dossier_metier_id}</span>
-                      </span>
-                    )}
+              {/* Discussions hors-thèmes */}
+              {(() => {
+                const unassignedSessions = sessionsList.filter(
+                  (s) => !s.dossier_metier_id || !themesList.some((t) => t.theme_id === s.dossier_metier_id)
+                );
+                if (unassignedSessions.length === 0) return null;
+
+                return (
+                  <div className="space-y-1 pt-1">
+                    <div className="px-1 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                      Autres discussions
+                    </div>
+                    {unassignedSessions.map((s) => {
+                      const isSelected = s.session_id === currentSessionId;
+                      const isEditing = editingSessionId === s.session_id;
+
+                      return (
+                        <div
+                          key={s.session_id}
+                          onClick={() => !isEditing && handleSelectSession(s)}
+                          className={`group relative flex flex-col p-2 rounded-lg text-left transition-all cursor-pointer border ${
+                            isSelected
+                              ? 'bg-slate-800/90 border-emerald-500/50 text-white shadow-sm'
+                              : 'hover:bg-slate-800/50 border-transparent text-slate-300'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-1.5 w-full">
+                            <div className="flex items-center gap-1.5 overflow-hidden flex-1">
+                              <MessageSquare className={`w-3 h-3 shrink-0 ${isSelected ? 'text-emerald-400' : 'text-slate-500'}`} />
+                              {isEditing ? (
+                                <form
+                                  onSubmit={(e) => handleSaveRename(s.session_id, e)}
+                                  className="flex items-center gap-1 flex-1"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <input
+                                    type="text"
+                                    value={editTitleInput}
+                                    onChange={(e) => setEditTitleInput(e.target.value)}
+                                    autoFocus
+                                    className="w-full text-xs bg-slate-950 border border-emerald-500 rounded px-1.5 py-0.5 text-white focus:outline-none"
+                                  />
+                                  <button type="submit" className="p-1 hover:text-emerald-400 text-slate-300">
+                                    <Check className="w-3 h-3" />
+                                  </button>
+                                  <button type="button" onClick={() => setEditingSessionId(null)} className="p-1 hover:text-rose-400 text-slate-400">
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                </form>
+                              ) : (
+                                <span className="text-xs font-medium truncate flex-1" title={s.title}>
+                                  {s.title}
+                                </span>
+                              )}
+                            </div>
+
+                            {!isEditing && (
+                              <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button
+                                  onClick={(e) => handleStartRename(s, e)}
+                                  className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-700/60"
+                                  title="Renommer la discussion"
+                                >
+                                  <Edit3 className="w-2.5 h-2.5" />
+                                </button>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSessionToDelete(s);
+                                  }}
+                                  className="p-1 text-slate-400 hover:text-rose-400 rounded hover:bg-slate-700/60"
+                                  title="Supprimer la discussion"
+                                >
+                                  <Trash2 className="w-2.5 h-2.5" />
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                          <div className="text-[10px] text-slate-500 mt-0.5">
+                            {formatSessionDate(s.last_activity_at || s.created_at)}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                </div>
-              );
-            })
+                );
+              })()}
+            </>
           )}
         </div>
 
@@ -542,6 +911,28 @@ export const ChatView: React.FC<ChatViewProps> = ({ activeAgentId, availableAgen
                     Mode hors-ligne
                   </span>
                 )}
+
+                {/* Badge Thème Actif et Continuité (KAN-84, KAN-85) */}
+                {(() => {
+                  const currentTheme = themesList.find((t) => t.theme_id === activeThemeId);
+                  if (!currentTheme) return null;
+                  return (
+                    <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-indigo-950/70 border border-indigo-700/50 text-indigo-300 text-[11px] font-medium shadow-sm">
+                      <Folder className="w-3 h-3 text-indigo-400" />
+                      <span className="truncate max-w-[140px] sm:max-w-[200px]" title={currentTheme.title}>
+                        {currentTheme.title}
+                      </span>
+                      {themeContextInfo && themeContextInfo.hasContext ? (
+                        <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-mono ml-0.5" title={`Reprise de contexte active : ${themeContextInfo.lengthChars} car. (~${themeContextInfo.tokensEst} tokens)`}>
+                          <Sparkles className="w-2.5 h-2.5 text-emerald-400" />
+                          <span>Continuité</span>
+                        </span>
+                      ) : (
+                        <span className="text-[10px] text-slate-400 ml-0.5 font-mono">1ère conv.</span>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
               <p className="text-xs text-slate-400 mt-0.5 hidden sm:block">
                 {currentAgent.description}
@@ -711,6 +1102,55 @@ export const ChatView: React.FC<ChatViewProps> = ({ activeAgentId, availableAgen
               </button>
               <button
                 onClick={handleConfirmDelete}
+                className="px-4 py-2 rounded-lg text-xs font-semibold text-white bg-rose-600 hover:bg-rose-500 transition-all shadow-md"
+              >
+                Confirmer la suppression
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODALE DE CONFIRMATION DE SUPPRESSION DE THÈME (KAN-84 CA5) ── */}
+      {themeToDelete && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-rose-400">
+              <Trash2 className="w-5 h-5 shrink-0" />
+              <h3 className="text-base font-bold text-white">Supprimer le thème ?</h3>
+            </div>
+            <p className="text-sm text-slate-300">
+              Vous êtes sur le point de supprimer le thème :
+              <br />
+              <strong className="text-white mt-1 block">« {themeToDelete.title} »</strong>
+            </p>
+            <div className="p-3 bg-slate-950/70 rounded-xl border border-slate-800 space-y-2">
+              <label className="flex items-start gap-2.5 text-xs text-slate-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={deleteThemeWithSessions}
+                  onChange={(e) => setDeleteThemeWithSessions(e.target.checked)}
+                  className="mt-0.5 rounded border-slate-700 bg-slate-900 text-rose-500 focus:ring-rose-500"
+                />
+                <span>
+                  Supprimer également toutes les discussions archivées dans ce thème ({sessionsList.filter((s) => s.dossier_metier_id === themeToDelete.theme_id).length} conversation(s)).
+                  <br />
+                  <span className="text-[11px] text-slate-500">Si décoché, les conversations seront simplement détachées du thème sans être effacées.</span>
+                </span>
+              </label>
+            </div>
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                onClick={() => {
+                  setThemeToDelete(null);
+                  setDeleteThemeWithSessions(false);
+                }}
+                className="px-4 py-2 rounded-lg text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-800 border border-slate-800 transition-all"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={handleConfirmDeleteTheme}
                 className="px-4 py-2 rounded-lg text-xs font-semibold text-white bg-rose-600 hover:bg-rose-500 transition-all shadow-md"
               >
                 Confirmer la suppression

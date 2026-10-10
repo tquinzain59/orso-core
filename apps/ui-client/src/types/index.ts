@@ -61,6 +61,27 @@ export interface ClientSession {
   last_activity_at: number;
 }
 
+export interface ClientTheme {
+  theme_id: string;
+  tenant_id: string;
+  user_id: string;
+  agent_id: string;
+  title: string;
+  title_source: 'auto' | 'user' | string;
+  created_at: number;
+  updated_at: number;
+  sessions_count: number;
+  sessions?: ClientSession[];
+}
+
+export interface ClientThemeContext {
+  theme_id: string;
+  context_text: string;
+  has_context: boolean;
+  length_chars: number;
+  tokens_est: number;
+}
+
 export type IntegrationCategory = 'erp' | 'mail' | 'legal' | 'crm' | 'tools';
 
 export interface Integration {
