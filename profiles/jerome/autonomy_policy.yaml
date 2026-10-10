@@ -13,43 +13,105 @@ approval_policy:
     - "daf"
     - "direction"
 
-supervised_actions:
-  - action_type: "send_email"
-    description: "Expédition d'un email de relance de paiement ou mise en demeure à un débiteur"
+# Grille d'autonomie formelle par action (KAN-106)
+actions:
+  - action_type: "send_message_third_party"
+    description: "Adresser un message direct à un débiteur ou tiers"
+    level: "sous_validation"
+    contract_floor: "sous_validation"
     risk_level: "high"
-    requires_approval: true
-    timeout_hours: 48
+
+  - action_type: "write_erp_accounting"
+    description: "Écriture dans l'ERP, lettrage comptable ou modification d'encours"
+    level: "sous_validation"
+    contract_floor: "sous_validation"
+    risk_level: "high"
+
+  - action_type: "send_payment_reminder"
+    description: "Expédition d'une relance de paiement amiable ou mise en demeure"
+    level: "sous_validation"
+    contract_floor: "sous_validation"
+    risk_level: "high"
+
+  - action_type: "commit_amount_discount"
+    description: "Engager un montant, accorder une remise, abandon de créance ou étalement > 30 jours"
+    level: "interdit"
+    contract_floor: "interdit"
+    risk_level: "critical"
+
+  - action_type: "publish_external_document"
+    description: "Publication ou transmission d'un document certifié à des tiers"
+    level: "sous_validation"
+    contract_floor: "sous_validation"
+    risk_level: "high"
+
+  - action_type: "contact_third_party_person"
+    description: "Prise de contact directe avec un interlocuteur débiteur"
+    level: "sous_validation"
+    contract_floor: "sous_validation"
+    risk_level: "medium"
+
+  - action_type: "send_email"
+    description: "Expédition d'un email de relance de paiement"
+    level: "sous_validation"
+    contract_floor: "sous_validation"
+    risk_level: "high"
 
   - action_type: "send_sms"
     description: "Envoi d'un SMS d'alerte de facture en retard"
+    level: "sous_validation"
+    contract_floor: "sous_validation"
     risk_level: "high"
-    requires_approval: true
-    timeout_hours: 48
 
   - action_type: "apply_discount"
-    description: "Accord d'escompte, remise de pénalités ou étalement de dette > 30 jours"
+    description: "Accord d'escompte ou remise de pénalités"
+    level: "interdit"
+    contract_floor: "interdit"
     risk_level: "critical"
-    requires_approval: true
-    timeout_hours: 24
 
   - action_type: "legal_escalation"
-    description: "Transmission du dossier à un huissier de justice ou cabinet de recouvrement contentieux"
+    description: "Transmission du dossier au contentieux judiciaire"
+    level: "sous_validation"
+    contract_floor: "sous_validation"
     risk_level: "critical"
-    requires_approval: true
-    timeout_hours: 72
 
-autonomous_actions:
   - action_type: "analyze_aged_balance"
     description: "Lecture et calcul de la balance âgée et des retards"
+    level: "libre"
+    contract_floor: "libre"
     risk_level: "low"
-    requires_approval: false
 
   - action_type: "draft_reminder"
     description: "Rédaction d'un projet de relance amiable sans expédition"
+    level: "libre"
+    contract_floor: "libre"
     risk_level: "low"
-    requires_approval: false
 
   - action_type: "score_siren"
     description: "Vérification légale BODACC / INPI / solvabilité"
+    level: "libre"
+    contract_floor: "libre"
     risk_level: "low"
+
+# Listes rétro-compatibilité
+supervised_actions:
+  - action_type: "send_email"
+    requires_approval: true
+    risk_level: "high"
+  - action_type: "send_sms"
+    requires_approval: true
+    risk_level: "high"
+  - action_type: "apply_discount"
+    requires_approval: true
+    risk_level: "critical"
+
+autonomous_actions:
+  - action_type: "analyze_aged_balance"
     requires_approval: false
+    risk_level: "low"
+  - action_type: "score_siren"
+    requires_approval: false
+    risk_level: "low"
+  - action_type: "draft_reminder"
+    requires_approval: false
+    risk_level: "low"

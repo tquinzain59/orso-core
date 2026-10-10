@@ -2290,6 +2290,86 @@ async def reject_client_action(
         raise HTTPException(status_code=404, detail=str(e))
 
 
+class BatchReviewRequest(BaseModel):
+    action_ids: List[str]
+    decision: str
+    comment: Optional[str] = None
+
+
+class UpdatePolicyLevelRequest(BaseModel):
+    action_type: str
+    new_level: str
+    reason: Optional[str] = None
+
+
+@router.get("/api/client/actions/unanswered-recap")
+async def get_unanswered_actions_recap(
+    auth: Dict[str, Any] = Depends(verify_client_access),
+):
+    """Retourne le récapitulatif des demandes restées sans réponse pour traitement groupé (CA8)."""
+    tenant = dict(auth.get("tenant") or auth.get("app_metadata") or {})
+    slug = tenant.get("tenant_slug") or os.environ.get("ORSO_CLIENT_SLUG")
+    return autonomy_manager.get_unanswered_recap(tenant_slug=slug)
+
+
+@router.post("/api/client/actions/batch-review")
+async def batch_review_client_actions(
+    req: BatchReviewRequest,
+    auth: Dict[str, Any] = Depends(verify_client_access),
+):
+    """Applique une décision groupée d'approbation ou de rejet sur une liste d'actions (CA8)."""
+    user_id = str(auth.get("sub") or auth.get("email") or "user")
+    role = str(auth.get("role") or auth.get("user_metadata", {}).get("role") or "admin")
+    try:
+        return autonomy_manager.batch_review_actions(
+            action_ids=req.action_ids,
+            decision=req.decision,
+            reviewer_id=user_id,
+            reviewer_role=role,
+            comment=req.comment,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/api/client/actions/policy/{agent_id}/level")
+async def update_agent_action_level(
+    agent_id: str,
+    req: UpdatePolicyLevelRequest,
+    auth: Dict[str, Any] = Depends(verify_client_access),
+):
+    """Modifie le niveau d'autonomie d'une action en vérifiant les bornes contractuelles (CA6, CA7)."""
+    user_id = str(auth.get("sub") or auth.get("email") or "user")
+    role = str(auth.get("role") or auth.get("user_metadata", {}).get("role") or "admin")
+    tenant = dict(auth.get("tenant") or auth.get("app_metadata") or {})
+    slug = tenant.get("tenant_slug") or os.environ.get("ORSO_CLIENT_SLUG")
+
+    try:
+        return autonomy_manager.update_action_level(
+            agent_id=agent_id,
+            action_type=req.action_type,
+            new_level=req.new_level,
+            user_id=user_id,
+            user_role=role,
+            tenant_slug=slug,
+            reason=req.reason,
+        )
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/api/client/actions/policy/{agent_id}/history")
+async def get_agent_policy_history(
+    agent_id: str,
+    auth: Dict[str, Any] = Depends(verify_client_access),
+):
+    """Retourne l'historique d'audit des modifications de politiques d'autonomie pour un agent (CA6)."""
+    history = autonomy_manager.get_policy_change_history(agent_id=agent_id)
+    return {"history": history, "count": len(history)}
+
+
 @router.post("/api/client/actions/execute")
 async def execute_client_action(
     req: ActionExecuteRequest,
