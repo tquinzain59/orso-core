@@ -12,32 +12,79 @@ approval_policy:
     - "superadmin"
     - "direction"
 
-supervised_actions:
-  - action_type: "submit_bid"
-    description: "Dépôt d'une offre ou pli dématérialisé sur une plateforme acheteur (marches-publics.gouv)"
+actions:
+  - action_type: "send_message_third_party"
+    description: "Envoi d'une question ou demande de précision à l'acheteur public"
+    level: "sous_validation"
+    contract_floor: "sous_validation"
+    risk_level: "high"
+
+  - action_type: "write_erp_accounting"
+    description: "Enregistrement d'un marché ou caution bancaire en comptabilité"
+    level: "sous_validation"
+    contract_floor: "sous_validation"
+    risk_level: "high"
+
+  - action_type: "send_payment_reminder"
+    description: "Relance d'un impayé (hors attribution AO)"
+    level: "interdit"
+    contract_floor: "interdit"
     risk_level: "critical"
-    requires_approval: true
-    timeout_hours: 24
+
+  - action_type: "commit_amount_discount"
+    description: "Engagement financier ou signature tarifaire sans mandat légal"
+    level: "interdit"
+    contract_floor: "interdit"
+    risk_level: "critical"
+
+  - action_type: "publish_external_document"
+    description: "Dépôt d'un mémoire technique ou pli dématérialisé sur le profil acheteur"
+    level: "sous_validation"
+    contract_floor: "sous_validation"
+    risk_level: "critical"
+
+  - action_type: "contact_third_party_person"
+    description: "Prise de contact directe avec l'autorité délégante"
+    level: "sous_validation"
+    contract_floor: "sous_validation"
+    risk_level: "medium"
+
+  - action_type: "submit_bid"
+    description: "Dépôt d'une offre ou pli dématérialisé sur une plateforme acheteur"
+    level: "sous_validation"
+    contract_floor: "sous_validation"
+    risk_level: "critical"
 
   - action_type: "sign_document"
-    description: "Apposition d'une signature électronique sur un acte d'engagement (DC1/DC2)"
+    description: "Signature électronique d'actes d'engagement (DC1/DC2)"
+    level: "interdit"
+    contract_floor: "interdit"
     risk_level: "critical"
-    requires_approval: true
-    timeout_hours: 24
 
-  - action_type: "contact_buyer"
-    description: "Envoi d'une question ou demande de précision à l'acheteur public"
-    risk_level: "high"
-    requires_approval: true
-    timeout_hours: 48
-
-autonomous_actions:
   - action_type: "monitor_boamp"
     description: "Surveillance des avis de marchés et alertes mots-clés"
+    level: "libre"
+    contract_floor: "libre"
     risk_level: "low"
-    requires_approval: false
 
   - action_type: "parse_dce"
     description: "Analyse documentaire et extraction des critères de sélection"
+    level: "libre"
+    contract_floor: "libre"
     risk_level: "low"
+
+supervised_actions:
+  - action_type: "submit_bid"
+    requires_approval: true
+    risk_level: "critical"
+  - action_type: "contact_buyer"
+    requires_approval: true
+    risk_level: "high"
+
+autonomous_actions:
+  - action_type: "monitor_boamp"
     requires_approval: false
+    risk_level: "low"
+  - action_type: "parse_dce"
+    requires_approval: false
+    risk_level: "low"

@@ -1248,19 +1248,21 @@ class OpsManager:
                 existing_slugs = {item.get("slug") for item in result if item.get("slug")}
 
                 # Consolidation avec la base SQLite locale (data/olympe_ops.db)
-                # Garantit que les demandes d'onboarding / leads locaux sont visibles dans le Cockpit
-                db_tenants = self._db_list_tenants()
-                for d_t in db_tenants:
-                    if d_t.get("id") not in existing_ids and d_t.get("slug") not in existing_slugs:
-                        result.append(d_t)
-                        existing_ids.add(d_t.get("id"))
-                        if d_t.get("slug"):
-                            existing_slugs.add(d_t.get("slug"))
+                # Hors production uniquement : garantit que les demandes d'onboarding / leads locaux sont visibles dans le Cockpit
+                # En production, la base Supabase est la source de vérité unique et exclusive (KAN-43 CA1).
+                if not self.is_production and not is_production():
+                    db_tenants = self._db_list_tenants()
+                    for d_t in db_tenants:
+                        if d_t.get("id") not in existing_ids and d_t.get("slug") not in existing_slugs:
+                            result.append(d_t)
+                            existing_ids.add(d_t.get("id"))
+                            if d_t.get("slug"):
+                                existing_slugs.add(d_t.get("slug"))
 
-                # Inclure les sandboxes créés en mémoire non présents en base
-                for m_id, m_data in self._mock_tenants.items():
-                    if m_data.get("is_sandbox") and m_data.get("id") not in existing_ids and m_data.get("slug") not in existing_slugs:
-                        result.append(m_data)
+                    # Inclure les sandboxes créés en mémoire non présents en base
+                    for m_id, m_data in self._mock_tenants.items():
+                        if m_data.get("is_sandbox") and m_data.get("id") not in existing_ids and m_data.get("slug") not in existing_slugs:
+                            result.append(m_data)
 
                 return result
 

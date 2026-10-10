@@ -13,32 +13,73 @@ approval_policy:
     - "support"
     - "direction"
 
-supervised_actions:
-  - action_type: "send_support_email"
-    description: "Réponse officielle par courriel à une réclamation ou un litige client"
+actions:
+  - action_type: "send_message_third_party"
+    description: "Réponse officielle par courriel ou message à une réclamation client"
+    level: "sous_validation"
+    contract_floor: "sous_validation"
     risk_level: "high"
-    requires_approval: true
-    timeout_hours: 24
+
+  - action_type: "write_erp_accounting"
+    description: "Saisie d'un avoir, note de crédit ou remboursement en comptabilité"
+    level: "sous_validation"
+    contract_floor: "sous_validation"
+    risk_level: "high"
+
+  - action_type: "send_payment_reminder"
+    description: "Relance d'un impayé (hors attribution support)"
+    level: "interdit"
+    contract_floor: "interdit"
+    risk_level: "critical"
+
+  - action_type: "commit_amount_discount"
+    description: "Accord de dédommagement, geste commercial ou remboursement unilatéral"
+    level: "interdit"
+    contract_floor: "interdit"
+    risk_level: "critical"
+
+  - action_type: "publish_external_document"
+    description: "Publication d'une note de résolution officielle ou PV de SAV"
+    level: "sous_validation"
+    contract_floor: "sous_validation"
+    risk_level: "high"
+
+  - action_type: "contact_third_party_person"
+    description: "Prise de contact téléphonique avec l'usager mécontent"
+    level: "sous_validation"
+    contract_floor: "sous_validation"
+    risk_level: "medium"
 
   - action_type: "issue_refund"
     description: "Déclenchement d'un remboursement financier ou avoir commercial"
+    level: "sous_validation"
+    contract_floor: "sous_validation"
     risk_level: "critical"
-    requires_approval: true
-    timeout_hours: 12
 
-  - action_type: "close_ticket"
-    description: "Clôture définitive d'un incident client"
-    risk_level: "medium"
+  - action_type: "read_ticket"
+    description: "Lecture et classification automatique du ticket"
+    level: "libre"
+    contract_floor: "libre"
+    risk_level: "low"
+
+  - action_type: "suggest_faq_answer"
+    description: "Proposition de solution interne sans envoi automatique"
+    level: "libre"
+    contract_floor: "libre"
+    risk_level: "low"
+
+supervised_actions:
+  - action_type: "send_support_email"
     requires_approval: true
-    timeout_hours: 48
+    risk_level: "high"
+  - action_type: "issue_refund"
+    requires_approval: true
+    risk_level: "critical"
 
 autonomous_actions:
   - action_type: "read_ticket"
-    description: "Lecture et classification automatique du ticket"
-    risk_level: "low"
     requires_approval: false
-
+    risk_level: "low"
   - action_type: "suggest_faq_answer"
-    description: "Proposition de solution basée sur la base de connaissances"
-    risk_level: "low"
     requires_approval: false
+    risk_level: "low"

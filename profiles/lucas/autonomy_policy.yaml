@@ -13,32 +13,76 @@ approval_policy:
     - "commercial"
     - "direction"
 
-supervised_actions:
-  - action_type: "send_outreach_email"
-    description: "Envoi d'un email de prospection à froid ou relance de lead"
+actions:
+  - action_type: "send_message_third_party"
+    description: "Envoi d'un message direct à un prospect ou client externe"
+    level: "sous_validation"
+    contract_floor: "sous_validation"
     risk_level: "high"
-    requires_approval: true
-    timeout_hours: 48
+
+  - action_type: "write_erp_accounting"
+    description: "Écriture ou modification d'une opportunité dans le CRM"
+    level: "sous_validation"
+    contract_floor: "sous_validation"
+    risk_level: "high"
+
+  - action_type: "send_payment_reminder"
+    description: "Relance d'un impayé (action hors attribution SDR)"
+    level: "interdit"
+    contract_floor: "interdit"
+    risk_level: "critical"
+
+  - action_type: "commit_amount_discount"
+    description: "Octroi d'une remise commerciale ou rabais tarifaire sans accord"
+    level: "interdit"
+    contract_floor: "interdit"
+    risk_level: "critical"
+
+  - action_type: "publish_external_document"
+    description: "Transmission de devis ou proposition commerciale officielle"
+    level: "sous_validation"
+    contract_floor: "sous_validation"
+    risk_level: "high"
+
+  - action_type: "contact_third_party_person"
+    description: "Prise de contact directe avec un interlocuteur prospect"
+    level: "sous_validation"
+    contract_floor: "sous_validation"
+    risk_level: "medium"
 
   - action_type: "send_quote"
     description: "Transmission d'une proposition commerciale ou d'un devis chiffré"
+    level: "sous_validation"
+    contract_floor: "sous_validation"
     risk_level: "critical"
-    requires_approval: true
-    timeout_hours: 24
 
-  - action_type: "update_crm_deal"
-    description: "Modification du statut d'une opportunité ou clôture d'affaire dans le CRM"
-    risk_level: "medium"
-    requires_approval: true
-    timeout_hours: 48
-
-autonomous_actions:
   - action_type: "search_prospects"
     description: "Recherche et qualification de cibles B2B"
+    level: "libre"
+    contract_floor: "libre"
     risk_level: "low"
-    requires_approval: false
 
   - action_type: "draft_quote"
     description: "Préparation d'un projet de devis"
+    level: "libre"
+    contract_floor: "libre"
     risk_level: "low"
+
+supervised_actions:
+  - action_type: "send_outreach_email"
+    requires_approval: true
+    risk_level: "high"
+  - action_type: "send_quote"
+    requires_approval: true
+    risk_level: "critical"
+  - action_type: "send_message_third_party"
+    requires_approval: true
+    risk_level: "high"
+
+autonomous_actions:
+  - action_type: "search_prospects"
     requires_approval: false
+    risk_level: "low"
+  - action_type: "draft_quote"
+    requires_approval: false
+    risk_level: "low"
