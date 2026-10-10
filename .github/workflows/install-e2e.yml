@@ -57,15 +57,16 @@ on:
         required: false
         type: string
         default: '3'
-       install-ref:
+      install-ref:
         description: 'Optional exact release tag for a focused reproduction; overrides tag-count.'
         required: false
         type: string
         default: ''
   # schedule:
-  #   # Déclencheur planifié suspendu (KAN-103) : le dépôt orso-core ne porte pas encore
-  #   # de tags de release vX.Y.Z, évitant de faire échouer inutilement la matrice toutes les 12h.
-  #   # Réactivation possible dès que des versions taguées seront publiées sur le fork.
+  #   # Déclencheur planifié suspendu (KAN-103, arbitrage Direction du 10/10/2026) :
+  #   # Le dépôt orso-core ne portant pas de tags de release vX.Y.Z, l'exécution
+  #   # bi-quotidienne échouerait systématiquement et consommerait des minutes runner sans objet.
+  #   # Réactivation dès que des versions taguées seront publiées sur le fork.
   #   - cron: '20 7,19 * * *'
   push:
     tags:
@@ -90,7 +91,6 @@ jobs:
     timeout-minutes: 5
     outputs:
       tags: ${{ steps.pick.outputs.tags }}
-      has_tags: ${{ steps.pick.outputs.has_tags }}
     steps:
       # This job only reads tag names and trees, so take the cheap
       # checkout: no blobs (filter), no other files (sparse), but DO fetch
@@ -121,18 +121,20 @@ jobs:
           else
             tags="$(scripts/sandbox/pick-release-tags.sh --count "$TAG_COUNT" --allow-empty)"
           fi
-          echo "Testing updates from: $tags"
           if [ "$tags" = "[]" ] || [ -z "$tags" ]; then
-            echo "Notice: no release tags found in repository. Skipping matrix expansion gracefully."
-            echo "tags=[]" >> "$GITHUB_OUTPUT"
-            echo "has_tags=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Aucune balise de release détectée sur le dépôt. L'E2E d'installation et de mise à jour requiert au moins une balise de version (vYYYY.M.D). Précisez un 'install-ref' ou publiez des tags de release."
             {
-              echo "### ℹ️ E2E Matrix Skipped (KAN-103)"
-              echo "Aucune balise de release détectée sur le dépôt. Matrice E2E suspendue gracieusement."
+              echo "### ❌ Install & Update E2E interrompu (KAN-103)"
+              echo ""
+              echo "Aucune balise de release (format \`vYYYY.M.D\`) n'est présente sur le dépôt."
+              echo "Le test de mise à jour ne peut pas s'exécuter à vide (éradication du vert vide)."
+              echo ""
+              echo "**Actions possibles :**"
+              echo "- Déclencher manuellement le workflow via \`workflow_dispatch\` en renseignant le paramètre \`install-ref\` (ex: \`v2026.9.24\`)."
+              echo "- Publier des balises de release sur le dépôt distant."
             } >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            exit 1
           fi
-          echo "has_tags=true" >> "$GITHUB_OUTPUT"
           # Annotate each tag with what its own tree supports, so run
           # workflows can natively skip surfaces the starting version does
           # not have. Today: does the release ship the desktop app
@@ -150,7 +152,6 @@ jobs:
   generate-matrix:
     name: Expand combinations
     needs: pick-releases
-    if: needs.pick-releases.outputs.has_tags == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -239,7 +240,6 @@ jobs:
   leg-player:
     name: Upload leg player
     needs: pick-releases
-    if: needs.pick-releases.outputs.has_tags == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -263,7 +263,7 @@ jobs:
   # the per-OS aggregates.
   report:
     name: Result chart
-    if: always() && needs.pick-releases.outputs.has_tags == 'true'
+    if: always() && needs.pick-releases.result == 'success'
     needs: [leg-player, pick-releases, linux, windows, macos]
     runs-on: ubuntu-latest
     timeout-minutes: 5
