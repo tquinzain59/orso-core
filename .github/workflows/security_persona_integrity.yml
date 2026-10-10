@@ -47,6 +47,11 @@ jobs:
         run: |
           scripts/run_tests.sh tests/security/test_persona_integrity.py
 
+      - name: Exécution des Tests de Sanctuarisation Repli Ambient SOUL.md (KAN-54)
+        run: |
+          scripts/run_tests.sh tests/security/test_kan54_ambient_soul_fallback.py
+
       - name: Exécution des Tests de Garde-Fous d'Écriture (Write Guards)
         run: |
           scripts/run_tests.sh tests/tools/test_file_write_safety.py
+
