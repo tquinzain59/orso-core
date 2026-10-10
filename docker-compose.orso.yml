@@ -30,6 +30,7 @@ services:
       - ORSO_CLIENT_SLUG=${ORSO_CLIENT_SLUG:-}
       - SUPABASE_URL=${SUPABASE_URL:-}
       - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY:-}
+      - SUPABASE_JWT_SECRET=${SUPABASE_JWT_SECRET:-}
       # Clé secrète HMAC pour intégrité des Personas (KAN-33, R3 - Zero Fallback)
       - ORSO_PERSONA_HMAC_KEY=${ORSO_PERSONA_HMAC_KEY:-}
     security_opt:
