@@ -69,19 +69,15 @@ L'icône `+` présente sur chaque bloc de thème dans l'UI Client ouvre une nouv
   1. **Synthèse chronologique bornée** : On sélectionne les conversations antérieures du même thème (même tenant, même utilisateur, même agent), triées par récence.
   2. **Extraction des résumés / derniers tours clés** : Pour chaque conversation précédente du thème, on extrait le titre, le sujet et le dernier échange significatif (question/réponse).
   3. **Plafond strict de jetons (Token Budget)** :
-     - Plafond maximal fixé à **1 500 tokens** (~6 000 caractères).
-     - Si le volume dépasse le plafond, un élagage chronologique retient les éléments les plus récents en signalant la troncature.
-  4. **Format d'injection étanche** :
-     Le contexte est injecté en tête de conversation sous forme de bloc délimité :
-     ```text
-     [CONTEXTE MÉTIER DU THÈME : "{theme_title}"]
-     (Historique des échanges précédents au sein de ce thème)
-     - Conversation "{titre_1}" : ...
-     - Conversation "{titre_2}" : ...
-     [FIN DU CONTEXTE THÉMATIQUE — Réponds aux questions de l'utilisateur en exploitant ce contexte. Si une information n'y figure pas, signale-le sans l'inventer.]
-     ```
-  5. **Thème neuf / vide (CA5)** : Si le thème ne comporte aucune conversation ou uniquement des discussions vides, le contexte injecté est strictement vide (0 surcoût).
-  6. **Cloisonnement hermétique (CA4)** : La requête SQL filtre strictement sur `tenant_id`, `user_id`, `agent_id` et `theme_id`. Zéro fuite inter-thèmes ni inter-clients.
+     - **Plafond de référence du ticket (Décideur du 10/10/2026)** : **2 000 jetons** (~8 000 caractères).
+     - **Borne opérationnelle appliquée en livraison** : **1 500 jetons** (~6 000 caractères), s'inscrivant strictement sous le plafond de 2 000 jetons afin de préserver une marge de sécurité de 25% pour les variations de tokenisation.
+     - Si le volume dépasse le plafond, un élagage chronologique retient les éléments les plus récents en signalant la troncature (`...\n`) tout en préservant impérativement le pied de contexte (`[FIN DU CONTEXTE DU THÈME]`).
+  4. **Mécanisme d'injection et impact sur le cache de session** :
+     - Le contexte du thème est injecté via `ephemeral_system_prompt` lors de l'instanciation de `AIAgent` (`client_ui.py:1957-1960, 2029`).
+     - **Invariance au sein d'une même session** : La fonction `get_theme_context_for_session` excluant expressément la session active (`session_id != ?`), le contexte issu des sessions antérieures ne change pas au fil des tours de parole de la session en cours. Le prompt système éphémère demeure donc strictement **byte-stable** sur l'ensemble des tours de la session, préservant ainsi l'invariance du cache de prompt de session conformément aux règles du Sanctuaire.
+     - **Arbitrage architectural assumé** : Ce choix d'injection via le prompt système éphémère évite d'altérer l'historique de conversation propre (`conversation_history` dans `SessionDB`), évitant toute violation d'alternance des rôles (`user`/`assistant`) et toute pollution du magasin de données pérenne. Entre deux sessions différentes, les préfixes divergent en fonction du thème, ce qui est le compromis requis pour apporter la continuité thématique.
+  5. **Thème neuf / vide (CA5)** : Si le thème ne comporte aucune conversation ou uniquement des discussions vides, le contexte injecté est strictement vide (0 surcoût, 0 jeton).
+  6. **Cloisonnement hermétique (CA4)** : La requête SQL filtre strictement sur `tenant_id`, `user_id`, `agent_id` et `theme_id`. Zéro fuite inter-thèmes ni inter-clients (rejet 403 systématique sur toute tentative cross-tenant).
 
 ---
 
@@ -93,8 +89,8 @@ L'icône `+` présente sur chaque bloc de thème dans l'UI Client ouvre une nouv
 | **Bouton en-tête vs bouton haut de colonne** | Garder les deux boutons | **Validé** : Les deux boutons coexistent avec la même mécanique : « Nouvelle discussion » en haut de colonne démarre un fil vierge ; l'icône `+` sur un thème crée un fil lié à ce thème. |
 | **Portée des thèmes (par agent ou transverse)** | Isoler les thèmes par agent | **Validé** : Les thèmes sont strictement partitionnés par agent (`agent_id`) afin d'éviter toute confusion entre le domaine juridique (Lucas), comptable (Jérôme) ou prospection (Clara/Victor). |
 | **Suppression d'un bloc quand vide** | Suppression si vide | **Validé** : Si toutes les conversations d'un thème sont supprimées, le thème est automatiquement nettoyé. |
-| **Méthode de rapprochement automatique** | Décision début de conversation | **Validé** : Rapprochement basé sur l'empreinte lexicale des mots-clés du premier message, simple, déterministe et sans coût d'inférence LLM superflu. |
-| **Plafond de contexte KAN-85** | Proposition 100k chars | **Ajustement d'architecture** : 100 000 caractères (~25 000 tokens) est excessif pour chaque tour de parole. Nous retenons **6 000 caractères (~1 500 tokens)**, suffisant pour l'historique d'un thème sans multiplier la facture par 10. |
+| **Méthode de rapprochement automatique** | Décision début de conversation | **Validé** : Rapprochement basé sur l'empreinte lexicale des mots-clés significatifs (hors stop-words) du premier message et des titres de sessions du thème, simple, déterministe et sans coût d'inférence LLM superflu (0 appel modèle). |
+| **Plafond de contexte KAN-85** | 2 000 jetons (décideur) | **Validé** : Référence contractuelle fixée à **2 000 jetons** par arbitrage du décideur le 10/10/2026. La livraison applique une borne opérationnelle de **6 000 caractères (~1 500 jetons)** pour garantir le respect strict du plafond avec marge de sécurité. |
 
 ---
 

@@ -134,6 +134,10 @@ class _FakeCompletions:
 
 class _FakeClient:
     def __init__(self, **kwargs):
+        self.api_key = kwargs.get("api_key") or "sk-fake-openrouter-key"
+        self.base_url = kwargs.get("base_url") or "https://openrouter.ai/api/v1"
+        self.default_headers = {}
+        self._custom_headers = {}
         self.chat = SimpleNamespace(completions=_FakeCompletions())
         self.closed = False
 

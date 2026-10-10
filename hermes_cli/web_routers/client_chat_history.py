@@ -246,18 +246,35 @@ def assign_or_create_theme_for_session(
                 return explicit_theme_id
 
         # 3. Rapprochement avec un thème existant basé sur les mots clés significatifs du premier message
-        words = {w.lower() for w in re.findall(r"\b\w{4,}\b", prompt)}
-        if words:
+        STOP_WORDS = {
+            "cette", "dans", "avec", "pour", "vous", "nous", "leur", "elle", "elles",
+            "mais", "donc", "alors", "aussi", "plus", "tous", "tout", "toute", "toutes",
+            "faire", "peux", "peut", "veut", "bien", "merci", "avoir", "etre", "être",
+            "voudrais", "aimerais", "regarder", "voir", "donner", "comme", "quand",
+            "notre", "votre", "leurs", "sans", "sous", "vers", "chez", "quel", "quelle",
+            "bonjour", "salut"
+        }
+        all_words = {w.lower() for w in re.findall(r"\b\w{3,}\b", prompt)}
+        meaningful_words = {w for w in all_words if w not in STOP_WORDS}
+        search_words = meaningful_words if meaningful_words else all_words
+
+        if search_words:
             cursor.execute(
-                """SELECT theme_id, title FROM client_chat_themes 
-                   WHERE tenant_id = ? AND user_id = ? AND agent_id = ?
-                   ORDER BY updated_at DESC LIMIT 20""",
+                """SELECT t.theme_id, t.title, GROUP_CONCAT(COALESCE(s.title, ''))
+                   FROM client_chat_themes t
+                   LEFT JOIN client_chat_sessions s ON s.dossier_metier_id = t.theme_id
+                   WHERE t.tenant_id = ? AND t.user_id = ? AND t.agent_id = ?
+                   GROUP BY t.theme_id
+                   ORDER BY t.updated_at DESC LIMIT 20""",
                 (tenant_id, user_id, agent_id),
             )
             existing_themes = cursor.fetchall()
-            for t_id, t_title in existing_themes:
-                t_words = {w.lower() for w in re.findall(r"\b\w{4,}\b", t_title)}
-                if t_words and len(words.intersection(t_words)) >= 1:
+            for t_id, t_title, s_titles in existing_themes:
+                combined_text = f"{t_title} {s_titles or ''}"
+                theme_words = {w.lower() for w in re.findall(r"\b\w{3,}\b", combined_text)}
+                theme_meaningful = {w for w in theme_words if w not in STOP_WORDS}
+                target_words = theme_meaningful if theme_meaningful else theme_words
+                if target_words and len(search_words.intersection(target_words)) >= 1:
                     cursor.execute(
                         "UPDATE client_chat_sessions SET dossier_metier_id = ? WHERE session_id = ?",
                         (t_id, session_id),

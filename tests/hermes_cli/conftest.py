@@ -85,3 +85,20 @@ def isolated_update_runtime(monkeypatch, tmp_path, request):
     monkeypatch.setattr(update_cmd_fleet, "_restart_macos_launchd_gateways", lambda *a, **k: None)
     monkeypatch.setattr(update_inventory, "collect_runtime_inventory", lambda: None)
     monkeypatch.setattr(update_receipt, "collect_fleet_versions", lambda *a, **k: [])
+
+
+@pytest.fixture(autouse=True)
+def _clear_auxiliary_client_cache():
+    """Ensure auxiliary LLM client cache doesn't leak between tests."""
+    try:
+        from agent.auxiliary_client import _client_cache
+        _client_cache.clear()
+    except Exception:
+        pass
+    yield
+    try:
+        from agent.auxiliary_client import _client_cache
+        _client_cache.clear()
+    except Exception:
+        pass
+
