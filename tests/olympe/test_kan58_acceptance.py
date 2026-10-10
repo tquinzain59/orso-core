@@ -42,7 +42,7 @@ def test_kan58_ca1_no_shared_host_directories(tmp_path):
 
     recorded_calls = []
 
-    def fake_exec_docker(args, timeout=20.0):
+    def fake_exec_docker(args, timeout=20.0, **kwargs):
         recorded_calls.append(list(args))
         return subprocess.CompletedProcess(args=args, returncode=0, stdout="c_fake_123", stderr="")
 
@@ -151,7 +151,7 @@ def test_kan58_ca3_profile_mount_convergence(tmp_path):
     status_not_found = {"status": "not_found", "running": False}
     recorded_calls = []
 
-    def fake_exec_docker(args, timeout=20.0):
+    def fake_exec_docker(args, timeout=20.0, **kwargs):
         recorded_calls.append(list(args))
         return subprocess.CompletedProcess(args=args, returncode=0, stdout="c_fake_123", stderr="")
 
@@ -242,7 +242,7 @@ def test_kan58_legacy_fallback_mounts(tmp_path, monkeypatch):
     status_not_found = {"status": "not_found", "running": False}
     recorded_calls = []
 
-    def fake_exec_docker(args, timeout=20.0):
+    def fake_exec_docker(args, timeout=20.0, **kwargs):
         recorded_calls.append(list(args))
         return subprocess.CompletedProcess(args=args, returncode=0, stdout="c_fake_123", stderr="")
 
@@ -442,9 +442,9 @@ def test_kan58_dashboard_auth_strictly_required_no_fallback(tmp_path):
             assert res_user_only["error"] == "ERR_DASHBOARD_AUTH_REQUIRED"
 
             # 3. Avec authentification explicite fournie -> Accepté pour lancement Docker
-            recorded_calls = []
-            def fake_exec_docker(args, timeout=20.0):
-                recorded_calls.append(list(args))
+            recorded_runs = []
+            def fake_exec_docker(args, timeout=20.0, input_data=None):
+                recorded_runs.append((list(args), input_data or ""))
                 return subprocess.CompletedProcess(args=args, returncode=0, stdout="c_fake_auth", stderr="")
 
             with patch.object(manager, "_exec_docker", side_effect=fake_exec_docker):
@@ -460,7 +460,12 @@ def test_kan58_dashboard_auth_strictly_required_no_fallback(tmp_path):
                 )
                 assert res_ok["success"] is True
                 assert res_ok["action_taken"] is True
-                run_call = next(c for c in recorded_calls if c and c[0] == "run")
-                assert "HERMES_DASHBOARD_BASIC_AUTH_USERNAME=ops_user" in run_call
-                assert "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=ephemeral_secret_123" in run_call
+                run_call, run_input = next((args, inp) for args, inp in recorded_runs if args and args[0] == "run")
+                # KAN-65 : Aucun secret ni identifiant dans les arguments argv
+                assert not any("HERMES_DASHBOARD_BASIC_AUTH" in a for a in run_call)
+                assert "--env-file" in run_call
+                assert "/dev/stdin" in run_call
+                # Transmission étanche via stdin
+                assert "HERMES_DASHBOARD_BASIC_AUTH_USERNAME=ops_user" in run_input
+                assert "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=ephemeral_secret_123" in run_input
 

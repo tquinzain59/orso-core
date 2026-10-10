@@ -138,7 +138,7 @@ def test_kan60_ca2_readonly_mount_and_isolation(tmp_path):
 
     recorded_docker_runs = []
 
-    def fake_exec_docker(args, timeout=20.0):
+    def fake_exec_docker(args, timeout=20.0, **kwargs):
         if args and args[0] == "run":
             recorded_docker_runs.append(list(args))
             return subprocess.CompletedProcess(args=args, returncode=0, stdout="c_alpha_123", stderr="")

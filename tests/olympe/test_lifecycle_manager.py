@@ -186,8 +186,12 @@ def test_provision_tenant(tmp_path):
                 assert "com.orso.tenant_id=test-uuid" in run_call_args
                 assert "com.orso.tenant_slug=nouveau-client" in run_call_args
                 assert "com.orso.role=client_backend" in run_call_args
-                assert "-e" in run_call_args
-                assert "ORSO_PERSONA_HMAC_KEY=mock-fleet-hmac-key" in run_call_args
+                assert "--env-file" in run_call_args
+                assert "/dev/stdin" in run_call_args
+                # KAN-65 : Le secret ne figure pas dans argv
+                assert not any("ORSO_PERSONA_HMAC_KEY" in arg for arg in run_call_args)
+                input_data = mock_exec.call_args.kwargs.get("input_data", "")
+                assert "ORSO_PERSONA_HMAC_KEY=mock-fleet-hmac-key" in input_data
 
 
 def test_api_olympe_health(api_client):
