@@ -79,12 +79,13 @@ export async function wakeTenantEnvironment(tenantSlug?: string): Promise<{ succ
 }
 
 export interface EnvironmentStatusResponse {
-  status: 'ready' | 'provisioning' | 'sleeping' | 'error' | 'not_configured';
+  status: 'ready' | 'provisioning' | 'pending_validation' | 'sleeping' | 'error' | 'not_configured';
   ready: boolean;
   tenant_slug?: string;
-  progress_percent?: number;
+  next_step?: string;
   current_step?: string;
-  estimated_remaining_seconds?: number;
+  contact_person?: string;
+  contact_email?: string;
   wake_endpoint?: string;
   error_details?: string;
   support_contact?: string;

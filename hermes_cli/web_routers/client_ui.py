@@ -1296,25 +1296,27 @@ async def get_client_environment_status(
     )
 
     if target_env:
-        raw_status = (target_env.get("environment_status") or target_env.get("status") or "ready").lower().strip()
+        raw_status = (target_env.get("environment_status") or target_env.get("status") or "pending_validation").lower().strip()
         if raw_status in ("ready", "running", "active", "online"):
             return {
                 "status": "ready",
                 "ready": True,
                 "tenant_slug": resolved_slug,
-                "message": "Environnement opérationnel.",
+                "message": "Votre espace Orso Agents est prêt.",
                 "agents_enabled": target_env.get("agents_enabled", ["jerome"]),
                 "instance_url": target_env.get("instance_url"),
             }
-        elif raw_status in ("provisioning", "pending", "pending_setup", "creating", "starting"):
+        elif raw_status in ("pending_validation", "not_provisioned", "trial", "provisioning", "pending", "pending_setup", "creating", "starting"):
+            is_prov = raw_status in ("provisioning", "creating", "starting")
             return {
-                "status": "provisioning",
+                "status": "provisioning" if is_prov else "pending_validation",
                 "ready": False,
                 "tenant_slug": resolved_slug,
-                "progress_percent": target_env.get("progress_percent", 55),
-                "current_step": target_env.get("current_step", "Déploiement des conteneurs isolés et calibration des agents IA"),
-                "estimated_remaining_seconds": target_env.get("estimated_remaining_seconds", 35),
-                "message": "Votre environnement souverain est en cours de création.",
+                "current_step": "Votre espace est en cours de préparation par notre équipe.",
+                "next_step": "Appel de cadrage personnalisé avec notre équipe",
+                "contact_person": "Thibaut Quinzain",
+                "contact_email": "contact@orso-agents.fr",
+                "message": "Votre espace Orso Agents est en préparation.",
             }
         elif raw_status in ("sleeping", "paused", "stopped"):
             return {
@@ -1322,16 +1324,17 @@ async def get_client_environment_status(
                 "ready": False,
                 "tenant_slug": resolved_slug,
                 "wake_endpoint": f"/api/olympe/tenants/wake/{resolved_slug}" if resolved_slug else None,
-                "message": "Votre environnement sécurisé est en veille.",
+                "message": "Votre espace d’agents est en veille.",
             }
         elif raw_status in ("error", "failed", "incident"):
             return {
                 "status": "error",
                 "ready": False,
                 "tenant_slug": resolved_slug,
-                "error_details": target_env.get("error_details", "Une anomalie est survenue pendant le déploiement."),
-                "support_contact": "support@orso-agents.fr",
-                "message": "Incident de provisionnement détecté.",
+                "error_details": target_env.get("error_details", "Une difficulté technique a été rencontrée lors de la préparation."),
+                "support_contact": "contact@orso-agents.fr",
+                "contact_person": "Thibaut Quinzain",
+                "message": "Votre espace Orso Agents : nous avons besoin d'un échange.",
             }
 
     # Mode autonome / démo / local
@@ -1348,7 +1351,9 @@ async def get_client_environment_status(
         "status": "not_configured",
         "ready": False,
         "tenant_slug": resolved_slug,
-        "message": "Aucun environnement n'est configuré pour cette organisation.",
+        "message": "Aucune organisation rattachée ou connexion refusée. Veuillez contacter l'exploitation.",
+        "support_contact": "contact@orso-agents.fr",
+        "contact_person": "Thibaut Quinzain",
     }
 
 
@@ -1370,9 +1375,10 @@ def _resolve_target_environment(
         return target_env
 
     # 2. Interroger la table public.tenant_instances dans Supabase via PostgREST
-    if token_tenant_id and supabase_url and service_key:
+    if (token_tenant_id or token_tenant_slug) and supabase_url and service_key:
         try:
-            inst_url = f"{supabase_url}/rest/v1/tenant_instances?tenant_id=eq.{token_tenant_id}&select=*"
+            filter_param = f"tenant_id=eq.{token_tenant_id}" if token_tenant_id else f"internal_route_key=eq.orso_backend_{token_tenant_slug}"
+            inst_url = f"{supabase_url}/rest/v1/tenant_instances?{filter_param}&select=*"
             inst_req = urllib.request.Request(
                 inst_url,
                 headers={
@@ -1385,19 +1391,42 @@ def _resolve_target_environment(
                 instances = json.loads(inst_resp.read().decode("utf-8"))
                 if instances and len(instances) > 0:
                     inst_data = instances[0]
-                    inst_url_val = inst_data.get("instance_url")
-                    inst_container_val = inst_data.get("docker_container_name") or inst_data.get("internal_route_key")
-                    if inst_url_val or inst_container_val:
-                        return {
-                            "instance_url": inst_url_val,
-                            "docker_container_name": inst_container_val,
-                            "docker_host": inst_data.get("docker_host"),
-                            "docker_port": inst_data.get("docker_port"),
-                            "environment_status": inst_data.get("environment_status") or inst_data.get("status", "ready"),
-                            "agents_enabled": inst_data.get("agents_enabled", ["jerome"]),
-                        }
+                    return {
+                        "instance_url": inst_data.get("instance_url"),
+                        "docker_container_name": inst_data.get("docker_container_name") or inst_data.get("internal_route_key"),
+                        "docker_host": inst_data.get("docker_host"),
+                        "docker_port": inst_data.get("docker_port"),
+                        "environment_status": inst_data.get("environment_status") or inst_data.get("status") or "pending_validation",
+                        "status": inst_data.get("status") or "not_provisioned",
+                        "agents_enabled": inst_data.get("agents_enabled", ["jerome"]),
+                    }
         except Exception as e:
             _log.debug("Impossible d'interroger tenant_instances: %s", e)
+
+        # 3. Si aucune ligne dans tenant_instances, vérifier si l'organisation existe dans tenants (ex: compte en cours d'onboarding)
+        try:
+            t_filter = f"id=eq.{token_tenant_id}" if token_tenant_id else f"slug=eq.{token_tenant_slug}"
+            t_url = f"{supabase_url}/rest/v1/tenants?{t_filter}&select=id,slug,status,name"
+            t_req = urllib.request.Request(
+                t_url,
+                headers={
+                    "apikey": service_key,
+                    "Authorization": f"Bearer {service_key}",
+                    "User-Agent": "OrsoCore/1.0",
+                },
+            )
+            with urllib.request.urlopen(t_req, timeout=3.0) as t_resp:
+                tenants_data = json.loads(t_resp.read().decode("utf-8"))
+                if tenants_data and len(tenants_data) > 0:
+                    t_item = tenants_data[0]
+                    return {
+                        "environment_status": "pending_validation",
+                        "status": "not_provisioned",
+                        "tenant_status": t_item.get("status", "trial"),
+                        "agents_enabled": ["jerome"],
+                    }
+        except Exception as e:
+            _log.debug("Impossible d'interroger tenants: %s", e)
 
     return None
 
