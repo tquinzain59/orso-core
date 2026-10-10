@@ -29,8 +29,10 @@ from olympe.server import app, ops_manager, manager
 
 
 @pytest.fixture(autouse=True)
-def reset_ops_state():
-    """Réinitialise les états mémoires avant chaque test."""
+def reset_ops_state(tmp_path, monkeypatch):
+    """Réinitialise les états mémoires et la base SQLite isolée avant chaque test."""
+    test_db = tmp_path / "test_olympe_ops.db"
+    monkeypatch.setenv("OLYMPE_DB_PATH", str(test_db))
     clear_token_cache()
     ops_manager._webhook_deliveries.clear()
     ops_manager._audit_log.clear()
