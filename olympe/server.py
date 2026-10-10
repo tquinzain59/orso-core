@@ -32,6 +32,7 @@ from olympe.auth import (
     get_auth_audit_events,
 )
 from olympe.lifecycle_manager import DockerLifecycleManager
+from olympe.mailer import brevo_mailer
 from olympe.ops_manager import OpsManager
 from olympe.ovh_client import ovh_client
 from olympe.telemetry_client import telemetry_client
@@ -746,6 +747,18 @@ async def provision_onboarding_order(tenant_id: str, admin: Dict[str, Any] = Dep
 
         actual_tenant_id = tenant_detail["id"]
         tenant_slug = tenant_detail.get("slug", "")
+        contact = tenant_detail.get("contact", {})
+        contact_email = contact.get("email")
+
+        # Notification M2 : préparation de l'espace par notre équipe (CA4)
+        if contact_email:
+            try:
+                brevo_mailer.send_provisioning_started(
+                    tenant_slug=tenant_slug,
+                    recipient_email=contact_email,
+                )
+            except Exception as m2_err:
+                _log.warning("Notice envoi email M2 provisioning: %s", m2_err)
 
         # Détermination du forfait client pour application des quotas matériels (KAN-59)
         sub_info = tenant_detail.get("subscription", {})
@@ -774,6 +787,17 @@ async def provision_onboarding_order(tenant_id: str, admin: Dict[str, Any] = Dep
                     "capacity_details": prov_res.get("capacity_details"),
                 },
             )
+            # Notification M4 : besoin d'un échange lors d'un échec de provisioning (CA4)
+            if contact_email:
+                try:
+                    brevo_mailer.send_provisioning_failed(
+                        tenant_slug=tenant_slug,
+                        recipient_email=contact_email,
+                        cause=err_msg,
+                    )
+                except Exception as m4_err:
+                    _log.warning("Notice envoi email M4 provisioning failed: %s", m4_err)
+
             raise HTTPException(
                 status_code=400,
                 detail=f"Provisioning refusé : {err_msg} [{err_code}]",
@@ -787,7 +811,19 @@ async def provision_onboarding_order(tenant_id: str, admin: Dict[str, Any] = Dep
         except Exception as we:
             _log.warning("Notice réveil conteneur post-provisioning pour %s: %s", tenant_slug, we)
 
-        return ops_manager.provision_onboarding_order(tenant_id, provisioning_result=prov_res)
+        provision_result = ops_manager.provision_onboarding_order(tenant_id, provisioning_result=prov_res)
+
+        # Notification M3 : espace prêt et invitation 7 jours (CA4, CA9)
+        if contact_email:
+            try:
+                brevo_mailer.send_activation_invitation(
+                    tenant_slug=tenant_slug,
+                    recipient_email=contact_email,
+                )
+            except Exception as m3_err:
+                _log.warning("Notice envoi email M3 activation: %s", m3_err)
+
+        return provision_result
     except HTTPException:
         raise
     except ValueError as e:
@@ -856,6 +892,130 @@ async def get_telemetry_history(agent_id: int, limit: int = 25, admin: Dict[str,
 async def get_telemetry_alerts(agent_id: Optional[int] = None, admin: Dict[str, Any] = Depends(require_superadmin)):
     """Retourne les alertes actives."""
     alerts = telemetry_client.get_alerts(resolved=False, agent_id=agent_id)
+    return {"alerts": alerts, "count": len(alerts)}
+
+
+# ── Emails Transactionnels Brevo & Invitations (KAN-104) ──────────────────────
+
+class SendEmailRequest(BaseModel):
+    recipient_email: str
+    template_id: str
+    params: Optional[Dict[str, Any]] = None
+    tenant_slug: Optional[str] = None
+
+
+class GenerateInvitationRequest(BaseModel):
+    tenant_slug: str
+    recipient_email: str
+    tenant_name: Optional[str] = None
+    contact_name: Optional[str] = None
+    send_email: bool = True
+    base_url: Optional[str] = None
+
+
+class ValidateInvitationRequest(BaseModel):
+    token: str
+
+
+@app.post("/api/olympe/mailer/send")
+async def send_transactional_email_endpoint(
+    req: SendEmailRequest,
+    actor: Dict[str, Any] = Depends(require_ops_actor("tenants:write")),
+):
+    """Achemine un email transactionnel via Brevo (templates M1 à M4)."""
+    try:
+        res = brevo_mailer.send_transactional_email(
+            recipient_email=req.recipient_email,
+            template_id=req.template_id,
+            params=req.params or {},
+            tenant_slug=req.tenant_slug,
+        )
+        return res
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/olympe/mailer/logs")
+async def get_mailer_logs_endpoint(
+    tenant_slug: Optional[str] = None,
+    recipient_email: Optional[str] = None,
+    limit: int = 50,
+    actor: Dict[str, Any] = Depends(require_ops_actor("tenants:read")),
+):
+    """Retourne l'historique d'audit des emails envoyés via Brevo."""
+    logs = brevo_mailer.get_email_logs(tenant_slug=tenant_slug, recipient_email=recipient_email, limit=limit)
+    return {"logs": logs, "count": len(logs)}
+
+
+@app.post("/api/olympe/invitations/generate")
+async def generate_invitation_endpoint(
+    req: GenerateInvitationRequest,
+    actor: Dict[str, Any] = Depends(require_ops_actor("tenants:write")),
+):
+    """Génère un jeton d'invitation sécurisé 7 jours et expédie optionnellement l'email M3."""
+    if req.send_email:
+        res = brevo_mailer.send_activation_invitation(
+            tenant_slug=req.tenant_slug,
+            recipient_email=req.recipient_email,
+            tenant_name=req.tenant_name or req.tenant_slug,
+            contact_name=req.contact_name or "Client",
+            base_url=req.base_url,
+        )
+        return res
+    token = brevo_mailer.generate_invitation_token(req.tenant_slug, req.recipient_email)
+    return {"success": True, "invitation_token": token, "tenant_slug": req.tenant_slug}
+
+
+@app.post("/api/olympe/invitations/validate")
+async def validate_invitation_endpoint(req: ValidateInvitationRequest):
+    """Valide et consomme un jeton d'invitation (usage unique strict)."""
+    result = brevo_mailer.validate_and_consume_token(req.token)
+    if not result.get("valid"):
+        raise HTTPException(status_code=400, detail=result)
+    return result
+
+
+# ── Confirmation d'adresse email & Sondes (CA2, CA7, CA10) ────────────────────
+
+class ConfirmEmailRequest(BaseModel):
+    token: str
+    tenant_slug: Optional[str] = None
+
+
+@app.get("/api/olympe/email/confirm")
+async def confirm_email_get(token: str, slug: Optional[str] = None):
+    """Valide et enregistre la confirmation d'adresse email sous 48h (GET pour liens emails)."""
+    result = brevo_mailer.confirm_email_address(token=token, tenant_slug=slug)
+    if not result.get("valid"):
+        raise HTTPException(status_code=400, detail=result)
+    return result
+
+
+@app.post("/api/olympe/email/confirm")
+async def confirm_email_post(req: ConfirmEmailRequest):
+    """Valide et enregistre la confirmation d'adresse email sous 48h (POST pour API)."""
+    result = brevo_mailer.confirm_email_address(token=req.token, tenant_slug=req.tenant_slug)
+    if not result.get("valid"):
+        raise HTTPException(status_code=400, detail=result)
+    return result
+
+
+@app.get("/api/olympe/ops/domain-auth/status")
+async def get_domain_auth_status(
+    domain: Optional[str] = None,
+    actor: Dict[str, Any] = Depends(require_ops_actor("tenants:read")),
+):
+    """Retourne l'état des enregistrements DNS d'authentification SPF, DKIM et DMARC du domaine d'envoi (CA7)."""
+    return brevo_mailer.probe_domain_authentication(domain=domain)
+
+
+@app.get("/api/olympe/ops/alerts/unconfirmed-emails")
+async def get_unconfirmed_email_alerts_endpoint(
+    threshold_hours: int = 48,
+    actor: Dict[str, Any] = Depends(require_ops_actor("tenants:read")),
+):
+    """Remonte les adresses non confirmées sous 48h pour alerte dans le cockpit OPS (CA2, CA10)."""
+    alerts = brevo_mailer.get_unconfirmed_email_alerts(threshold_hours=threshold_hours)
     return {"alerts": alerts, "count": len(alerts)}
 
 

@@ -417,50 +417,51 @@ def test_kan58_dashboard_auth_strictly_required_no_fallback(tmp_path):
 
     status_not_found = {"status": "not_found", "running": False}
 
-    with patch.object(manager, "get_tenant_status", return_value=status_not_found):
-        with patch.object(manager, "_sync_tenant_instance_record"):
-            # 1. Sans env_vars -> Rejet explicite immédiat
-            res_no_auth = manager.provision_tenant(
-                tenant_id="uuid-no-auth",
-                tenant_slug="client-no-auth",
+    with patch.object(manager, "get_tenant_status", return_value=status_not_found), \
+         patch.object(manager, "check_host_admission", return_value=(True, None, {})), \
+         patch.object(manager, "_sync_tenant_instance_record"):
+        # 1. Sans env_vars -> Rejet explicite immédiat
+        res_no_auth = manager.provision_tenant(
+            tenant_id="uuid-no-auth",
+            tenant_slug="client-no-auth",
+            allow_floating_tag=True,
+            persona_hmac_key="key-hmac",
+        )
+        assert res_no_auth["success"] is False
+        assert res_no_auth["error"] == "ERR_DASHBOARD_AUTH_REQUIRED"
+        assert res_no_auth["action_taken"] is False
+
+        # 2. Avec seulement username, sans mot de passe -> Rejet explicite
+        res_user_only = manager.provision_tenant(
+            tenant_id="uuid-user-only",
+            tenant_slug="client-user-only",
+            allow_floating_tag=True,
+            persona_hmac_key="key-hmac",
+            env_vars={"HERMES_DASHBOARD_BASIC_AUTH_USERNAME": "admin"},
+        )
+        assert res_user_only["success"] is False
+        assert res_user_only["error"] == "ERR_DASHBOARD_AUTH_REQUIRED"
+
+        # 3. Avec authentification explicite fournie -> Accepté pour lancement Docker
+        recorded_calls = []
+        def fake_exec_docker(args, timeout=20.0):
+            recorded_calls.append(list(args))
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="c_fake_auth", stderr="")
+
+        with patch.object(manager, "_exec_docker", side_effect=fake_exec_docker):
+            res_ok = manager.provision_tenant(
+                tenant_id="uuid-auth-ok",
+                tenant_slug="client-auth-ok",
                 allow_floating_tag=True,
                 persona_hmac_key="key-hmac",
+                env_vars={
+                    "HERMES_DASHBOARD_BASIC_AUTH_USERNAME": "ops_user",
+                    "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD": "ephemeral_secret_123",
+                },
             )
-            assert res_no_auth["success"] is False
-            assert res_no_auth["error"] == "ERR_DASHBOARD_AUTH_REQUIRED"
-            assert res_no_auth["action_taken"] is False
-
-            # 2. Avec seulement username, sans mot de passe -> Rejet explicite
-            res_user_only = manager.provision_tenant(
-                tenant_id="uuid-user-only",
-                tenant_slug="client-user-only",
-                allow_floating_tag=True,
-                persona_hmac_key="key-hmac",
-                env_vars={"HERMES_DASHBOARD_BASIC_AUTH_USERNAME": "admin"},
-            )
-            assert res_user_only["success"] is False
-            assert res_user_only["error"] == "ERR_DASHBOARD_AUTH_REQUIRED"
-
-            # 3. Avec authentification explicite fournie -> Accepté pour lancement Docker
-            recorded_calls = []
-            def fake_exec_docker(args, timeout=20.0):
-                recorded_calls.append(list(args))
-                return subprocess.CompletedProcess(args=args, returncode=0, stdout="c_fake_auth", stderr="")
-
-            with patch.object(manager, "_exec_docker", side_effect=fake_exec_docker):
-                res_ok = manager.provision_tenant(
-                    tenant_id="uuid-auth-ok",
-                    tenant_slug="client-auth-ok",
-                    allow_floating_tag=True,
-                    persona_hmac_key="key-hmac",
-                    env_vars={
-                        "HERMES_DASHBOARD_BASIC_AUTH_USERNAME": "ops_user",
-                        "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD": "ephemeral_secret_123",
-                    },
-                )
-                assert res_ok["success"] is True
-                assert res_ok["action_taken"] is True
-                run_call = next(c for c in recorded_calls if c and c[0] == "run")
-                assert "HERMES_DASHBOARD_BASIC_AUTH_USERNAME=ops_user" in run_call
-                assert "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=ephemeral_secret_123" in run_call
+            assert res_ok["success"] is True
+            assert res_ok["action_taken"] is True
+            run_call = next(c for c in recorded_calls if c and c[0] == "run")
+            assert "HERMES_DASHBOARD_BASIC_AUTH_USERNAME=ops_user" in run_call
+            assert "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=ephemeral_secret_123" in run_call
 
