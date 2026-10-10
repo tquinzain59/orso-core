@@ -823,4 +823,100 @@ export async function downloadClientInvoice(invoiceId: string, invoiceNumber?: s
   }
 }
 
+// ── Journal d'Activité Client (KAN-107) ──────────────────────────────────────
+
+export interface ClientActivityEntry {
+  id: number;
+  timestamp: string;
+  created_at: string;
+  agent_id: string;
+  agent_name: string;
+  action_type: string;
+  action_label: string;
+  source_type: string;
+  source_ref: string;
+  status: string; // 'Faite' | 'En attente de validation' | 'Refusée' | 'Expirée'
+  status_code: 'done' | 'pending_validation' | 'rejected' | 'expired';
+  rejection_reason?: string | null;
+  action_id?: string | null;
+  metadata?: Record<string, any>;
+}
+
+export interface ActivityFilterOptions {
+  days?: number;
+  startDate?: string;
+  endDate?: string;
+  agentId?: string;
+  status?: string;
+}
+
+export async function fetchClientActivities(options: ActivityFilterOptions = {}): Promise<ClientActivityEntry[]> {
+  const base = getApiBaseUrl();
+  const token = getClientToken();
+  const params = new URLSearchParams();
+  if (options.days) params.set('days', options.days.toString());
+  if (options.startDate) params.set('start_date', options.startDate);
+  if (options.endDate) params.set('end_date', options.endDate);
+  if (options.agentId && options.agentId !== 'all') params.set('agent_id', options.agentId);
+  if (options.status && options.status !== 'all') params.set('status', options.status);
+
+  const url = `${base}/api/client/activity?${params.toString()}`;
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+      },
+    });
+    if (!res.ok) {
+      throw new Error(`Erreur HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    return data.entries || [];
+  } catch (err) {
+    console.error('Erreur chargement journal activité:', err);
+    return [];
+  }
+}
+
+export async function exportClientActivities(
+  format: 'json' | 'csv' = 'json',
+  options: ActivityFilterOptions = {},
+): Promise<void> {
+  const base = getApiBaseUrl();
+  const token = getClientToken();
+  const params = new URLSearchParams();
+  params.set('format', format);
+  if (options.days) params.set('days', options.days.toString());
+  if (options.startDate) params.set('start_date', options.startDate);
+  if (options.endDate) params.set('end_date', options.endDate);
+  if (options.agentId && options.agentId !== 'all') params.set('agent_id', options.agentId);
+  if (options.status && options.status !== 'all') params.set('status', options.status);
+
+  const url = `${base}/api/client/activity/export?${params.toString()}`;
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+      },
+    });
+    if (!res.ok) {
+      throw new Error(`Erreur HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    const downloadUrl = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    a.download = `journal_activite_${format}.${format === 'csv' ? 'csv' : 'json'}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(downloadUrl);
+  } catch (err) {
+    console.error('Erreur export journal activité:', err);
+    throw err;
+  }
+}
+
 

@@ -43,11 +43,23 @@ class AutonomyManager:
         self,
         db_path: Optional[Path] = None,
         profiles_dir: Optional[Path] = None,
+        activity_manager: Optional[Any] = None,
     ):
         self.db_path = Path(db_path or DEFAULT_PENDING_DB_PATH).resolve()
         self.profiles_dir = Path(profiles_dir or PROFILES_ROOT).resolve()
         self._policy_cache: Dict[str, Dict[str, Any]] = {}
+        self._activity_manager = activity_manager
         self._init_db()
+
+    @property
+    def activity_manager(self) -> Optional[Any]:
+        if self._activity_manager is None:
+            try:
+                from olympe.activity_manager import activity_manager
+                return activity_manager
+            except Exception:
+                return None
+        return self._activity_manager
 
     def _init_db(self) -> None:
         """Initialise la table d'audit des actions et la table d'audit des modifications de politiques."""
@@ -254,6 +266,22 @@ class AutonomyManager:
             tenant_slug,
         )
 
+        if self.activity_manager:
+            try:
+                self.activity_manager.record_activity(
+                    tenant_slug=tenant_slug or "default",
+                    agent_id=agent_id,
+                    action_type=action_type,
+                    source_type="Demande de validation",
+                    source_ref=recipient or f"Action {action_type}",
+                    status="pending_validation",
+                    action_id=action_id,
+                    metadata={"recipient": recipient, "risk_level": risk_level},
+                    created_at=now_iso,
+                )
+            except Exception as act_err:
+                _log.debug("Erreur synchro journal d'activité: %s", act_err)
+
         return {
             "id": action_id,
             "status": "PENDING",
@@ -331,6 +359,23 @@ class AutonomyManager:
             conn.commit()
 
         _log.info("Action %s approuvée par %s (%s)", action_id, reviewer_id, reviewer_role)
+
+        if self.activity_manager:
+            try:
+                self.activity_manager.record_activity(
+                    tenant_slug=row["tenant_slug"] or "default",
+                    agent_id=row["agent_id"],
+                    action_type=row["action_type"],
+                    source_type="Validation dirigeant",
+                    source_ref=row["recipient"] or f"Action {row['action_type']}",
+                    status="done",
+                    action_id=action_id,
+                    metadata={"reviewed_by": reviewer_id, "reviewer_role": reviewer_role},
+                    created_at=now_iso,
+                )
+            except Exception as act_err:
+                _log.debug("Erreur synchro journal d'activité (approve): %s", act_err)
+
         return {
             "success": True,
             "action_id": action_id,
@@ -376,6 +421,24 @@ class AutonomyManager:
             conn.commit()
 
         _log.info("Action %s rejetée par %s (%s) : %s", action_id, reviewer_id, reviewer_role, reason)
+
+        if self.activity_manager:
+            try:
+                self.activity_manager.record_activity(
+                    tenant_slug=row["tenant_slug"] or "default",
+                    agent_id=row["agent_id"],
+                    action_type=row["action_type"],
+                    source_type="Demande refusée",
+                    source_ref=row["recipient"] or f"Action {row['action_type']}",
+                    status="rejected",
+                    rejection_reason=reason or "Refus utilisateur",
+                    action_id=action_id,
+                    metadata={"reviewed_by": reviewer_id, "reviewer_role": reviewer_role},
+                    created_at=now_iso,
+                )
+            except Exception as act_err:
+                _log.debug("Erreur synchro journal d'activité (reject): %s", act_err)
+
         return {
             "success": True,
             "action_id": action_id,
@@ -413,7 +476,13 @@ class AutonomyManager:
         now_iso = now.isoformat()
 
         with sqlite3.connect(str(self.db_path), timeout=15.0) as conn:
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM pending_actions WHERE status = 'PENDING' AND created_at <= ?;",
+                (threshold_iso,),
+            )
+            expired_rows = cursor.fetchall()
             cursor.execute(
                 """UPDATE pending_actions
                    SET status = 'EXPIRED', reviewed_at = ?, rejection_reason = 'Délai d expiration dépassé sans réponse (48h)'
@@ -422,6 +491,23 @@ class AutonomyManager:
             )
             expired_count = cursor.rowcount
             conn.commit()
+
+        if expired_rows and self.activity_manager:
+            try:
+                for r in expired_rows:
+                    self.activity_manager.record_activity(
+                        tenant_slug=r["tenant_slug"] or "default",
+                        agent_id=r["agent_id"],
+                        action_type=r["action_type"],
+                        source_type="Demande expirée",
+                        source_ref=r["recipient"] or f"Action {r['action_type']}",
+                        status="expired",
+                        rejection_reason="Délai d expiration dépassé sans réponse (48h)",
+                        action_id=r["id"],
+                        created_at=now_iso,
+                    )
+            except Exception as act_err:
+                _log.debug("Erreur synchro journal d'activité (expire): %s", act_err)
 
         if expired_count > 0:
             _log.info("%d action(s) basculée(s) à EXPIRED (seuil: %dh)", expired_count, threshold_hours)

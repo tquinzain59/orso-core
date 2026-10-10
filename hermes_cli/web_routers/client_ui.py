@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from hermes_cli.dashboard_auth.client_jwt import verify_client_access
 from olympe.autonomy_manager import autonomy_manager
+from olympe.activity_manager import activity_manager
 
 _log = logging.getLogger("hermes_cli.client_ui")
 router = APIRouter()
@@ -2463,6 +2464,141 @@ async def execute_client_action(
         "message": f"Action {req.action_id} enregistrée avec succès.",
         "timestamp": now,
     }
+
+
+# ── Journal d'Activité Client (KAN-107) ──────────────────────────────────────
+
+class RecordActivityRequest(BaseModel):
+    agent_id: str
+    action_type: str
+    source_type: str
+    source_ref: str
+    status: str = "done"
+    action_label: Optional[str] = None
+    agent_name: Optional[str] = None
+    rejection_reason: Optional[str] = None
+    action_id: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+    created_at: Optional[str] = None
+
+
+@router.get("/api/client/activity")
+async def get_client_activity(
+    days: int = 30,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    status: Optional[str] = None,
+    auth: Dict[str, Any] = Depends(verify_client_access),
+):
+    """Consulte le journal d'activité des agents sur 30 jours au minimum (jusqu'à 10 ans) (CA1, CA2, CA5, CA10)."""
+    tenant = dict(auth.get("tenant") or auth.get("app_metadata") or {})
+    slug = tenant.get("tenant_slug") or os.environ.get("ORSO_CLIENT_SLUG") or "default"
+
+    entries = activity_manager.get_activities(
+        tenant_slug=slug,
+        days=days,
+        start_date=start_date,
+        end_date=end_date,
+        agent_id=agent_id,
+        status=status,
+    )
+    return {
+        "success": True,
+        "tenant_slug": slug,
+        "total_count": len(entries),
+        "period": {
+            "days": days,
+            "start_date": start_date,
+            "end_date": end_date,
+        },
+        "entries": entries,
+    }
+
+
+@router.get("/api/client/activity/export")
+async def export_client_activity(
+    format: str = "json",
+    days: int = 30,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    agent_id: Optional[str] = None,
+    status: Optional[str] = None,
+    auth: Dict[str, Any] = Depends(verify_client_access),
+):
+    """Exporte le journal d'activité en format JSON ou CSV sans passer par le support (CA9)."""
+    tenant = dict(auth.get("tenant") or auth.get("app_metadata") or {})
+    slug = tenant.get("tenant_slug") or os.environ.get("ORSO_CLIENT_SLUG") or "default"
+
+    content = activity_manager.export_activities(
+        tenant_slug=slug,
+        export_format=format,
+        days=days,
+        start_date=start_date,
+        end_date=end_date,
+        agent_id=agent_id,
+        status=status,
+    )
+    if format.lower() == "csv":
+        return Response(
+            content=content,
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="journal_activite_{slug}.csv"'},
+        )
+    return Response(
+        content=content,
+        media_type="application/json; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="journal_activite_{slug}.json"'},
+    )
+
+
+@router.delete("/api/client/activity/{entry_id}")
+async def delete_client_activity_entry(
+    entry_id: int,
+    auth: Dict[str, Any] = Depends(verify_client_access),
+):
+    """Tente de supprimer une entrée du journal (impossible, append-only CA6)."""
+    tenant = dict(auth.get("tenant") or auth.get("app_metadata") or {})
+    slug = tenant.get("tenant_slug") or os.environ.get("ORSO_CLIENT_SLUG") or "default"
+    actor = {"actor": auth.get("email") or auth.get("sub") or "client_user", "role": auth.get("role") or "client"}
+    try:
+        activity_manager.attempt_delete_entry(entry_id=entry_id, tenant_slug=slug, actor=actor)
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "APPEND_ONLY_VIOLATION",
+                "message": str(e),
+                "incident_logged": True,
+            },
+        )
+    raise HTTPException(status_code=403, detail="APPEND_ONLY_VIOLATION: Suppression interdite.")
+
+
+@router.post("/api/client/activity")
+async def record_client_activity_endpoint(
+    req: RecordActivityRequest,
+    auth: Dict[str, Any] = Depends(verify_client_access),
+):
+    """Enregistre une activité effectuée par un agent (CA1, CA2, CA8)."""
+    tenant = dict(auth.get("tenant") or auth.get("app_metadata") or {})
+    slug = tenant.get("tenant_slug") or os.environ.get("ORSO_CLIENT_SLUG") or "default"
+
+    entry = activity_manager.record_activity(
+        tenant_slug=slug,
+        agent_id=req.agent_id,
+        action_type=req.action_type,
+        source_type=req.source_type,
+        source_ref=req.source_ref,
+        status=req.status,
+        agent_name=req.agent_name,
+        action_label=req.action_label,
+        rejection_reason=req.rejection_reason,
+        action_id=req.action_id,
+        metadata=req.metadata,
+        created_at=req.created_at,
+    )
+    return {"success": True, "entry": entry}
 
 
 # ── Fonctions & Endpoints Paramètres Client & Stripe Billing ─────────────────

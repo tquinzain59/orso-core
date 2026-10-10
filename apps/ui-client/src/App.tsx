@@ -5,6 +5,7 @@ import { ChatView } from '@/pages/ChatView';
 import { IntegrationsView } from '@/pages/IntegrationsView';
 import { ChannelsView } from '@/pages/ChannelsView';
 import { SettingsView } from '@/pages/SettingsView';
+import { ActivityView } from '@/pages/ActivityView';
 import {
   checkBackendHealth,
   checkSessionMe,
@@ -18,6 +19,7 @@ import {
 } from '@/lib/api';
 import {
   MessageSquare,
+  Clock,
   Layers,
   Smartphone,
   Settings,
@@ -29,7 +31,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 
-type Tab = 'chat' | 'integrations' | 'channels' | 'settings';
+type Tab = 'chat' | 'activity' | 'integrations' | 'channels' | 'settings';
 
 
 export const App: React.FC = () => {
@@ -248,6 +250,18 @@ export const App: React.FC = () => {
             <span>Discussion</span>
           </button>
 
+          <button
+            onClick={() => setCurrentTab('activity')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+              currentTab === 'activity'
+                ? 'bg-blue-600 text-white shadow-md shadow-blue-900/30 scale-100'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+            }`}
+          >
+            <Clock className="w-4 h-4" />
+            <span>Journal d'activité</span>
+          </button>
+
           {/* Onglets Interfaces et Canaux réservés aux Administrateurs */}
           {isAdmin && (
             <>
@@ -376,6 +390,14 @@ export const App: React.FC = () => {
           <ChatView
             activeAgentId={activeAgentId}
             availableAgents={availableAgents}
+          />
+        )}
+        {currentTab === 'activity' && (
+          <ActivityView
+            onNavigateToChat={(agentId) => {
+              if (agentId) setActiveAgentId(agentId as AgentId);
+              setCurrentTab('chat');
+            }}
           />
         )}
         {currentTab === 'integrations' && <IntegrationsView />}
