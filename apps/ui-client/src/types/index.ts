@@ -49,6 +49,39 @@ export interface ChatMessage {
   isStreaming?: boolean;
 }
 
+export interface ClientSession {
+  session_id: string;
+  tenant_id: string;
+  user_id: string;
+  agent_id: string;
+  title: string;
+  title_source: 'auto' | 'user' | string;
+  dossier_metier_id?: string | null;
+  created_at: number;
+  last_activity_at: number;
+}
+
+export interface ClientTheme {
+  theme_id: string;
+  tenant_id: string;
+  user_id: string;
+  agent_id: string;
+  title: string;
+  title_source: 'auto' | 'user' | string;
+  created_at: number;
+  updated_at: number;
+  sessions_count: number;
+  sessions?: ClientSession[];
+}
+
+export interface ClientThemeContext {
+  theme_id: string;
+  context_text: string;
+  has_context: boolean;
+  length_chars: number;
+  tokens_est: number;
+}
+
 export type IntegrationCategory = 'erp' | 'mail' | 'legal' | 'crm' | 'tools';
 
 export interface Integration {

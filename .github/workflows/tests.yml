@@ -11,10 +11,10 @@ on:
 permissions:
   contents: read
 
-# Cancel in-progress runs for the same ref
+# Concurrency: align with parent ci.yaml (cancel-in-progress on PRs, queue on main)
 concurrency:
-  group: tests-${{ github.ref }}
-  cancel-in-progress: true
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   generate:

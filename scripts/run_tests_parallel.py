@@ -1250,6 +1250,42 @@ def main() -> int:
             print(f"=== {len(no_tests_ran)} file{'s' if len(no_tests_ran) != 1 else ''} where no tests ran (collection/import error, timeout before collection, etc.) ===")
             for file, s in no_tests_ran:
                 print(f"  {_format_file(file, repo_root)}")
+
+        # Extract and print deduplicated failing test cases (couples file::test)
+        failing_tests: set[str] = set()
+        for _file, output, _s in failures:
+            for match in re.findall(r"^(?:FAILED|ERROR)\s+([^\s:]+\.py::[^\s]+)", output, re.MULTILINE):
+                failing_tests.add(match)
+        if failing_tests:
+            print()
+            print(f"=== Relevé des échecs : {len(failing_tests)} test{'s' if len(failing_tests) != 1 else ''} rouge{'s' if len(failing_tests) != 1 else ''} distinct{'s' if len(failing_tests) != 1 else ''} (couples fichier::test) ===")
+            for t in sorted(failing_tests):
+                print(f"  - {t}")
+
+        flaky_tests: set[str] = set()
+        for _f, output in _FLAKY_RESULTS:
+            for match in re.findall(r"^(?:FAILED|ERROR)\s+([^\s:]+\.py::[^\s]+)", output, re.MULTILINE):
+                flaky_tests.add(match)
+        if flaky_tests:
+            print()
+            print(f"=== ⚠ Instabilités relevées : {len(flaky_tests)} test{'s' if len(flaky_tests) != 1 else ''} intermittent{'s' if len(flaky_tests) != 1 else ''} (échec initial, succès au rejeu) ===")
+            for t in sorted(flaky_tests):
+                print(f"  - {t}")
+
+        step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+        if step_summary:
+            try:
+                with open(step_summary, "a", encoding="utf-8") as f:
+                    f.write(f"\n### ❌ Échecs de tests ({len(failing_tests)} distincts dans {len(test_fail_files)} fichiers)\n")
+                    for t in sorted(failing_tests):
+                        f.write(f"- `{t}`\n")
+                    if flaky_tests:
+                        f.write(f"\n### ⚠ Instabilités (Flaky - {len(flaky_tests)} tests)\n")
+                        for t in sorted(flaky_tests):
+                            f.write(f"- `{t}`\n")
+            except OSError:
+                pass
+
         return 1
 
     if no_tests_ran_at_all:
