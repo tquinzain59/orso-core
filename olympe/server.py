@@ -32,6 +32,7 @@ from olympe.auth import (
     get_auth_audit_events,
 )
 from olympe.lifecycle_manager import DockerLifecycleManager
+from olympe.ops_billing_store import STORAGE_FAILURE_CODES
 from olympe.ops_manager import OpsManager
 from olympe.ovh_client import ovh_client
 from olympe.telemetry_client import telemetry_client
@@ -626,7 +627,11 @@ async def stripe_webhook(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Payload JSON invalide")
 
-    return ops_manager.handle_stripe_webhook(payload)
+    result = ops_manager.handle_stripe_webhook(payload)
+    if result.get("status") == "failed" and result.get("error") in STORAGE_FAILURE_CODES:
+        # KAN-88 : une écriture impossible ne passe pas pour un succès ; Stripe rejoue sur 5xx.
+        return JSONResponse(status_code=503, content=result)
+    return result
 
 
 @app.get("/api/olympe/ops/webhooks/deliveries")

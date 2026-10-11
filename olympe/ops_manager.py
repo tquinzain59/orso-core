@@ -17,6 +17,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from olympe.onboarding_worker import onboarding_worker
+from olympe.ops_billing_store import (
+    ERR_BILLING_WRITE,
+    ERR_EVENT_RECORD_WRITE,
+    ERR_IDEMPOTENCE_STORE,
+    SupabaseStoreError,
+    supabase_request_strict,
+)
 from olympe.ovh_client import ovh_client
 
 _log = logging.getLogger("orso.olympe.ops")
@@ -2150,6 +2157,63 @@ class OpsManager:
             "message": f"Tenant {matched_slug} détruit sans résidu.",
         }
 
+    def _persist_replay_count(self, event_id: str, count: int, last_replayed_at: str) -> Optional[str]:
+        """Persiste le compteur de rejeu ; rend le motif d'échec (journalisé en ERROR) ou None (KAN-88)."""
+        try:
+            supabase_request_strict(
+                self.supabase_url, self.supabase_key,
+                f"processed_webhook_events?event_id=eq.{event_id}",
+                method="PATCH",
+                payload={"replay_count": count, "last_replayed_at": last_replayed_at},
+            )
+        except SupabaseStoreError as e:
+            _log.error("[WEBHOOK] Compteur de rejeu non persisté pour %s : %s", event_id, e)
+            return str(e)
+        return None
+
+    def _fail_webhook(
+        self,
+        error_code: str,
+        event_id: str,
+        event_type: str,
+        cus_id: Optional[str],
+        sub_id: Optional[str],
+        tenant_slug: Optional[str],
+        detail: str,
+    ) -> Dict[str, Any]:
+        """Rend l'échec d'un support de facturation/idempotence au lieu de le faire passer pour un succès (KAN-88).
+
+        L'événement n'est PAS mémorisé comme traité : la relivraison Stripe (HTTP 503 côté route)
+        doit pouvoir le reprendre.
+        """
+        _log.error("[WEBHOOK FAILED] %s : %s (event_id: %s, type: %s)", error_code, detail, event_id, event_type)
+        self._webhook_deliveries.append({
+            "id": event_id,
+            "type": event_type,
+            "received_at": _format_timestamp(),
+            "status": "failed",
+            "customer_id": cus_id,
+            "subscription_id": sub_id,
+            "tenant_slug": tenant_slug,
+            "error_reason": f"{error_code}: {detail}",
+            "summary": f"Événement {event_type} en échec : {error_code}",
+        })
+        self.record_audit_event(
+            actor={"actor": "stripe-webhook", "role": "system"},
+            action="webhook:failed",
+            target=tenant_slug or cus_id or "unknown",
+            details={"event_id": event_id, "error": error_code, "detail": detail, "type": event_type},
+        )
+        return {
+            "status": "failed",
+            "error": error_code,
+            "event_id": event_id,
+            "type": event_type,
+            "customer_id": cus_id,
+            "tenant_slug": tenant_slug,
+            "detail": detail,
+        }
+
     def handle_stripe_webhook(self, event: Dict[str, Any]) -> Dict[str, Any]:
         """Traite les événements Webhook émis par Stripe Billing avec idempotence et réconciliation stricte (KAN-44)."""
         event_id = event.get("id") or f"evt_test_{int(time.time()*1000)}"
@@ -2181,20 +2245,13 @@ class OpsManager:
             }
             self._webhook_deliveries.append(replay_record)
 
+            replay_error = None
             if self.supabase_url and self.supabase_key:
-                try:
-                    self._query_supabase(
-                        f"processed_webhook_events?event_id=eq.{event_id}",
-                        method="PATCH",
-                        payload={
-                            "replay_count": existing["replay_count"],
-                            "last_replayed_at": existing["last_replayed_at"],
-                        },
-                    )
-                except Exception:
-                    pass
+                replay_error = self._persist_replay_count(
+                    event_id, existing["replay_count"], existing["last_replayed_at"]
+                )
 
-            return {
+            result = {
                 "status": "already_processed",
                 "type": event_type,
                 "event_id": event_id,
@@ -2202,9 +2259,22 @@ class OpsManager:
                 "tenant_slug": existing.get("tenant_slug"),
                 "message": f"Événement {event_id} déjà traité précédemment. Aucun effet supplémentaire.",
             }
+            if replay_error:
+                result["replay_count_persisted"] = False
+                result["replay_count_error"] = replay_error
+            return result
 
         if self.supabase_url and self.supabase_key:
-            sb_check = self._query_supabase(f"processed_webhook_events?event_id=eq.{event_id}&select=*")
+            try:
+                sb_check = supabase_request_strict(
+                    self.supabase_url, self.supabase_key,
+                    f"processed_webhook_events?event_id=eq.{event_id}&select=*",
+                )
+            except SupabaseStoreError as e:
+                return self._fail_webhook(
+                    ERR_IDEMPOTENCE_STORE, event_id, event_type, cus_id, sub_id, None,
+                    f"Lecture de la trace d'idempotence impossible, événement non traité : {e}",
+                )
             if sb_check and isinstance(sb_check, list) and len(sb_check) > 0:
                 rec = sb_check[0]
                 new_count = int(rec.get("replay_count", 0)) + 1
@@ -2231,16 +2301,9 @@ class OpsManager:
                     "summary": f"Événement {event_id} déjà consigné en base (rejeu #{new_count})",
                 }
                 self._webhook_deliveries.append(replay_record)
-                try:
-                    self._query_supabase(
-                        f"processed_webhook_events?event_id=eq.{event_id}",
-                        method="PATCH",
-                        payload={"replay_count": new_count, "last_replayed_at": _format_timestamp()},
-                    )
-                except Exception:
-                    pass
+                replay_error = self._persist_replay_count(event_id, new_count, _format_timestamp())
 
-                return {
+                result = {
                     "status": "already_processed",
                     "type": event_type,
                     "event_id": event_id,
@@ -2248,6 +2311,10 @@ class OpsManager:
                     "tenant_slug": rec.get("tenant_slug"),
                     "message": f"Événement {event_id} déjà traité en base. Aucun effet supplémentaire.",
                 }
+                if replay_error:
+                    result["replay_count_persisted"] = False
+                    result["replay_count_error"] = replay_error
+                return result
 
         # ── 2. Rapprochement certain client vers tenant (Décision 2 / KAN-44 CA1 & CA5) ───
         meta_slug = data_obj.get("metadata", {}).get("tenant_slug") or data_obj.get("metadata", {}).get("slug")
@@ -2440,26 +2507,35 @@ class OpsManager:
                     }
                     self._query_supabase(f"tenant_instances?tenant_id=eq.{matched_tenant_id}", method="PATCH", payload=inst_patch)
 
-                if event_type == "invoice.payment_succeeded":
-                    inv_id = data_obj.get("id")
-                    amount_paid = float(data_obj.get("amount_paid", 0)) / 100.0
-                    currency = data_obj.get("currency", "eur").upper()
-                    pdf_url = data_obj.get("hosted_invoice_url") or data_obj.get("invoice_pdf")
-                    inv_payload = {
-                        "tenant_id": matched_tenant_id,
-                        "stripe_invoice_id": inv_id,
-                        "stripe_customer_id": cus_id,
-                        "number": data_obj.get("number") or f"ORSO-{int(time.time())}",
-                        "amount_ht": round(amount_paid / 1.20, 2),
-                        "amount_ttc": amount_paid,
-                        "currency": currency,
-                        "status": "paid",
-                        "date": _format_timestamp(),
-                        "pdf_url": pdf_url,
-                    }
-                    self._query_supabase("invoices", method="POST", payload=inv_payload)
             except Exception as e:
                 _log.warning("Erreur synchronisation Supabase post-webhook: %s", e)
+
+            if event_type == "invoice.payment_succeeded":
+                inv_id = data_obj.get("id")
+                amount_paid = float(data_obj.get("amount_paid", 0)) / 100.0
+                inv_payload = {
+                    "tenant_id": matched_tenant_id,
+                    "stripe_invoice_id": inv_id,
+                    "stripe_customer_id": cus_id,
+                    "number": data_obj.get("number") or f"ORSO-{int(time.time())}",
+                    "amount_ht": round(amount_paid / 1.20, 2),
+                    "amount_ttc": amount_paid,
+                    "currency": data_obj.get("currency", "eur").upper(),
+                    "status": "paid",
+                    "date": _format_timestamp(),
+                    "pdf_url": data_obj.get("hosted_invoice_url") or data_obj.get("invoice_pdf"),
+                }
+                try:
+                    supabase_request_strict(
+                        self.supabase_url, self.supabase_key, "invoices?on_conflict=stripe_invoice_id",
+                        method="POST", payload=inv_payload,
+                        extra_headers={"Prefer": "resolution=merge-duplicates,return=representation"},
+                    )
+                except SupabaseStoreError as e:
+                    return self._fail_webhook(
+                        ERR_BILLING_WRITE, event_id, event_type, cus_id, sub_id, matched_slug,
+                        f"Écriture de la facture {inv_id} refusée : {e}",
+                    )
 
         # Synchronisation mémoire si présent
         if matched_sub_dict is not None:
@@ -2502,13 +2578,19 @@ class OpsManager:
             "replay_count": 0,
             "processed_at": _format_timestamp(),
         }
-        self._processed_events[event_id] = processed_entry
 
         if self.supabase_url and self.supabase_key:
             try:
-                self._query_supabase("processed_webhook_events", method="POST", payload=processed_entry)
-            except Exception:
-                pass
+                supabase_request_strict(
+                    self.supabase_url, self.supabase_key, "processed_webhook_events",
+                    method="POST", payload=processed_entry,
+                )
+            except SupabaseStoreError as e:
+                return self._fail_webhook(
+                    ERR_EVENT_RECORD_WRITE, event_id, event_type, cus_id, sub_id, matched_slug,
+                    f"Écriture de la trace d'idempotence refusée : {e}",
+                )
+        self._processed_events[event_id] = processed_entry
 
         # ── 8. Consignation dans le journal de livraison ────────────────────
         delivery_record = {

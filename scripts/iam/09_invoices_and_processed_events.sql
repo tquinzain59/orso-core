@@ -4,9 +4,36 @@
 -- Description : 
 --   1. Table `public.processed_webhook_events` garantissant l'idempotence au rejeu
 --   2. Table `public.invoices` alimentée par les événements Stripe Billing
+-- Rollback : scripts/iam/09_invoices_and_processed_events_rollback.sql
+-- Relecture KAN-88 (dérive base/dépôt) : préconditions ci-dessous, politique de lecture
+-- restreinte au rôle `authenticated`, rechargement du cache de schéma PostgREST en fin de script.
 -- ==============================================================================
 
 BEGIN;
+
+-- ------------------------------------------------------------------------------
+-- 0. PRÉCONDITIONS : échouer bruyamment si le schéma a dérivé depuis la rédaction
+-- ------------------------------------------------------------------------------
+
+DO $$
+BEGIN
+    IF to_regclass('public.tenants') IS NULL THEN
+        RAISE EXCEPTION 'KAN-88 precondition: public.tenants est absente (FK invoices.tenant_id)';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'tenants' AND column_name = 'id' AND data_type = 'uuid'
+    ) THEN
+        RAISE EXCEPTION 'KAN-88 precondition: public.tenants.id n''est pas de type uuid';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'profiles' AND column_name = 'tenant_id'
+    ) THEN
+        RAISE EXCEPTION 'KAN-88 precondition: public.profiles.tenant_id est absente (politique de lecture invoices)';
+    END IF;
+END
+$$;
 
 -- ------------------------------------------------------------------------------
 -- 1. TABLE DES ÉVÉNEMENTS WEBHOOK TRAITÉS (IDEMPOTENCE STRICTE AU REJEU)
@@ -70,7 +97,7 @@ CREATE POLICY "Service role manages processed_webhook_events"
 -- invoices : Lecture par les membres du tenant, gestion par service_role
 DROP POLICY IF EXISTS "Users can view own tenant invoices" ON public.invoices;
 CREATE POLICY "Users can view own tenant invoices"
-    ON public.invoices FOR SELECT
+    ON public.invoices FOR SELECT TO authenticated
     USING (tenant_id IN (
         SELECT tenant_id FROM public.profiles WHERE profiles.id = auth.uid()
     ));
@@ -80,3 +107,6 @@ CREATE POLICY "Service role manages invoices"
     ON public.invoices FOR ALL TO service_role USING (true) WITH CHECK (true);
 
 COMMIT;
+
+-- Recharge le cache de schéma PostgREST : sans cela l'API continue de rendre PGRST205.
+NOTIFY pgrst, 'reload schema';
