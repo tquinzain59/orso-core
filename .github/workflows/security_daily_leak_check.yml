@@ -14,10 +14,14 @@ jobs:
   audit-secrets-and-live-probes:
     name: Secrets Leak & Live Production Conformance
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # KAN-55 : l'audit d'historique exige l'historique complet (un clone
+          # superficiel est refusé par le script, jamais ignoré en silence).
+         fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -28,6 +32,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pytest requests python-dotenv pyyaml
+      # KAN-55 : coexiste avec le contrôle en clair ci-dessous (qui n'est pas retiré).
+      # Historique audité par défaut : aucune option à passer. Tout constat => code 1.
+      - name: Secrets Leak Check (arbre + historique)
+        run: python scripts/security/check_no_secrets.py
 
       - name: Static Security Audit (Docs & Codebase)
         run: |
@@ -65,4 +73,4 @@ jobs:
 
       - name: Execute Security Conformance Tests
         run: |
-          pytest tests/security/test_kan46_vitrine_security.py -v
+          pytest tests/security/test_kan46_vitrine_security.py tests/security/test_check_no_secrets.py -v
