@@ -1,0 +1,35 @@
+# Tolérances explicites du contrôle de fuite (scripts/security/check_no_secrets.py).
+# Toute ligne est une décision de revue : chaque entrée DOIT porter une raison.
+# Formats :  history <sha ou préfixe> # raison   |   path <glob depuis la racine> # raison
+
+# --- Fixtures de tests amont (hermes-agent) : valeurs factices volontaires ---
+path tests/agent/test_redact.py        # jetons factices pour tester la rédaction
+path tests/cron/test_cron_incidents.py # jeton factice de fixture
+path tests/gateway/test_platform_base.py # en-tête de clé factice (contenu "fake")
+path tests/test_iron_proxy.py          # en-tête de clé factice (contenu "fake")
+path tests/tools/test_mcp_tool.py      # jetons factices "xxxx..."
+
+# --- Dette KAN-46 : anciens mots de passe de démonstration, DÉJÀ RÉVOQUÉS ---
+# Fichiers d'inventaire de révocation et de rotation. À purger de l'arbre par le
+# ticket de réponse à incident (hors périmètre de KAN-55) ; retirer ces lignes ensuite.
+path docs/3_Technique/spec_kan46_securisation_secrets_vitrine_iam.md # inventaire de révocation KAN-46
+path scripts/iam/rotate_poc_credentials.py                          # script de rotation KAN-46
+path scripts/publish_kan46_confluence_and_jira.py                   # publication KAN-46
+
+# --- Historique : base de référence acceptée (non réécrivable sans casser les clones) ---
+# Anciens mots de passe de démonstration, DÉJÀ RÉVOQUÉS par KAN-46 (rotation Supabase).
+# Introduits dans les sources UI / scripts de migration et dans les bundles apps/ui-client/dist.
+# Toute NOUVELLE occurrence dans un commit hors de cette liste fait échouer le contrôle.
+history e4b1538d4689 # KAN-46 : inventaire de révocation (docs, scripts iam)
+history 689171f335f5 # bundle ui-client/dist, valeur révoquée KAN-46
+history 9719214a46b7 # bundle ui-client/dist, valeur révoquée KAN-46
+history 7cab9dec282f # bundle ui-client/dist, valeur révoquée KAN-46
+history de30e8f10a0f # bundle ui-client/dist, valeur révoquée KAN-46
+history e0e1aaae4f8b # bundle ui-client/dist, valeur révoquée KAN-46
+history be7fa1e8d36c # bundle ui-client/dist, valeur révoquée KAN-46
+history eb9326c66589 # bundle ui-client/dist, valeur révoquée KAN-46
+history a43dc0e8abd0 # bundle ui-client/dist, valeur révoquée KAN-46
+history f9b51b2a8669 # bundle ui-client/dist, valeur révoquée KAN-46
+history bca02bd6aeba # App.tsx, migrate_poc_live.py, bundle : valeur révoquée KAN-46
+# Amont hermes-agent : motifs de rédaction de secrets (agent/redact.py), pas une clé réelle.
+history aaf8f2d2d2db # feat: expand secret redaction patterns
