@@ -1,6 +1,10 @@
 # Handoff KAN-88 — support réel de la facturation et de l'idempotence du webhook Stripe
 
-Branche : `KAN-88-auto` (non poussée). Base : `c13b03698c`.
+Branche : `KAN-88-auto` (non poussée par cette passe). Base : `c13b03698c` (= `main`).
+Origine du code : `origin/KAN-88-auto` portait déjà le commit `0ba8852baf` (passe antérieure, absent de `main`) ;
+cette passe l'a **récupéré par cherry-pick** (auteur préservé), relu et revalidé (voir « Revalidation »).
+Le commit `fbc33bd478` (« [KAN-87][KAN-88] », Thibaut, 03/10, non fusionné) est une approche concurrente
+(couplée à KAN-87 : `client_ui.py`, migration 10) : **non repris**, à arbitrer par Thibaut.
 **Statut : livraison PARTIELLE.** Le code et la migration corrigée sont livrés et prouvés contre un
 serveur PostgREST de test. **La production n'a pas été touchée** : aucun accès à la console Supabase
 (condition d'entrée du ticket) ni aucune clé n'étaient disponibles. CA1 et CA2 ne sont donc **pas
@@ -75,3 +79,12 @@ et `supabase_request_strict(...)`.
 - État de production (avant/après), application de la migration, relecture PO, SHA/date de déploiement.
 - Exécution réelle du SQL (aucun PostgreSQL disponible) : syntaxe relue, non jouée. Le `DO $$` et `NOTIFY` sont à valider à l'application.
 - Concurrence : deux livraisons simultanées du même `event_id` — la seconde échoue sur la clé primaire (503) puis Stripe rejoue et obtient `already_processed`.
+
+## Revalidation (passe du 2026-10-12, sur la branche `KAN-88-auto` après cherry-pick)
+- `ruff check olympe/ops_billing_store.py olympe/ops_manager.py olympe/server.py scripts/iam/audit_supabase_write_targets.py tests/olympe/test_kan88_billing_persistence.py` → `All checks passed!`, exit 0.
+- `scripts/run_tests.sh tests/olympe/test_kan88_billing_persistence.py tests/olympe/test_kan43_kan44_acceptance.py tests/olympe/test_drone_access.py tests/olympe/test_ops_manager.py tests/olympe/test_kan59_acceptance.py` → exit 0, 5 fichiers verts.
+- `scripts/run_tests.sh tests/olympe/` → 1 rouge : `test_kan58_acceptance.py::test_kan58_dashboard_auth_strictly_required_no_fallback`
+  (`FileNotFoundError: 'docker'`). **Préexistant et sans lien** : même échec sur `c13b03698c` (worktree propre), docker absent de cet hôte.
+- `python scripts/iam/audit_supabase_write_targets.py` → exit 1, 4 tables visées en écriture et absentes de la liste du 03/10 :
+  `invoices`, `processed_webhook_events` (couvertes par 09), `tenant_channels`, `tenant_integrations` (migration 03, hors périmètre → ticket dédié).
+- Aucune clé Supabase dans l'environnement de cette passe : l'état de production (CA1 « avant », CA2 en production) n'a pas pu être relevé.
