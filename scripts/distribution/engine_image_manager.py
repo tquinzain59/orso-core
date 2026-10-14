@@ -616,8 +616,8 @@ def main():
     common_parser = argparse.ArgumentParser(add_help=False)
     common_parser.add_argument(
         "--target-digest",
-        default=os.environ.get("ORSO_TARGET_ENGINE_DIGEST", "sha256:d8a5f82c448bb95b28a9b49b43e8b0b8c6e07eb4838a1f2987a123456789abcd"),
-        help="Empreinte cryptographique cible attendue",
+        default=argparse.SUPPRESS,
+        help="Empreinte cryptographique cible attendue (obligatoire : option ou variable ORSO_TARGET_ENGINE_DIGEST)",
     )
     common_parser.add_argument(
         "--registry-base",
@@ -652,6 +652,13 @@ def main():
     rb_parser.add_argument("--local", action="store_true", help="Exécute le rollback directement en local sans SSH")
 
     args = parser.parse_args()
+
+    args.target_digest = getattr(args, "target_digest", None) or os.environ.get("ORSO_TARGET_ENGINE_DIGEST")
+    if not args.target_digest:
+        parser.error(
+            "digest cible absent : renseignez --target-digest ou la variable "
+            "ORSO_TARGET_ENGINE_DIGEST (aucune valeur par défaut)"
+        )
 
     mgr = EngineDistributionManager(target_digest=args.target_digest, registry_base=args.registry_base)
 
