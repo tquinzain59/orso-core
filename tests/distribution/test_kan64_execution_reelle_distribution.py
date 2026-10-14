@@ -391,3 +391,14 @@ class TestKAN64ExecutionReelleDistribution:
                     assert "fleet-secret-key" not in run_call_rb[0][0]
                     assert "--env-file /dev/stdin" in run_call_rb[0][0]
                     assert run_call_rb[1].get("input_data") == "ORSO_PERSONA_HMAC_KEY=fleet-secret-key\n"
+
+    def test_ecart4_1_explicit_failure_without_target_digest(self, monkeypatch, capsys):
+        """Écart 4.1 : Le manager refuse formellement l'exécution sans digest cible (code retour 1 et message explicite)."""
+        from scripts.distribution.engine_image_manager import main as engine_image_main
+        monkeypatch.delenv("ORSO_TARGET_ENGINE_DIGEST", raising=False)
+        monkeypatch.setattr("sys.argv", ["engine_image_manager.py", "probe", "--local"])
+        with pytest.raises(SystemExit) as exc_info:
+            engine_image_main()
+        assert exc_info.value.code == 1
+        captured = capsys.readouterr()
+        assert "Aucun digest cible spécifié" in captured.err

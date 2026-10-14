@@ -54,7 +54,6 @@ jobs:
           tags: |
             type=raw,value=${{ github.event.inputs.version_tag || 'v1.0.0' }}-${{ github.sha }}
             type=raw,value=release-${{ steps.date.outputs.date }}
-            type=raw,value=latest
 
       - name: Build and Push Engine Image
         id: build_push
