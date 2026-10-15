@@ -170,40 +170,53 @@ export interface LoginResponse {
   user: AdminUser;
 }
 
+/** Enveloppe d'indisponibilité de la collecte : l'état est inconnu, jamais sain. */
+export interface TelemetryUnavailable {
+  connected: false;
+  status: "unknown";
+  error: string;
+  message: string;
+  last_valid_at: string | null;
+}
+
 export interface TelemetrySummary {
-  agents_count: number;
-  snapshots_count: number;
-  total_tokens: number;
-  total_input_tokens: number;
-  total_output_tokens: number;
-  total_api_calls: number;
-  total_cost_usd: number;
-  last_snapshot_at: string;
+  agents_count?: number;
+  snapshots_count?: number;
+  total_tokens?: number;
+  total_input_tokens?: number;
+  total_output_tokens?: number;
+  total_api_calls?: number;
+  total_cost_usd?: number;
+  last_snapshot_at?: string;
   agents_registered?: number;
-  alerts_active: number;
-  simulated?: boolean;
+  alerts_active?: number;
+  connected?: boolean;
+  status?: string;
+  error?: string;
+  message?: string;
+  last_valid_at?: string | null;
 }
 
 export interface TelemetryEnvironment {
   agent_id: number;
-  display_name: string;
-  module: string;
-  container_id: string;
-  server_ip: string;
-  dashboard_url: string;
-  status: "active" | "idle" | "error" | string;
-  total_tokens: number;
-  input_tokens: number;
-  output_tokens: number;
-  api_calls: number;
-  cost_usd: number;
-  error_count: number;
-  last_seen_at: string;
+  display_name: string | null;
+  module: string | null;
+  container_id: string | null;
+  server_ip: string | null;
+  dashboard_url: string | null;
+  status: "active" | "idle" | "error" | "unknown" | string;
+  total_tokens: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  api_calls: number | null;
+  cost_usd: number | null;
+  error_count: number | null;
+  last_seen_at: string | null;
   vitals: {
-    cpu_percent: number;
-    memory_usage_mb: number;
-    memory_limit_mb: number;
-    memory_percent: number;
+    cpu_percent: number | null;
+    memory_usage_mb: number | null;
+    memory_limit_mb: number | null;
+    memory_percent: number | null;
     docker_status: string;
   };
   tenant?: {
@@ -215,6 +228,12 @@ export interface TelemetryEnvironment {
     status?: string;
     tier_label?: string;
   } | null;
+}
+
+/** Résultat de lecture des environnements : ``unavailable`` renseigné quand la collecte est coupée. */
+export interface TelemetryEnvironmentsResult {
+  environments: TelemetryEnvironment[];
+  unavailable: TelemetryUnavailable | null;
 }
 
 export interface TelemetrySnapshot {

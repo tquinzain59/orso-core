@@ -107,29 +107,37 @@ from olympe.telemetry_client import telemetry_client
 
 
 def test_telemetry_endpoints_offline(api_client):
-    """Vérifie que lorsque l'API télémétrie est hors ligne, les métriques renvoient zéro sans simulation fictive."""
+    """Collecte coupée : chaque route dit « inconnu » (200, ``connected`` False), sans valeur fabriquée."""
     with patch.object(telemetry_client, "_fetch_api", return_value=None), \
          patch.object(telemetry_client, "_get_docker_live_vitals", return_value={}):
         resp_summary = api_client.get("/api/olympe/ops/telemetry/summary")
         assert resp_summary.status_code == 200
         summary = resp_summary.json()
-        assert summary["total_tokens"] == 0
-        assert summary["total_cost_usd"] == 0.0
         assert summary["connected"] is False
-        assert summary["status"] == "unavailable"
-        assert summary["simulated"] is False
+        assert summary["status"] == "unknown"
+        assert summary["error"] == "telemetry_unavailable"
+        assert "total_tokens" not in summary
+        assert "simulated" not in summary
 
         resp_envs = api_client.get("/api/olympe/ops/telemetry/environments")
         assert resp_envs.status_code == 200
         envs_data = resp_envs.json()
-        assert envs_data["environments"] == []
+        assert envs_data["connected"] is False
+        assert envs_data["status"] == "unknown"
+        assert envs_data["environments"] is None
 
         resp_hist = api_client.get("/api/olympe/ops/telemetry/history/1?limit=5")
         assert resp_hist.status_code == 200
         hist_data = resp_hist.json()
-        assert hist_data["snapshots"] == []
-        assert hist_data["count"] == 0
+        assert hist_data["snapshots"] is None
         assert hist_data["connected"] is False
+        assert hist_data["status"] == "unknown"
+
+        resp_alerts = api_client.get("/api/olympe/ops/telemetry/alerts")
+        assert resp_alerts.status_code == 200
+        alerts_data = resp_alerts.json()
+        assert alerts_data["connected"] is False
+        assert alerts_data["alerts"] is None
 
 
 def test_telemetry_endpoints_connected(api_client):

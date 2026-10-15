@@ -8,7 +8,8 @@ import {
   AdminUser,
   LoginResponse,
   TelemetrySummary,
-  TelemetryEnvironment,
+  TelemetryEnvironmentsResult,
+  TelemetryUnavailable,
   TelemetrySnapshot,
   TelemetryAlert,
   OVHSizingRecommendation,
@@ -274,7 +275,7 @@ export async function fetchTelemetrySummary(): Promise<TelemetrySummary> {
   return res.json();
 }
 
-export async function fetchTelemetryEnvironments(): Promise<TelemetryEnvironment[]> {
+export async function fetchTelemetryEnvironments(): Promise<TelemetryEnvironmentsResult> {
   const res = await fetch(`${getBaseUrl()}/api/olympe/ops/telemetry/environments`, {
     headers: getAuthHeaders(),
   });
@@ -282,7 +283,10 @@ export async function fetchTelemetryEnvironments(): Promise<TelemetryEnvironment
     throw new Error(`Erreur récupération environnements (${res.status})`);
   }
   const data = await res.json();
-  return data.environments || [];
+  if (data.connected === false) {
+    return { environments: [], unavailable: data as TelemetryUnavailable };
+  }
+  return { environments: data.environments || [], unavailable: null };
 }
 
 export async function fetchAgentHistory(
@@ -309,6 +313,9 @@ export async function fetchTelemetryAlerts(agentId?: number): Promise<TelemetryA
     throw new Error(`Erreur récupération alertes (${res.status})`);
   }
   const data = await res.json();
+  if (data.connected === false) {
+    throw new Error("Alertes indisponibles : collecte de télémétrie coupée (état inconnu)");
+  }
   return data.alerts || [];
 }
 

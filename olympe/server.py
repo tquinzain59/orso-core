@@ -842,8 +842,7 @@ async def get_telemetry_summary(admin: Dict[str, Any] = Depends(require_superadm
 async def get_telemetry_environments(admin: Dict[str, Any] = Depends(require_superadmin)):
     """Retourne la liste des environnements Docker enrichis avec leurs signes vitaux et clients associés."""
     tenants = ops_manager.get_tenants_overview()
-    environments = telemetry_client.get_environments(tenants)
-    return {"environments": environments, "count": len(environments)}
+    return telemetry_client.get_environments(tenants)
 
 
 @app.get("/api/olympe/ops/telemetry/history/{agent_id}")
@@ -855,8 +854,7 @@ async def get_telemetry_history(agent_id: int, limit: int = 25, admin: Dict[str,
 @app.get("/api/olympe/ops/telemetry/alerts")
 async def get_telemetry_alerts(agent_id: Optional[int] = None, admin: Dict[str, Any] = Depends(require_superadmin)):
     """Retourne les alertes actives."""
-    alerts = telemetry_client.get_alerts(resolved=False, agent_id=agent_id)
-    return {"alerts": alerts, "count": len(alerts)}
+    return telemetry_client.get_alerts(resolved=False, agent_id=agent_id)
 
 
 # ── Service Frontend SPA Orso Ops (apps/ui-ops/dist) ─────────────────────────

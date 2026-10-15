@@ -22,6 +22,7 @@ import {
 import {
   TelemetrySummary,
   TelemetryEnvironment,
+  TelemetryUnavailable,
   TelemetrySnapshot,
   TelemetryAlert,
   Tenant,
@@ -44,6 +45,7 @@ export const EnvironmentsView: React.FC<EnvironmentsViewProps> = ({
 }) => {
   const [summary, setSummary] = useState<TelemetrySummary | null>(null);
   const [environments, setEnvironments] = useState<TelemetryEnvironment[]>([]);
+  const [envUnavailable, setEnvUnavailable] = useState<TelemetryUnavailable | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -67,7 +69,8 @@ export const EnvironmentsView: React.FC<EnvironmentsViewProps> = ({
         fetchTelemetryEnvironments(),
       ]);
       setSummary(sum);
-      setEnvironments(envs);
+      setEnvironments(envs.environments);
+      setEnvUnavailable(envs.unavailable);
     } catch (err: any) {
       setError(err.message || "Erreur de chargement de la télémétrie");
     } finally {
@@ -111,10 +114,10 @@ export const EnvironmentsView: React.FC<EnvironmentsViewProps> = ({
   const filteredEnvironments = environments.filter((env) => {
     const search = searchTerm.toLowerCase();
     const matchesSearch =
-      env.display_name.toLowerCase().includes(search) ||
-      env.module.toLowerCase().includes(search) ||
-      env.container_id.toLowerCase().includes(search) ||
-      env.server_ip.toLowerCase().includes(search) ||
+      (env.display_name ?? "").toLowerCase().includes(search) ||
+      (env.module ?? "").toLowerCase().includes(search) ||
+      (env.container_id ?? "").toLowerCase().includes(search) ||
+      (env.server_ip ?? "").toLowerCase().includes(search) ||
       (env.tenant?.name && env.tenant.name.toLowerCase().includes(search)) ||
       (env.tenant?.slug && env.tenant.slug.toLowerCase().includes(search));
 
@@ -128,11 +131,21 @@ export const EnvironmentsView: React.FC<EnvironmentsViewProps> = ({
     return true;
   });
 
-  const formatNumber = (num: number): string => {
+  // Une mesure absente s'affiche « n/a », jamais 0.
+  const NA = "n/a";
+
+  const formatNumber = (num: number | null | undefined): string => {
+    if (num == null) return NA;
     return new Intl.NumberFormat("fr-FR").format(num);
   };
 
-  const formatTokens = (tokens: number): string => {
+  const formatFixed = (num: number | null | undefined, digits: number): string => {
+    if (num == null) return NA;
+    return num.toFixed(digits);
+  };
+
+  const formatTokens = (tokens: number | null | undefined): string => {
+    if (tokens == null) return NA;
     if (tokens >= 1_000_000) {
       return (tokens / 1_000_000).toFixed(1) + " M";
     }
@@ -141,6 +154,10 @@ export const EnvironmentsView: React.FC<EnvironmentsViewProps> = ({
     }
     return tokens.toString();
   };
+
+  // Collecte coupée : l'état est inconnu (source : résumé ou liste des environnements).
+  const telemetryUnavailable: { last_valid_at?: string | null; message?: string } | null =
+    summary?.connected === false ? summary : envUnavailable;
 
   // Pagination de la modale
   const totalSnapshots = snapshots.length;
@@ -195,8 +212,24 @@ export const EnvironmentsView: React.FC<EnvironmentsViewProps> = ({
         </div>
       )}
 
+      {telemetryUnavailable && (
+        <div
+          role="status"
+          className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-300 text-sm flex items-center space-x-2"
+        >
+          <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+          <span>
+            État inconnu — {telemetryUnavailable.message || "la collecte de télémétrie est indisponible."}{" "}
+            Dernière mesure valide :{" "}
+            {telemetryUnavailable.last_valid_at
+              ? new Date(telemetryUnavailable.last_valid_at).toLocaleString("fr-FR")
+              : "aucune"}
+          </span>
+        </div>
+      )}
+
       {/* Bannière KPIs Globaux */}
-      {summary && (
+      {summary && !telemetryUnavailable && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {/* Tokens Totaux */}
           <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 backdrop-blur-md relative overflow-hidden group hover:border-slate-700 transition-all">
@@ -229,10 +262,10 @@ export const EnvironmentsView: React.FC<EnvironmentsViewProps> = ({
               </div>
             </div>
             <div className="text-2xl font-extrabold text-white mt-2">
-              {summary.total_cost_usd.toFixed(2)} $
+              {formatFixed(summary.total_cost_usd, 2)} $
             </div>
             <div className="text-xs text-slate-400 mt-1">
-              Soit environ {(summary.total_cost_usd * 0.92).toFixed(2)} € HT
+              Soit environ {summary.total_cost_usd == null ? NA : (summary.total_cost_usd * 0.92).toFixed(2)} € HT
             </div>
           </div>
 
@@ -262,7 +295,7 @@ export const EnvironmentsView: React.FC<EnvironmentsViewProps> = ({
               </span>
               <div
                 className={`p-2 rounded-xl border ${
-                  summary.alerts_active > 0
+                  (summary.alerts_active ?? 0) > 0
                     ? "bg-rose-500/10 text-rose-400 border-rose-500/20 animate-pulse"
                     : "bg-slate-800 text-slate-400 border-slate-700"
                 }`}
@@ -271,10 +304,14 @@ export const EnvironmentsView: React.FC<EnvironmentsViewProps> = ({
               </div>
             </div>
             <div className="text-2xl font-extrabold text-white mt-2">
-              {summary.alerts_active}
+              {summary.alerts_active ?? NA}
             </div>
             <div className="text-xs text-slate-400 mt-1">
-              {summary.alerts_active > 0 ? "Surveillance active requise" : "Aucun incident détecté"}
+              {summary.alerts_active == null
+                ? "Alertes non rapportées"
+                : summary.alerts_active > 0
+                ? "Surveillance active requise"
+                : "Aucun incident détecté"}
             </div>
           </div>
         </div>
@@ -343,7 +380,9 @@ export const EnvironmentsView: React.FC<EnvironmentsViewProps> = ({
       {/* Grille des Environnements */}
       {filteredEnvironments.length === 0 ? (
         <div className="py-16 text-center text-slate-400 bg-slate-900/50 rounded-2xl border border-slate-800">
-          Aucun environnement Docker ne correspond à votre recherche.
+          {telemetryUnavailable
+            ? "État inconnu : la collecte de télémétrie est indisponible, aucun environnement ne peut être listé."
+            : "Aucun environnement Docker ne correspond à votre recherche."}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -351,6 +390,7 @@ export const EnvironmentsView: React.FC<EnvironmentsViewProps> = ({
             const isSystem = Boolean(env.tenant?.is_system);
             const isActive = env.status === "active";
             const isError = env.status === "error";
+            const isUnknown = env.status === "unknown";
 
             // Glow couleur selon le module
             let glowGradient = "from-blue-600/10";
@@ -383,11 +423,11 @@ export const EnvironmentsView: React.FC<EnvironmentsViewProps> = ({
                     <div>
                       <div className="flex items-center space-x-2">
                         <h3 className="text-base font-bold text-white group-hover:text-sky-400 transition-colors">
-                          {env.display_name}
+                          {env.display_name ?? NA}
                         </h3>
                       </div>
                       <span className="text-[10px] uppercase tracking-wider text-slate-500 font-bold block mt-0.5 font-mono">
-                        Module : {env.module}
+                        Module : {env.module ?? NA}
                       </span>
                     </div>
 
@@ -397,6 +437,8 @@ export const EnvironmentsView: React.FC<EnvironmentsViewProps> = ({
                           ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
                           : isError
                           ? "bg-rose-500/10 text-rose-400 border-rose-500/20"
+                          : isUnknown
+                          ? "bg-slate-500/10 text-slate-300 border-slate-500/20"
                           : "bg-amber-500/10 text-amber-400 border-amber-500/20"
                       }`}
                     >
@@ -406,10 +448,12 @@ export const EnvironmentsView: React.FC<EnvironmentsViewProps> = ({
                             ? "bg-emerald-400 animate-pulse"
                             : isError
                             ? "bg-rose-400"
+                            : isUnknown
+                            ? "bg-slate-400"
                             : "bg-amber-400"
                         }`}
                       />
-                      <span>{isActive ? "Actif" : isError ? "Erreur" : "En veille"}</span>
+                      <span>{isActive ? "Actif" : isError ? "Erreur" : isUnknown ? "Inconnu" : "En veille"}</span>
                     </span>
                   </div>
 
@@ -480,7 +524,7 @@ export const EnvironmentsView: React.FC<EnvironmentsViewProps> = ({
 
                     <div className="flex items-center justify-between">
                       <span className="text-slate-500">Hôte / IP Serveur</span>
-                      <span className="font-mono text-slate-300">{env.server_ip}</span>
+                      <span className="font-mono text-slate-300">{env.server_ip ?? NA}</span>
                     </div>
 
                     {/* Signes Vitaux (CPU / RAM) */}
@@ -492,19 +536,19 @@ export const EnvironmentsView: React.FC<EnvironmentsViewProps> = ({
                             <span>Charge CPU</span>
                           </span>
                           <span className="font-mono font-bold text-slate-300">
-                            {env.vitals.cpu_percent.toFixed(2)} %
+                            {env.vitals.cpu_percent == null ? NA : `${env.vitals.cpu_percent.toFixed(2)} %`}
                           </span>
                         </div>
                         <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
                           <div
                             className={`h-full rounded-full transition-all ${
-                              env.vitals.cpu_percent > 80
+                              (env.vitals.cpu_percent ?? 0) > 80
                                 ? "bg-rose-500"
-                                : env.vitals.cpu_percent > 40
+                                : (env.vitals.cpu_percent ?? 0) > 40
                                 ? "bg-amber-500"
                                 : "bg-sky-500"
                             }`}
-                            style={{ width: `${Math.min(env.vitals.cpu_percent, 100)}%` }}
+                            style={{ width: `${Math.min(env.vitals.cpu_percent ?? 0, 100)}%` }}
                           />
                         </div>
                       </div>
@@ -516,13 +560,13 @@ export const EnvironmentsView: React.FC<EnvironmentsViewProps> = ({
                             <span>Mémoire RAM</span>
                           </span>
                           <span className="font-mono font-bold text-slate-300">
-                            {env.vitals.memory_usage_mb.toFixed(0)} MB ({env.vitals.memory_percent.toFixed(1)}%)
+                            {env.vitals.memory_usage_mb == null ? NA : `${env.vitals.memory_usage_mb.toFixed(0)} MB (${formatFixed(env.vitals.memory_percent, 1)}%)`}
                           </span>
                         </div>
                         <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
                           <div
                             className="h-full bg-emerald-500 rounded-full transition-all"
-                            style={{ width: `${Math.min(env.vitals.memory_percent, 100)}%` }}
+                            style={{ width: `${Math.min(env.vitals.memory_percent ?? 0, 100)}%` }}
                           />
                         </div>
                       </div>
@@ -533,7 +577,7 @@ export const EnvironmentsView: React.FC<EnvironmentsViewProps> = ({
                       <span className="text-slate-500">Tokens / Dépense</span>
                       <span className="font-semibold text-slate-200">
                         {formatTokens(env.total_tokens)} •{" "}
-                        <span className="text-amber-400 font-bold">{env.cost_usd.toFixed(2)} $</span>
+                        <span className="text-amber-400 font-bold">{formatFixed(env.cost_usd, 2)} $</span>
                       </span>
                     </div>
                   </div>
@@ -568,14 +612,14 @@ export const EnvironmentsView: React.FC<EnvironmentsViewProps> = ({
                 </div>
                 <div>
                   <div className="flex items-center space-x-2">
-                    <h2 className="text-lg font-bold text-white">{selectedEnv.display_name}</h2>
+                    <h2 className="text-lg font-bold text-white">{selectedEnv.display_name ?? NA}</h2>
                     <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 font-mono">
-                      {selectedEnv.module}
+                      {selectedEnv.module ?? NA}
                     </span>
                   </div>
                   <div className="text-xs text-slate-400 mt-0.5">
-                    Conteneur : <span className="font-mono text-slate-300">{selectedEnv.container_id}</span> • IP :{" "}
-                    <span className="font-mono text-slate-300">{selectedEnv.server_ip}</span>
+                    Conteneur : <span className="font-mono text-slate-300">{selectedEnv.container_id ?? NA}</span> • IP :{" "}
+                    <span className="font-mono text-slate-300">{selectedEnv.server_ip ?? NA}</span>
                   </div>
                 </div>
               </div>
@@ -645,7 +689,7 @@ export const EnvironmentsView: React.FC<EnvironmentsViewProps> = ({
                     Coût Estimé & Appels
                   </span>
                   <div className="text-base font-bold text-amber-400 mt-1">
-                    {selectedEnv.cost_usd.toFixed(4)} $
+                    {formatFixed(selectedEnv.cost_usd, 4)} $
                   </div>
                   <div className="text-xs text-slate-400 mt-0.5 font-mono">
                     {formatNumber(selectedEnv.api_calls)} requêtes API

@@ -30,7 +30,7 @@ Conformément aux directives du PO et à la **Charte de Gouvernance du Fork Orso
 
 ### Règle 1 — Source de Vérité Unique en Base de Données
 * En production, la flotte, les profils, les abonnements, les indicateurs et les factures proviennent **strictement de PostgreSQL (Supabase)**.
-* Zéro client d'amorçage, zéro fallback de données fictives, zéro jeu résiduel en mémoire. Si la base est saine mais vide, la réponse est une liste vide (`[]`). Si la base est inaccessible, défaillante ou non configurée en production, l'API applique un **Fail-Closed strict** et retourne un statut **HTTP 503 (Service Unavailable)**, interdisant tout affichage silencieux trompeur de 0€ MRR.
+* Zéro client d'amorçage et zéro jeu résiduel en mémoire pour la flotte, les indicateurs et la facturation issus de la base (`olympe/ops_manager.py`). La télémétrie (`olympe/telemetry_client.py`) a conservé des valeurs de repli après KAN-43 ; elles sont retirées par KAN-73 (voir §5, qui énumère ce qui est retiré et ce qui reste). Si la base est saine mais vide, la réponse est une liste vide (`[]`). Si la base est inaccessible, défaillante ou non configurée en production, l'API applique un **Fail-Closed strict** et retourne un statut **HTTP 503 (Service Unavailable)**, interdisant tout affichage silencieux trompeur de 0€ MRR.
 
 ### Règle 2 — Activation Explicite et Refus Inconditionnel du Mode Démo en Prod
 * Le mode démonstration ne s'active **JAMAIS par défaut**. Il requiert impérativement la configuration explicite `ORSO_DEMO_MODE=1` (ou `demo_mode=True`).
@@ -106,3 +106,48 @@ $ scripts/run_tests.sh tests/olympe/
 * `tests/olympe/test_ops_password_change.py` : 5/5 validés.
 * `tests/olympe/test_ovh_client.py` : 5/5 validés.
 * `tests/olympe/test_onboarding_worker.py` : 3/3 validés.
+
+---
+
+## 5. Rectificatif KAN-73 — Télémétrie : replis retirés et état réel du code
+
+**Date** : 15/10/2026 — **Base vérifiée** : `c13b03698c` (`main`, qui contient `cc9ed937bf`, dernier commit KAN-43). Le SHA du commit KAN-73 est celui de `git log -1 --format=%H -- docs/3_Technique/spec_kan43_source_de_verite_cockpit_ops.md` ; le SHA déployé est consigné dans le ticket KAN-73 après déploiement.
+
+**Phrase corrigée** : la phrase de la Règle 1 affirmait « zéro fallback de données fictives » pour l'ensemble de la couche Olympe. C'était inexact pour `olympe/telemetry_client.py`, qui rendait encore des valeurs fabriquées (voir ci-dessous). Elle est désormais limitée à la base, et renvoie à ce paragraphe.
+
+### 5.1 État avant KAN-73 (après KAN-43, `cc9ed937bf`)
+
+| Repli dans `olympe/telemetry_client.py` | Statut au 15/10/2026 avant KAN-73 |
+|---|---|
+| `"simulated": True`, `display_name: "PROD-FR-002"`, `"Up 6 hours (healthy)"` | Déjà retirés par `679f529c44` (KAN-43). |
+| Marqueur `"simulated": False` dans le résumé d'indisponibilité, métriques à `0`/`0.0` | Présents. |
+| Agents synthétisés depuis les conteneurs Docker (`status: "active"`, compteurs à 0, IP `127.0.0.1`) | Présents. |
+| Valeurs par défaut `"Agent"`, `"générique"`, `status: "active"`, compteurs à 0, signes vitaux à `0.0`, IP hôte | Présentes. |
+| Nom `Agent #<id>` dans l'historique | Présent. |
+| Alertes `[]` quand la collecte est coupée (« Fallback simulation propre ») | Présent : une collecte coupée se lisait « aucune alerte ». |
+| Mesures Docker à `0` quand les statistiques échouent | Présentes. |
+| Valeurs par défaut de tenant `"Services Financiers"`, `"Starter (1 agent)"` | Présentes. |
+
+### 5.2 Retiré par KAN-73
+
+* Tout marqueur de simulation, tout agent synthétisé depuis Docker, toute valeur par défaut de statut, de nom, de module, de compteur, de coût, d'IP, de signe vital ou de tenant.
+* Collecte coupée ou réponse illisible : les routes `GET /api/olympe/ops/telemetry/{summary,environments,history/{id},alerts}` répondent `200` avec `connected: false`, `status: "unknown"`, `error: "telemetry_unavailable"`, un `message` lisible et `last_valid_at` (horodatage de la dernière réponse valide du processus, `null` s'il n'y en a pas). Les champs de mesure (`environments`, `alerts`, `snapshots`, `count`, métriques du résumé) sont `null` ou absents, jamais `0` ni `[]`.
+* Une mesure non obtenue vaut `null` (`status` de l'agent : `"unknown"`).
+* Cockpit (`apps/ui-ops`) : bannière « État inconnu », KPI masqués, `n/a` pour toute mesure absente ; l'écran ne casse pas.
+
+### 5.3 Ce qui reste (limites connues)
+
+* Une liste `[]` n'est rendue que si la collecte a répondu et n'a rien signalé.
+* Les routes de télémétrie répondent `200` même collecte coupée (le champ `connected` porte l'information) ; le `503` de la Règle 1 ne concerne que la base.
+* Le filtre de l'ancien agent de test « Recouvrement » (`agent_id == 3`, `recouvrement_default`) et le rattachement au tenant `financia-solutions` pour les modules « recouvrement » sont conservés (hors périmètre KAN-73).
+* La lecture de base en échec qui rend `200` avec une flotte vide sur les routes du cockpit, la purge de la base de production (KAN-71) et la distinction des clients sandbox restent hors périmètre.
+* Question ouverte (décideur : Thibaut) : inconnu seul, ou dernier état connu horodaté. Implémenté : inconnu, avec l'horodatage de la dernière mesure valide à côté (recommandation du ticket).
+
+### 5.4 Commande de contrôle
+
+```console
+$ grep -n -i -E "simulat|PROD-FR-002|Up [0-9]+ hours|healthy|Agent #|127\.0\.0\.1" olympe/telemetry_client.py
+$ echo $?
+1
+```
+Garde-fou automatisé : `tests/olympe/test_kan73_telemetry_no_fabrication.py`.
