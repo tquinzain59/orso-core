@@ -21,6 +21,13 @@ interface TenantsViewProps {
   onSuspendContainer: (slug: string) => void;
 }
 
+const formatUtc = (iso?: string): string => {
+  if (!iso) return "date inconnue";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return `${d.toISOString().slice(0, 16).replace("T", " ")} UTC`;
+};
+
 export const TenantsView: React.FC<TenantsViewProps> = ({
   tenants,
   onSelectTenant,
@@ -271,6 +278,22 @@ export const TenantsView: React.FC<TenantsViewProps> = ({
                             </span>
                           );
                         })()}
+                        {t.subscription?.divergences
+                          ?.filter((d) => d.scope === "status")
+                          .map((d) => (
+                            <div key={d.code} className="mt-1 max-w-xs text-[10px] leading-snug text-amber-400" data-testid="status-divergence">
+                              {d.message}
+                            </div>
+                          ))}
+                        {t.subscription?.origin && (
+                          <div className="mt-1 max-w-xs text-[10px] leading-snug text-slate-500 font-mono" data-testid="status-origin">
+                            Ligne {t.subscription.origin.subscription_id} · créée le {formatUtc(t.subscription.origin.created_at)} ·{" "}
+                            {t.subscription.origin.stripe_counterpart === "recorded"
+                              ? `Stripe : identifiants enregistrés (${t.subscription.origin.stripe_subscription_id || t.subscription.origin.stripe_customer_id}), existence non vérifiée`
+                              : "Stripe : aucun identifiant"}
+                            {t.subscription.origin.rows_total > 1 && ` · ${t.subscription.origin.rows_total} lignes pour ce client`}
+                          </div>
+                        )}
                       </td>
 
                       {/* Forfait */}
@@ -329,6 +352,13 @@ export const TenantsView: React.FC<TenantsViewProps> = ({
                             {isContainerReady ? "En ligne" : (isNotProvisioned ? "Non provisionné" : "En veille")}
                           </span>
                         </div>
+                        {t.subscription?.divergences
+                          ?.filter((d) => d.scope === "container")
+                          .map((d) => (
+                            <div key={d.code} className="mt-1 max-w-xs text-[10px] leading-snug text-amber-400" data-testid="container-divergence">
+                              {d.message}
+                            </div>
+                          ))}
                         {!isNotProvisioned && (
                           <div className="flex space-x-1 mt-1.5">
                             {!isContainerReady ? (

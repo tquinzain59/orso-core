@@ -18,6 +18,11 @@ from typing import Any, Dict, List, Optional
 
 from olympe.onboarding_worker import onboarding_worker
 from olympe.ovh_client import ovh_client
+from olympe.subscription_status import (
+    build_subscription_origin,
+    compute_divergences,
+    pick_representative_subscription,
+)
 
 _log = logging.getLogger("orso.olympe.ops")
 
@@ -1163,7 +1168,8 @@ class OpsManager:
                                 _log.debug("Auto-healing slugs pass : %s", heal_err)
 
                     subs = t.get("subscriptions", [])
-                    sb_sub = subs[0] if subs else None
+                    # KAN-96 : règle écrite (ligne la plus récente par created_at), jamais l'ordre de la base.
+                    sb_sub = pick_representative_subscription(subs)
                     if sb_sub:
                         tier_k = sb_sub.get("tier_id") or "1_agent"
                         tier_cfg = TIER_PRICING.get(tier_k, {})
@@ -1178,6 +1184,9 @@ class OpsManager:
                             "stripe_customer_id": sb_sub.get("stripe_customer_id"),
                             "stripe_subscription_id": sb_sub.get("stripe_subscription_id"),
                             "payment_method": sb_sub.get("payment_method"),
+                            "created_at": sb_sub.get("created_at"),
+                            "updated_at": sb_sub.get("updated_at"),
+                            "origin": build_subscription_origin(sb_sub, subs),
                         }
                     else:
                         sub = cached.get("subscription") or {
@@ -1242,6 +1251,13 @@ class OpsManager:
                         "subscription": sub,
                         "invoices": inv_list,
                     }
+                    if sub.get("origin"):
+                        sub["divergences"] = compute_divergences(
+                            item["status"],
+                            sub.get("status"),
+                            item["instance"]["status"],
+                            sub["origin"],
+                        )
                     result.append(item)
 
                 existing_ids = {item["id"] for item in result}

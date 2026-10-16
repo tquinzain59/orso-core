@@ -43,6 +43,25 @@ export interface TenantInstance {
   status: "ready" | "sleeping" | "not_provisioned" | "stopped" | "error" | "paused" | "not_found" | string;
 }
 
+export interface SubscriptionOrigin {
+  subscription_id?: string;
+  created_at?: string;
+  updated_at?: string;
+  /** "recorded" = identifiants Stripe enregistrés (existence non vérifiée en direct), "absent" = aucun identifiant. */
+  stripe_counterpart: "recorded" | "absent";
+  stripe_customer_id?: string | null;
+  stripe_subscription_id?: string | null;
+  rows_total: number;
+  rows_by_status: Record<string, number>;
+  selection_rule: string;
+}
+
+export interface SubscriptionDivergence {
+  code: string;
+  scope: "status" | "container";
+  message: string;
+}
+
 export interface SubscriptionInfo {
   id: string;
   tier_id: "none" | "1_agent" | "2_agents" | "3_agents" | "4_agents" | "custom" | string;
@@ -52,8 +71,13 @@ export interface SubscriptionInfo {
   current_period_start?: string;
   current_period_end?: string;
   stripe_customer_id?: string;
+  stripe_subscription_id?: string | null;
   payment_method?: string;
   suggested_tier?: string;
+  created_at?: string;
+  updated_at?: string;
+  origin?: SubscriptionOrigin;
+  divergences?: SubscriptionDivergence[];
 }
 
 export interface Invoice {
