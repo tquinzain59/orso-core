@@ -56,7 +56,7 @@ def test_kan59_ca1_no_container_without_quotas(tmp_path):
     status_not_found = {"status": "not_found", "running": False}
     recorded_calls = []
 
-    def fake_exec_docker(args, timeout=20.0):
+    def fake_exec_docker(args, timeout=20.0, **kwargs):
         recorded_calls.append(list(args))
         if args and args[0] == "ps":
             return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
@@ -107,7 +107,7 @@ def test_kan59_ca1_tier_quotas_applied(tmp_path):
     status_not_found = {"status": "not_found", "running": False}
     recorded_calls = []
 
-    def fake_exec_docker(args, timeout=20.0):
+    def fake_exec_docker(args, timeout=20.0, **kwargs):
         recorded_calls.append(list(args))
         if args and args[0] == "ps":
             return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")

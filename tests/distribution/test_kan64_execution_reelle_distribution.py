@@ -184,9 +184,14 @@ class TestKAN64ExecutionReelleDistribution:
                             tenant_slug="demo-with-key",
                         )
                         assert res_success["success"] is True
-                        assert mock_exec.called
                         run_cmd_args = mock_exec.call_args[0][0]
-                        assert "ORSO_PERSONA_HMAC_KEY=secret-fleet-key" in run_cmd_args
+                        # KAN-65 : Le secret ne figure JAMAIS dans run_cmd_args (argv)
+                        assert not any("ORSO_PERSONA_HMAC_KEY" in arg for arg in run_cmd_args)
+                        assert "--env-file" in run_cmd_args
+                        assert "/dev/stdin" in run_cmd_args
+                        # Le secret transite exclusivement par l'entrée standard chiffrée
+                        input_data = mock_exec.call_args.kwargs.get("input_data", "")
+                        assert "ORSO_PERSONA_HMAC_KEY=secret-fleet-key" in input_data
 
     def test_ca5_calculated_client_data_counter(self, tmp_path):
         """CA5 : Le compteur de données client est calculé dynamiquement, jamais codé en dur."""
