@@ -409,6 +409,12 @@ def audit_docker_image_for_secrets_and_client_data(image_ref: str) -> Dict[str, 
                 "file": f"docker://{clean_ref}",
                 "label": f"Échec de l'export du conteneur ({export_proc.returncode}) : {err_msg.strip()}",
             })
+        elif len(result["scanned_paths"]) == 0 and not result["errors"]:
+            result["errors"].append({
+                "type": "IMAGE_EMPTY_SCAN",
+                "file": f"docker://{clean_ref}",
+                "label": "Aucun chemin n'a été parcouru dans l'image (flux tar vide ou 0 chemin scanné).",
+            })
     finally:
         subprocess.run(["docker", "rm", "-f", cid], capture_output=True, check=False)
 
@@ -455,6 +461,14 @@ def run_full_ca5_audit(
         scanned_paths = img_results.get("scanned_paths", [])
         applicative_paths = img_results.get("applicative_paths", [])
 
+    scanned_paths_count = len(scanned_paths)
+    if (require_image or target_image) and scanned_paths_count <= 0 and not image_scan_errors:
+        image_scan_errors.append({
+            "type": "IMAGE_EMPTY_SCAN",
+            "file": f"docker://{target_image}" if target_image else "cli_or_env",
+            "label": "Aucun chemin n'a été parcouru dans l'image (0 chemin scanné) : un verdict PASSED exige au moins un chemin scanné.",
+        })
+
     # Compteurs calculés dynamiquement (CA5)
     secrets_count = len(repo_violations)
     dockerignore_count = len(dockerignore_violations)
@@ -464,7 +478,7 @@ def run_full_ca5_audit(
     total_violations = secrets_count + dockerignore_count + dockerfile_count + client_data_count + errors_count
 
     report = {
-        "status": "PASSED" if total_violations == 0 else "FAILED",
+        "status": "PASSED" if (total_violations == 0 and scanned_paths_count > 0) else "FAILED",
         "timestamp": os.environ.get("AUDIT_TIMESTAMP", datetime.now(timezone.utc).isoformat()),
         "metrics": {
             "secrets_found_count": secrets_count,
@@ -474,7 +488,7 @@ def run_full_ca5_audit(
             "client_data_calculation_source": "len(client_data_violations) via audit_client_data_in_repository + audit_docker_image_for_secrets_and_client_data",
             "image_scan_errors_count": errors_count,
             "image_scanned_files_count": scanned_image_files,
-            "image_scanned_paths_count": len(scanned_paths),
+            "image_scanned_paths_count": scanned_paths_count,
             "image_applicative_paths_count": len(applicative_paths),
             "total_violations": total_violations,
         },
@@ -487,7 +501,7 @@ def run_full_ca5_audit(
         },
         "image_inspection": {
             "image_ref": target_image,
-            "scanned_paths_count": len(scanned_paths),
+            "scanned_paths_count": scanned_paths_count,
             "applicative_paths_count": len(applicative_paths),
             "applicative_paths": applicative_paths,
             "scanned_paths_sample": scanned_paths[:100],

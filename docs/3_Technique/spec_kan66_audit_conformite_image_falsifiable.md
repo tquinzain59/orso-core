@@ -87,9 +87,10 @@ Chaque étape susceptible d'échouer génère une violation typée avec son moti
 - `docker inspect` échoue $\rightarrow$ `IMAGE_INSPECT_FAILED` avec message `stderr` de Docker.
 - `docker create` échoue $\rightarrow$ `CONTAINER_CREATE_FAILED` avec message `stderr`.
 - `docker export` échoue $\rightarrow$ `IMAGE_EXPORT_FAILED`.
+- Flux tar vide / 0 chemin parcouru $\rightarrow$ `IMAGE_EMPTY_SCAN` (un verdict `PASSED` exige `total_violations == 0 and scanned_paths_count > 0`).
 - Erreur flux tar $\rightarrow$ `IMAGE_TAR_SCAN_ERROR`.
 - Erreur de lecture de fichier applicatif $\rightarrow$ `IMAGE_FILE_READ_ERROR` avec message d'exception.
-- En cas de violation ou erreur d'ouverture, le rapport passe à `FAILED` et le script sort avec le code de retour `1`.
+- En cas de violation, d'erreur d'ouverture ou de `0` chemin scanné, le rapport passe à `FAILED` et le script sort avec le code de retour `1`.
 
 ### 4.4 CA5 : Compteur de données client calculé
 Le compteur est calculé dynamiquement par :
@@ -110,8 +111,8 @@ Le rapport et la synthèse mentionnent explicitement :
 | :--- | :--- | :--- | :--- |
 | **CA1** | Référence d'image explicite obligatoire, erreur si absente | Contrôle CLI direct + `require_image=True` | `test_ca1_missing_image_ref_exits_with_error` |
 | **CA2** | Ouverture arborescence applicative + liste des chemins | Flux `docker export` + extraction tar + `applicative_paths` | `test_ca2_inspects_applicative_file_tree_with_paths_list` |
-| **CA3** | Échec obligatoire si artefact inouvrable (preuve négative) | Sortie `FAILED` et code retour `1` sur image inexistante | `test_ca3_failure_when_artifact_cannot_be_opened` |
-| **CA4** | Erreur d'ouverture nommée, aucun `pass` silencieux | Erreurs typées (`IMAGE_INSPECT_FAILED`, etc.) avec motif | `test_ca4_no_silent_fallback_error_named_in_output` |
+| **CA3** | Échec obligatoire si artefact inouvrable ou 0 chemin scanné | Sortie `FAILED` et code retour `1` (`IMAGE_EMPTY_SCAN` inclus) | `test_ca3_failure_when_artifact_cannot_be_opened`, `test_zero_scanned_paths_verdict_is_failed` |
+| **CA4** | Erreur d'ouverture nommée, aucun `pass` silencieux | Erreurs typées (`IMAGE_INSPECT_FAILED`, `IMAGE_EMPTY_SCAN`, etc.) | `test_ca4_no_silent_fallback_error_named_in_output` |
 | **CA5** | Compteur données client calculé + fonctions sources citées | `len(violations)` calculé + mention des deux fonctions | `test_ca5_client_data_counter_calculated_and_source_named` |
 
 ---

@@ -272,3 +272,88 @@ class TestKAN66AuditImageFalsifiable:
             assert any("ORSO_CLIENT_ID" in d["file"] for d in res_client_data["client_data"])
             assert any("ORSO_CLIENT_SLUG" in d["file"] for d in res_client_data["client_data"])
             assert any("com.orso.tenant_id" in d["file"] for d in res_client_data["client_data"])
+
+    def test_zero_scanned_paths_verdict_is_failed(self):
+        """
+        Garde-fou falsifiabilité (Recette PO KAN-66) :
+        Une image dont inspect/create/export réussissent mais dont le flux tar est vide
+        (0 chemin scanné) DOIT rendre un verdict FAILED et enregistrer IMAGE_EMPTY_SCAN.
+        Un verdict PASSED exige un nombre de chemins scannés strictement positif (> 0).
+        """
+        # 1. Flux tar valide mais vide (0 entrée dans l'archive)
+        empty_tar_io = io.BytesIO()
+        with tarfile.open(fileobj=empty_tar_io, mode="w"):
+            pass
+        empty_tar_bytes = empty_tar_io.getvalue()
+
+        mock_inspect_ok = subprocess.CompletedProcess(
+            args=["docker", "inspect"],
+            returncode=0,
+            stdout=json.dumps([{"Config": {"Env": ["PORT=9119"], "Labels": {}}}]),
+            stderr="",
+        )
+        mock_create_ok = subprocess.CompletedProcess(
+            args=["docker", "create"],
+            returncode=0,
+            stdout="cid-empty-tar",
+            stderr="",
+        )
+        mock_export_empty = MagicMock()
+        mock_export_empty.stdout = io.BytesIO(empty_tar_bytes)
+        mock_export_empty.stderr = io.BytesIO(b"")
+        mock_export_empty.wait.return_value = 0
+        mock_export_empty.returncode = 0
+
+        orig_run = subprocess.run
+
+        def side_effect_run(cmd, *args, **kwargs):
+            if isinstance(cmd, list) and len(cmd) >= 2 and cmd[0] == "docker":
+                if cmd[1] == "inspect":
+                    return mock_inspect_ok
+                if cmd[1] == "create":
+                    return mock_create_ok
+                if cmd[1] == "rm":
+                    return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+            return orig_run(cmd, *args, **kwargs)
+
+        with patch("subprocess.run", side_effect=side_effect_run), \
+             patch("subprocess.Popen", return_value=mock_export_empty):
+            img_res = audit_docker_image_for_secrets_and_client_data("test-engine:empty-tar")
+            assert img_res["scanned_files_count"] == 0
+            assert len(img_res["scanned_paths"]) == 0
+            assert any(err["type"] == "IMAGE_EMPTY_SCAN" for err in img_res["errors"])
+
+        # 2. Vérification via run_full_ca5_audit sur flux tar vide : statut FAILED obligatoire
+        mock_export_empty_2 = MagicMock()
+        mock_export_empty_2.stdout = io.BytesIO(empty_tar_bytes)
+        mock_export_empty_2.stderr = io.BytesIO(b"")
+        mock_export_empty_2.wait.return_value = 0
+        mock_export_empty_2.returncode = 0
+
+        with patch("subprocess.run", side_effect=side_effect_run), \
+             patch("subprocess.Popen", return_value=mock_export_empty_2):
+            report_empty = run_full_ca5_audit(image_ref="test-engine:empty-tar", require_image=True)
+            assert report_empty["status"] == "FAILED"
+            assert report_empty["metrics"]["image_scanned_paths_count"] == 0
+            assert report_empty["metrics"]["image_scan_errors_count"] >= 1
+            assert any(err["type"] == "IMAGE_EMPTY_SCAN" for err in report_empty["violations"]["image_scan_errors"])
+
+        # 3. Même si audit_docker_image_for_secrets_and_client_data retourne 0 violation et 0 erreur mais 0 chemin scanné,
+        # run_full_ca5_audit refuse le verdict PASSED et force FAILED
+        zero_path_no_err = {
+            "secrets": [],
+            "client_data": [],
+            "errors": [],
+            "scanned_files_count": 0,
+            "scanned_paths": [],
+            "applicative_paths": [],
+        }
+        with patch(
+            "scripts.security.audit_zero_secrets_and_client_data.audit_docker_image_for_secrets_and_client_data",
+            return_value=zero_path_no_err,
+        ):
+            report_zero_paths = run_full_ca5_audit(image_ref="test-engine:zero-paths", require_image=True)
+            assert report_zero_paths["status"] == "FAILED"
+            assert report_zero_paths["metrics"]["image_scanned_paths_count"] == 0
+            assert any(err["type"] == "IMAGE_EMPTY_SCAN" for err in report_zero_paths["violations"]["image_scan_errors"])
+
