@@ -23,6 +23,10 @@ from scripts.distribution.engine_image_manager import (
 )
 
 
+BASELINE_DIGEST = "sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f"
+UPDATED_DIGEST = "sha256:da7ef29bf78f78e43029049cf27baa32c3e2dddeeb937f9f05c7036b03c3f2cf"
+
+
 @pytest.fixture
 def mock_host():
     return {
@@ -36,12 +40,12 @@ def mock_host():
 @pytest.fixture
 def manager():
     return EngineDistributionManager(
-        target_digest="sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f"
+        target_digest=UPDATED_DIGEST
     )
 
 
 def test_ca1_and_ca2_live_update_passes_secrets_via_stdin_not_argv(mock_host, manager, monkeypatch):
-    """CA1 & CA2 : Le secret transite par input_data (stdin) et jamais dans la commande Docker (argv)."""
+    """CA1 & CA2 : Le secret transite par input_data (stdin), jamais dans argv, et l'état transite de BASELINE_DIGEST vers UPDATED_DIGEST."""
     fake_secret = "a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0"
     monkeypatch.setenv("ORSO_PERSONA_HMAC_KEY", fake_secret)
     monkeypatch.setenv("HERMES_DASHBOARD_BASIC_AUTH_USERNAME", "test_user")
@@ -59,27 +63,39 @@ def test_ca1_and_ca2_live_update_passes_secrets_via_stdin_not_argv(mock_host, ma
             return 0, "200", ""
         return 0, "", ""
 
-    def fake_probe(host_spec):
-        return {
-            "host_id": host_spec["host_id"],
-            "active_digest": manager.target_digest,
-            "pinned_image": f"ghcr.io/tquinzain59/orso-engine@{manager.target_digest}",
+    probe_states = [
+        {
+            "host_id": mock_host["host_id"],
+            "active_digest": BASELINE_DIGEST,
+            "pinned_image": f"ghcr.io/tquinzain59/orso-engine@{BASELINE_DIGEST}",
             "running_containers": ["orso_client_demo"],
             "is_reachable": True,
             "label_mismatch": False,
-        }
+        },
+        {
+            "host_id": mock_host["host_id"],
+            "active_digest": UPDATED_DIGEST,
+            "pinned_image": f"ghcr.io/tquinzain59/orso-engine@{UPDATED_DIGEST}",
+            "running_containers": ["orso_client_demo"],
+            "is_reachable": True,
+            "label_mismatch": False,
+        },
+    ]
 
     with patch("scripts.distribution.engine_image_manager.run_remote_or_local_cmd", side_effect=fake_run):
-        with patch("scripts.distribution.engine_image_manager.probe_docker_host", side_effect=fake_probe):
+        with patch("scripts.distribution.engine_image_manager.probe_docker_host", side_effect=probe_states):
             res = manager.execute_live_host_update(
                 mock_host,
-                new_digest=manager.target_digest,
+                new_digest=UPDATED_DIGEST,
                 container_name="orso_client_demo",
                 health_check_port=9119,
             )
 
     assert res["success"] is True
     assert res["health_http_code"] == "200"
+    assert res["state_before"]["active_digest"] == BASELINE_DIGEST
+    assert res["state_after"]["active_digest"] == UPDATED_DIGEST
+    assert res["state_before"]["active_digest"] != res["state_after"]["active_digest"]
 
     # Vérification CA1 : Le secret ne doit apparaître dans AUCUN cmd string
     for call in recorded_calls:
@@ -97,7 +113,7 @@ def test_ca1_and_ca2_live_update_passes_secrets_via_stdin_not_argv(mock_host, ma
 
 
 def test_ca3_live_rollback_executes_by_same_path_and_verifies_states(mock_host, manager, monkeypatch):
-    """CA3 : Retour arrière par le même chemin avec vérification des états avant/après."""
+    """CA3 : Retour arrière par le même chemin de UPDATED_DIGEST vers BASELINE_DIGEST avec états avant/après distincts."""
     fake_secret = "f0e1d2c3b4a5968778695a4b3c2d1e0f0123456789abcdef0123456789abcdef"
     monkeypatch.setenv("ORSO_PERSONA_HMAC_KEY", fake_secret)
 
@@ -111,28 +127,40 @@ def test_ca3_live_rollback_executes_by_same_path_and_verifies_states(mock_host, 
             return 0, "200", ""
         return 0, "", ""
 
-    def fake_probe(host_spec):
-        return {
-            "host_id": host_spec["host_id"],
-            "active_digest": manager.target_digest,
-            "pinned_image": f"ghcr.io/tquinzain59/orso-engine@{manager.target_digest}",
+    probe_states = [
+        {
+            "host_id": mock_host["host_id"],
+            "active_digest": UPDATED_DIGEST,
+            "pinned_image": f"ghcr.io/tquinzain59/orso-engine@{UPDATED_DIGEST}",
             "running_containers": ["orso_client_demo"],
             "is_reachable": True,
             "label_mismatch": False,
-        }
+        },
+        {
+            "host_id": mock_host["host_id"],
+            "active_digest": BASELINE_DIGEST,
+            "pinned_image": f"ghcr.io/tquinzain59/orso-engine@{BASELINE_DIGEST}",
+            "running_containers": ["orso_client_demo"],
+            "is_reachable": True,
+            "label_mismatch": False,
+        },
+    ]
 
     with patch("scripts.distribution.engine_image_manager.run_remote_or_local_cmd", side_effect=fake_run):
-        with patch("scripts.distribution.engine_image_manager.probe_docker_host", side_effect=fake_probe):
+        with patch("scripts.distribution.engine_image_manager.probe_docker_host", side_effect=probe_states):
             res = manager.execute_live_host_rollback(
                 mock_host,
-                rollback_digest=manager.target_digest,
+                rollback_digest=BASELINE_DIGEST,
                 container_name="orso_client_demo",
                 health_check_port=9119,
             )
 
     assert res["success"] is True
     assert res["action"] == "LIVE_ROLLBACK"
-    assert res["rollback_digest"] == manager.target_digest
+    assert res["rollback_digest"] == BASELINE_DIGEST
+    assert res["state_before"]["active_digest"] == UPDATED_DIGEST
+    assert res["state_after"]["active_digest"] == BASELINE_DIGEST
+    assert res["state_before"]["active_digest"] != res["state_after"]["active_digest"]
     assert res["health_http_code"] == "200"
 
     # Vérification étanchéité rollback
@@ -161,7 +189,7 @@ def test_ca4_fail_closed_without_secret_touches_zero_containers(mock_host, manag
 
         # 2. Rollback sans secret -> doit lever ValueError immédiatement
         with pytest.raises(ValueError) as excinfo_rb:
-            manager.execute_live_host_rollback(mock_host, rollback_digest=manager.target_digest)
+            manager.execute_live_host_rollback(mock_host, rollback_digest=BASELINE_DIGEST)
         assert "ORSO_PERSONA_HMAC_KEY requise" in str(excinfo_rb.value)
 
     # Invariant absolu CA4 : AUCUNE commande docker stop / rm / run ne doit avoir été exécutée !
@@ -204,6 +232,28 @@ def test_ca5_deploy_canonical_engine_env(mock_host, manager, monkeypatch):
     assert f"ORSO_PERSONA_HMAC_KEY={fake_secret}" in tee_call["input_data"]
     assert "HERMES_DASHBOARD_BASIC_AUTH_USERNAME=admin_ops" in tee_call["input_data"]
     assert "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD=super_pwd" in tee_call["input_data"]
+
+
+def test_ca5_deploy_canonical_engine_env_fails_on_wrong_permissions(mock_host, manager, monkeypatch):
+    """CA5 : Échec explicite (success=False, permissions_ok=False) si les permissions ou le propriétaire de /etc/orso/engine.env sont incorrects."""
+    fake_secret = "canonical_secret_1234567890abcdef1234567890abcdef1234567890abcdef"
+    monkeypatch.setenv("ORSO_PERSONA_HMAC_KEY", fake_secret)
+
+    for bad_stat in ("644 root:root", "600 ubuntu:ubuntu", "unknown"):
+        def fake_run_bad_stat(cmd, ssh_target=None, timeout=25, extra_env=None, input_data=None, _stat=bad_stat):
+            if "stat" in cmd:
+                if _stat == "unknown":
+                    return 1, "", "stat failed"
+                return 0, _stat, ""
+            return 0, "", ""
+
+        with patch("scripts.distribution.engine_image_manager.run_remote_or_local_cmd", side_effect=fake_run_bad_stat):
+            res = manager.deploy_canonical_engine_env(mock_host)
+
+        assert res["permissions_ok"] is False
+        assert res["success"] is False
+        assert res["stat"] == bad_stat
+        assert "Permissions ou propriétaire non conformes" in res["error"]
 
 
 def test_ca5_deploy_canonical_engine_env_fail_closed_if_missing(mock_host, manager, monkeypatch):

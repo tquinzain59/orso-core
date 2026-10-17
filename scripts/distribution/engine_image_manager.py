@@ -548,13 +548,28 @@ class EngineDistributionManager:
         verify_cmd = f"sudo stat -c '%a %U:%G' {canonical_path} 2>/dev/null || stat -f '%Lp %Su:%Sg' {canonical_path} 2>/dev/null"
         rc_v, stdout_v, _ = run_remote_or_local_cmd(verify_cmd, ssh_target, timeout=10)
         stat_out = stdout_v.strip() if rc_v == 0 else "unknown"
+        permissions_ok = stat_out in ("600 root:root", "0600 root:root")
+
+        if not permissions_ok:
+            return {
+                "action": "DEPLOY_ENGINE_ENV",
+                "host_id": host_id,
+                "canonical_path": canonical_path,
+                "stat": stat_out,
+                "permissions_ok": False,
+                "success": False,
+                "error": (
+                    f"Permissions ou propriétaire non conformes sur {canonical_path} : "
+                    f"obtenu '{stat_out}', attendu '600 root:root'."
+                ),
+            }
 
         return {
             "action": "DEPLOY_ENGINE_ENV",
             "host_id": host_id,
             "canonical_path": canonical_path,
             "stat": stat_out,
-            "permissions_ok": ("600" in stat_out and "root:root" in stat_out),
+            "permissions_ok": True,
             "success": True,
             "message": f"Secret d'intégrité personas déposé avec succès dans {canonical_path} (0600 root:root) via entrée standard chiffrée.",
         }

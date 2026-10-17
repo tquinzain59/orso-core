@@ -80,8 +80,9 @@ def run_kan65_poc() -> dict:
     }
     _log.info("Machine distante identifiée : %s (%s)", hostname, uname)
 
-    target_digest = "sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f"
-    mgr = EngineDistributionManager(target_digest=target_digest)
+    baseline_digest = "sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f"
+    updated_digest = "sha256:da7ef29bf78f78e43029049cf27baa32c3e2dddeeb937f9f05c7036b03c3f2cf"
+    mgr = EngineDistributionManager(target_digest=updated_digest)
 
     # Validation stricte des identifiants dashboard (R1 KAN-65 : aucun secret par défaut dans le code)
     db_user = os.environ.get("HERMES_DASHBOARD_BASIC_AUTH_USERNAME")
@@ -97,12 +98,24 @@ def run_kan65_poc() -> dict:
     if not hmac_key:
         raise ValueError("ORSO_PERSONA_HMAC_KEY requise dans l'environnement local pour exécuter le POC.")
 
+    def wait_container_healthy(container_name: str, max_attempts: int = 15) -> str:
+        inspect_out = ""
+        for _ in range(max_attempts):
+            _, inspect_out, _ = run_ssh_command(
+                f"docker inspect {container_name} --format '{{{{.State.Status}}}} | Healthy={{{{.State.Health.Status}}}} | RestartCount={{{{.RestartCount}}}}'",
+                ssh_target,
+            )
+            if "running" in inspect_out and "Healthy=healthy" in inspect_out:
+                return inspect_out
+            time.sleep(2)
+        return inspect_out
+
     # ──────────────────────────────────────────────────────────────────────────
     # CA5 : Déploiement étanche dans l'emplacement canonique /etc/orso/engine.env (0600 root:root)
     # ──────────────────────────────────────────────────────────────────────────
     _log.info("--- CA5 : Déploiement étanche dans /etc/orso/engine.env (0600 root:root) ---")
     res_ca5 = mgr.deploy_canonical_engine_env(host_target)
-    
+
     # Vérification indépendante directe via stat
     rc_stat, stdout_stat, _ = run_ssh_command("sudo stat -c '%a %U:%G' /etc/orso/engine.env", ssh_target)
     rc_ls, stdout_ls, _ = run_ssh_command("ls -la /etc/orso/engine.env", ssh_target)
@@ -112,13 +125,26 @@ def run_kan65_poc() -> dict:
         "path": "/etc/orso/engine.env",
         "stat_output": stdout_stat,
         "ls_output": stdout_ls,
+        "permissions_ok": res_ca5.get("permissions_ok", False),
         "permissions_verified": (stdout_stat == "600 root:root"),
         "transport_method": "stdin via sudo tee /etc/orso/engine.env (zéro secret en ligne de commande)",
         "returncode": rc_stat,
-        "success": res_ca5.get("success", False) and stdout_stat == "600 root:root",
+        "success": res_ca5.get("success", False) and res_ca5.get("permissions_ok", False) and stdout_stat == "600 root:root",
     }
     assert evidence["ca5_canonical_env"]["success"], "CA5 a échoué"
     _log.info("CA5 validé : %s, stat=%s", res_ca5.get("message"), stdout_stat)
+
+    # S'assurer que l'état initial sur l'hôte avant CA4/CA2 est positionné sur l'empreinte antérieure (baseline_digest)
+    initial_probe = probe_docker_host(host_target)
+    if initial_probe.get("active_digest") != baseline_digest or "orso_client_demo" not in initial_probe.get("running_containers", []):
+        _log.info("Positionnement initial de orso_client_demo sur l'empreinte de base %s...", baseline_digest)
+        mgr.execute_live_host_rollback(
+            host_target,
+            rollback_digest=baseline_digest,
+            container_name="orso_client_demo",
+            health_check_port=9119,
+        )
+        wait_container_healthy("orso_client_demo")
 
     # ──────────────────────────────────────────────────────────────────────────
     # CA4 : Refus Fail-Closed en l'absence du secret (aucun conteneur créé ni altéré)
@@ -133,7 +159,7 @@ def run_kan65_poc() -> dict:
     fail_closed_triggered = False
     fail_closed_error_message = ""
     try:
-        mgr.execute_live_host_update(host_target, new_digest=target_digest, container_name="orso_client_demo_fail_test")
+        mgr.execute_live_host_update(host_target, new_digest=updated_digest, container_name="orso_client_demo_fail_test")
     except ValueError as e:
         fail_closed_triggered = True
         fail_closed_error_message = str(e)
@@ -158,37 +184,50 @@ def run_kan65_poc() -> dict:
     _log.info("CA4 validé : Refus Fail-Closed immédiat, liste des conteneurs 100%% inchangée.")
 
     # ──────────────────────────────────────────────────────────────────────────
-    # CA2 : Mise à jour pilotée laissant un conteneur en service sain
+    # CA2 : Mise à jour pilotée de baseline_digest (A) vers updated_digest (B)
     # ──────────────────────────────────────────────────────────────────────────
-    _log.info("--- CA2 : Mise à jour pilotée vers %s ---", target_digest)
+    _log.info("--- CA2 : Mise à jour pilotée de %s vers %s ---", baseline_digest, updated_digest)
     res_ca2 = mgr.execute_live_host_update(
         host_target,
-        new_digest=target_digest,
+        new_digest=updated_digest,
         container_name="orso_client_demo",
         health_check_port=9119,
     )
 
     # Sonde de santé et statut physique du conteneur
-    rc_inspect, stdout_inspect, _ = run_ssh_command(
-        "docker inspect orso_client_demo --format '{{.State.Status}} | Healthy={{.State.Health.Status}} | RestartCount={{.RestartCount}}'",
-        ssh_target,
-    )
+    stdout_inspect = wait_container_healthy("orso_client_demo")
     rc_curl, stdout_curl, _ = run_ssh_command(
         "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9119/api/client/status",
         ssh_target,
     )
 
+    ca2_before = res_ca2.get("state_before", {}).get("active_digest")
+    ca2_after = res_ca2.get("state_after", {}).get("active_digest")
+    ca2_transition_ok = (
+        ca2_before == baseline_digest
+        and ca2_after == updated_digest
+        and ca2_before != ca2_after
+    )
+
     evidence["ca2_live_update"] = {
         "action": res_ca2.get("action"),
-        "target_digest": target_digest,
+        "state_before": ca2_before,
+        "target_digest": updated_digest,
+        "state_after": ca2_after,
+        "active_digest": ca2_after,
+        "transition_verified": ca2_transition_ok,
         "container_name": "orso_client_demo",
         "container_inspect": stdout_inspect,
         "health_http_code": stdout_curl,
-        "active_digest": res_ca2.get("state_after", {}).get("active_digest"),
-        "success": (stdout_curl == "200" and "healthy" in stdout_inspect and res_ca2.get("success", False)),
+        "success": (
+            ca2_transition_ok
+            and stdout_curl == "200"
+            and "healthy" in stdout_inspect
+            and res_ca2.get("success", False)
+        ),
     }
-    assert evidence["ca2_live_update"]["success"], "CA2 a échoué"
-    _log.info("CA2 validé : Conteneur orso_client_demo actif (HTTP %s, %s).", stdout_curl, stdout_inspect)
+    assert evidence["ca2_live_update"]["success"], f"CA2 a échoué : {evidence['ca2_live_update']}"
+    _log.info("CA2 validé : Transition réelle %s -> %s (HTTP %s, %s).", ca2_before, ca2_after, stdout_curl, stdout_inspect)
 
     # ──────────────────────────────────────────────────────────────────────────
     # CA1 : Vérification de l'absence totale du secret dans argv / ps aux / logs
@@ -203,9 +242,6 @@ def run_kan65_poc() -> dict:
     secret_in_ps_aux = hmac_key in stdout_ps_aux
     secret_in_logs = hmac_key in stdout_logs
 
-    # Masquage défensif des logs pour le compte-rendu
-    sanitized_logs = stdout_logs.replace(hmac_key, "[SECRET_REDACTED]") if secret_in_logs else stdout_logs
-
     evidence["ca1_zero_secret_exposure"] = {
         "secret_in_process_table": secret_in_ps_aux,
         "secret_in_container_logs": secret_in_logs,
@@ -217,37 +253,56 @@ def run_kan65_poc() -> dict:
     _log.info("CA1 validé : 0 secret dans ps aux, 0 secret dans les logs, PER-INTEGRITY-000 validé.")
 
     # ──────────────────────────────────────────────────────────────────────────
-    # CA3 : Retour arrière exécuté par le même chemin
+    # CA3 : Retour arrière exécuté par le même chemin de updated_digest (B) vers baseline_digest (A)
     # ──────────────────────────────────────────────────────────────────────────
-    _log.info("--- CA3 : Retour arrière exécuté par le même chemin ---")
-    # Pour tester le rollback de manière contrôlée avec le même binaire et image :
-    # Nous exécutons execute_live_host_rollback vers le même digest canonique
+    _log.info("--- CA3 : Retour arrière exécuté de %s vers %s ---", updated_digest, baseline_digest)
     res_ca3 = mgr.execute_live_host_rollback(
         host_target,
-        rollback_digest=target_digest,
+        rollback_digest=baseline_digest,
         container_name="orso_client_demo",
         health_check_port=9119,
     )
+    stdout_inspect_rb = wait_container_healthy("orso_client_demo")
     rc_curl_rb, stdout_curl_rb, _ = run_ssh_command(
         "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9119/api/client/status",
         ssh_target,
     )
 
+    ca3_before = res_ca3.get("state_before", {}).get("active_digest")
+    ca3_after = res_ca3.get("state_after", {}).get("active_digest")
+    ca3_transition_ok = (
+        ca3_before == updated_digest
+        and ca3_after == baseline_digest
+        and ca3_before != ca3_after
+    )
+
     evidence["ca3_live_rollback"] = {
         "action": res_ca3.get("action"),
-        "rollback_digest": target_digest,
-        "state_before": res_ca3.get("state_before", {}).get("active_digest"),
-        "state_after": res_ca3.get("state_after", {}).get("active_digest"),
+        "rollback_digest": baseline_digest,
+        "state_before": ca3_before,
+        "state_after": ca3_after,
+        "transition_verified": ca3_transition_ok,
+        "container_inspect": stdout_inspect_rb,
         "health_http_code": stdout_curl_rb,
-        "success": (stdout_curl_rb == "200" and res_ca3.get("success", False)),
+        "success": (
+            ca3_transition_ok
+            and stdout_curl_rb == "200"
+            and "healthy" in stdout_inspect_rb
+            and res_ca3.get("success", False)
+        ),
     }
-    assert evidence["ca3_live_rollback"]["success"], "CA3 a échoué"
-    _log.info("CA3 validé : Rollback exécuté avec succès (HTTP %s, digest actif conforme).", stdout_curl_rb)
+    assert evidence["ca3_live_rollback"]["success"], f"CA3 a échoué : {evidence['ca3_live_rollback']}"
+    _log.info("CA3 validé : Rollback réel %s -> %s exécuté avec succès (HTTP %s).", ca3_before, ca3_after, stdout_curl_rb)
 
     # ──────────────────────────────────────────────────────────────────────────
     # CA6 : Synthèse de conformité du chemin distant
     # ──────────────────────────────────────────────────────────────────────────
-    all_remote_measured = bool(res_ca2.get("success", False) and res_ca3.get("success", False) and rc_stat == 0 and rc_ls == 0)
+    all_remote_measured = bool(
+        evidence["ca2_live_update"]["success"]
+        and evidence["ca3_live_rollback"]["success"]
+        and rc_stat == 0
+        and rc_ls == 0
+    )
     evidence["ca6_remote_path_verification"] = {
         "remote_host": "prod-fr-003.orso-agents.fr",
         "remote_ip": "57.131.196.106",

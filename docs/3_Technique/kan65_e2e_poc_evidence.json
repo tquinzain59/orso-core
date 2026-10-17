@@ -1,7 +1,7 @@
 {
   "ticket": "KAN-65",
   "title": "Acheminement du secret d'intégrité des personas vers les hôtes clients",
-  "timestamp_utc": "2026-10-06T10:21:03.319728+00:00",
+  "timestamp_utc": "2026-10-17T16:17:57.088773+00:00",
   "target_host": {
     "host_id": "prod-fr-003",
     "host_name": "Serveur Clients OVH (Hôte 2)",
@@ -18,7 +18,8 @@
     "action": "DEPLOY_ENGINE_ENV",
     "path": "/etc/orso/engine.env",
     "stat_output": "600 root:root",
-    "ls_output": "-rw------- 1 root root 195 Oct  6 10:21 /etc/orso/engine.env",
+    "ls_output": "-rw------- 1 root root 209 Oct 17 16:17 /etc/orso/engine.env",
+    "permissions_ok": true,
     "permissions_verified": true,
     "transport_method": "stdin via sudo tee /etc/orso/engine.env (zéro secret en ligne de commande)",
     "returncode": 0,
@@ -35,11 +36,14 @@
   },
   "ca2_live_update": {
     "action": "LIVE_UPDATE",
-    "target_digest": "sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
+    "state_before": "sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
+    "target_digest": "sha256:da7ef29bf78f78e43029049cf27baa32c3e2dddeeb937f9f05c7036b03c3f2cf",
+    "state_after": "sha256:da7ef29bf78f78e43029049cf27baa32c3e2dddeeb937f9f05c7036b03c3f2cf",
+    "active_digest": "sha256:da7ef29bf78f78e43029049cf27baa32c3e2dddeeb937f9f05c7036b03c3f2cf",
+    "transition_verified": true,
     "container_name": "orso_client_demo",
     "container_inspect": "running | Healthy=healthy | RestartCount=0",
     "health_http_code": "200",
-    "active_digest": "sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
     "success": true
   },
   "ca1_zero_secret_exposure": {
@@ -52,8 +56,10 @@
   "ca3_live_rollback": {
     "action": "LIVE_ROLLBACK",
     "rollback_digest": "sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
-    "state_before": "sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
+    "state_before": "sha256:da7ef29bf78f78e43029049cf27baa32c3e2dddeeb937f9f05c7036b03c3f2cf",
     "state_after": "sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f",
+    "transition_verified": true,
+    "container_inspect": "running | Healthy=healthy | RestartCount=0",
     "health_http_code": "200",
     "success": true
   },

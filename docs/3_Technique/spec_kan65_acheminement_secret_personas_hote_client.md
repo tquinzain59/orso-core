@@ -64,18 +64,20 @@ Le problème résolu par KAN-65 est le transport de ce secret d'intégrité depu
   - Preuve factuelle : `ps aux | grep -E 'docker|orso'` sur l'hôte distant montre 0 secret, et les logs du conteneur ne contiennent aucune valeur brute.
 
 ### CA2 : Mise à jour pilotée laissant un conteneur en service sain
-- **Règle** : La commande `execute_live_host_update` met à jour le conteneur client vers le nouveau digest épinglé et valide son bon état de fonctionnement.
+- **Règle** : La commande `execute_live_host_update` met à jour le conteneur client d'une empreinte antérieure vers un nouveau digest épinglé distinct et valide son bon état de fonctionnement.
 - **Preuve réelle (PROD-FR-003)** :
-  - Conteneur `orso_client_demo` démarré avec l'image `ghcr.io/tquinzain59/orso-engine@sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f`.
+  - État avant (`state_before`) : `sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f`.
+  - Conteneur `orso_client_demo` mis à jour vers l'image `ghcr.io/tquinzain59/orso-engine@sha256:da7ef29bf78f78e43029049cf27baa32c3e2dddeeb937f9f05c7036b03c3f2cf` (`state_after`).
   - Inspection Docker : `running | Healthy=healthy | RestartCount=0`.
   - Sonde HTTP locale : `curl -s http://127.0.0.1:9119/api/client/status` renvoie `200` OK.
 
 ### CA3 : Retour arrière par le même chemin avec vérification des états avant/après
-- **Règle** : `execute_live_host_rollback` utilise le même mécanisme étanche par entrée standard pour réinstancier l'empreinte précédente.
+- **Règle** : `execute_live_host_rollback` utilise le même mécanisme étanche par entrée standard pour réinstancier l'empreinte antérieure réelle.
 - **Preuve réelle (PROD-FR-003)** :
-  - Retour arrière exécuté avec succès vers le digest immuable.
-  - Sonde HTTP post-rollback : code `200` OK.
-  - Empreintes avant et après auditées et conformes.
+  - État avant (`state_before`) : `sha256:da7ef29bf78f78e43029049cf27baa32c3e2dddeeb937f9f05c7036b03c3f2cf`.
+  - Retour arrière exécuté avec succès vers l'empreinte antérieure `sha256:4506ccd6f51e68d3bf799c2a5b17d82916dc5cc285080f2fcf9c07046e2b904f` (`state_after`).
+  - Sonde HTTP post-rollback : code `200` OK, conteneur `running | Healthy=healthy | RestartCount=0`.
+  - Empreintes avant et après distinctes, auditées et conformes (`transition_verified: true`).
 
 ### CA4 : Refus Fail-Closed préalable en l'absence du secret
 - **Règle d'or** : Si `ORSO_PERSONA_HMAC_KEY` est absente de l'environnement du plan de gestion, l'opération est refusée **immédiatement**, avant tout appel à `docker stop`, `docker rm` ou `docker run`. **Aucun conteneur n'est créé, aucun conteneur n'est arrêté, aucun conteneur n'est né pour mourir aussitôt.**
@@ -84,10 +86,10 @@ Le problème résolu par KAN-65 est le transport de ce secret d'intégrité depu
   - Liste des conteneurs distants inspectée avant et après (`docker ps -a --format '{{.Names}} ({{.State}})'`) : strictement 4 conteneurs avant, 4 conteneurs après, aucun conteneur `orso_client_demo_fail_test` créé.
 
 ### CA5 : Emplacement canonique `/etc/orso/engine.env` (0600 root:root)
-- **Règle** : Le secret est déposé sur l'hôte client dans `/etc/orso/engine.env` avec les permissions `0600` et propriétaire `root:root` via l'entrée standard de `sudo tee`.
+- **Règle** : Le secret est déposé sur l'hôte client dans `/etc/orso/engine.env` avec les permissions `0600` et propriétaire `root:root` via l'entrée standard de `sudo tee`. Si la vérification `stat` ne renvoie pas `600 root:root`, `deploy_canonical_engine_env` échoue explicitement (`permissions_ok: False`, `success: False`, code retour CLI `1`).
 - **Preuve réelle (PROD-FR-003)** :
   - `sudo stat -c '%a %U:%G' /etc/orso/engine.env` -> `600 root:root`.
-  - `ls -la /etc/orso/engine.env` -> `-rw------- 1 root root ... /etc/orso/engine.env`.
+  - `ls -la /etc/orso/engine.env` -> `-rw------- 1 root root 209 Oct 17 16:17 /etc/orso/engine.env`.
   - Commande CLI dédiée : `python3 scripts/distribution/engine_image_manager.py deploy-env --host-id prod-fr-003`.
 
 ### CA6 : Mesures produites sur la machine distante réelle
