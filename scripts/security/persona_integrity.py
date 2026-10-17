@@ -32,6 +32,7 @@ EVENT_OK = "PER-INTEGRITY-000"
 EVENT_STARTUP_MISMATCH = "PER-INTEGRITY-001"
 EVENT_RUNTIME_ALTERATION = "PER-INTEGRITY-002"
 EVENT_CONFIG_ERROR = "PER-INTEGRITY-003"
+EVENT_ROGUE_PERSONA_DETECTED = "PER-INTEGRITY-004"
 
 
 def compute_file_sha256(file_path: Path | str) -> str:
@@ -84,6 +85,232 @@ def resolve_lock_file(profiles_dir: Path, custom_path: Optional[Path | str] = No
     if custom_path:
         return Path(custom_path).resolve()
     return (profiles_dir / DEFAULT_LOCK_FILENAME).resolve()
+
+
+def _load_lock_personas(p_dir: Path, lock_file: Optional[Path | str] = None) -> Optional[Dict[str, Any]]:
+    """Charge la table des personas déclarés dans personas.lock.json si disponible."""
+    l_file = resolve_lock_file(p_dir, lock_file)
+    if not l_file.is_file():
+        return None
+    try:
+        with open(l_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and isinstance(data.get("personas"), dict):
+            return data["personas"]
+    except Exception:
+        pass
+    return None
+
+
+def _resolve_allowed_profile_mounts(
+    p_dir: Path,
+    roots_to_scan: List[Path],
+    env_hermes_home: Optional[str],
+) -> List[Path]:
+    """Résout les points de montage bind-mount légitimes de profiles/ (KAN-33, KAN-58, KAN-54).
+
+    En conteneur tenant, le dossier profiles/ officiel est monté en lecture seule (:ro) sur :
+    - /app/profiles
+    - /app/data/hermes_home/profiles (ou <HERMES_HOME>/profiles)
+    - /home/orso/.hermes/profiles
+    """
+    candidates: List[Path] = [
+        Path("/app/profiles"),
+        Path("/app/data/hermes_home/profiles"),
+        Path("/home/orso/.hermes/profiles"),
+    ]
+    if env_hermes_home:
+        candidates.append(Path(env_hermes_home) / "profiles")
+
+    base_anchors: List[Path] = []
+    if p_dir.parent.is_dir():
+        base_anchors.append(p_dir.parent)
+        if p_dir.parent.parent.is_dir():
+            base_anchors.append(p_dir.parent.parent)
+    base_anchors.extend(roots_to_scan)
+
+    for anchor in base_anchors:
+        candidates.append(anchor / "hermes_home" / "profiles")
+        candidates.append(anchor / "data" / "hermes_home" / "profiles")
+        candidates.append(anchor / "app" / "data" / "hermes_home" / "profiles")
+        candidates.append(anchor / "app" / "profiles")
+        candidates.append(anchor / "home" / "orso" / ".hermes" / "profiles")
+        if anchor.name in ("hermes_home", ".hermes", "app"):
+            candidates.append(anchor / "profiles")
+        if anchor.name == "profiles" and anchor.parent.name in ("hermes_home", ".hermes", "app"):
+            candidates.append(anchor)
+
+    resolved_mounts: List[Path] = []
+    seen: set[Path] = set()
+    for c in candidates:
+        try:
+            if c.is_dir():
+                res = c.resolve()
+                if res not in seen:
+                    seen.add(res)
+                    resolved_mounts.append(res)
+        except Exception:
+            pass
+    return resolved_mounts
+
+
+def _is_legitimate_persona_file(
+    cand: Path,
+    p_dir: Path,
+    allowed_mounts: List[Path],
+    lock_personas: Optional[Dict[str, Any]],
+) -> bool:
+    """Vérifie qu'un fichier SOUL.md candidat appartient à profiles/ (ou à un bind-mount officiel
+    de profiles/) ET concorde cryptographiquement avec la source de vérité p_dir / personas.lock.json.
+    Aucun carve-out non vérifié n'est toléré.
+    """
+    if cand.is_symlink():
+        return False
+
+    try:
+        resolved = cand.resolve()
+    except Exception:
+        return False
+
+    # 1. Candidat résolu dans le dossier primaire p_dir (<p_dir>/<agent>/SOUL.md)
+    try:
+        rel_primary = resolved.relative_to(p_dir)
+    except ValueError:
+        rel_primary = None
+
+    if rel_primary is not None:
+        if len(rel_primary.parts) == 2 and rel_primary.parts[1].lower() == "soul.md":
+            agent_name = rel_primary.parts[0]
+            if cand.parent.name == agent_name:
+                if lock_personas is None or agent_name in lock_personas:
+                    return True
+        return False
+
+    # 2. Candidat dans un point de montage bind-mount officiel de profiles/
+    # (ex: /app/data/hermes_home/profiles/<agent>/SOUL.md ou /home/orso/.hermes/profiles/<agent>/SOUL.md)
+    for mount_dir in allowed_mounts:
+        try:
+            rel_mount = resolved.relative_to(mount_dir)
+        except ValueError:
+            continue
+
+        if len(rel_mount.parts) != 2 or rel_mount.parts[1].lower() != "soul.md":
+            return False
+
+        agent_name = rel_mount.parts[0]
+        if lock_personas is not None and agent_name not in lock_personas:
+            return False
+
+        canonical_soul = p_dir / agent_name / "SOUL.md"
+        if not canonical_soul.is_file():
+            return False
+
+        try:
+            cand_sha = compute_file_sha256(resolved).lower()
+            canon_sha = compute_file_sha256(canonical_soul).lower()
+        except Exception:
+            return False
+
+        if cand_sha != canon_sha:
+            return False
+
+        if lock_personas is not None:
+            expected_sha = str(lock_personas[agent_name].get("sha256", "")).strip().lower()
+            if expected_sha and cand_sha != expected_sha:
+                return False
+
+        return True
+
+    return False
+
+
+def find_rogue_personas(
+    profiles_dir: Optional[Path | str] = None,
+    scan_roots: Optional[List[Path | str]] = None,
+    lock_file: Optional[Path | str] = None,
+) -> List[Path]:
+    """Recherche tous les fichiers SOUL.md illégitimes situés hors du dossier profiles officiel.
+
+    Couvre la classe de défaut du repli ambient (KAN-54) :
+    - <HERMES_HOME>/SOUL.md (si HERMES_HOME n'est pas le dossier profiles)
+    - /app/data/**/SOUL.md et ./data/**/SOUL.md
+    - <profiles_parent>/data/**/SOUL.md
+    Prend en charge la topologie bind-mount (:ro) sous /app/data/hermes_home/profiles et
+    /home/orso/.hermes/profiles en exigeant la concordance SHA-256 avec p_dir et personas.lock.json.
+    """
+    p_dir = resolve_profiles_dir(profiles_dir).resolve()
+    lock_personas = _load_lock_personas(p_dir, lock_file)
+    rogue_found: List[Path] = []
+    checked_paths: set[str] = set()
+
+    env_hermes_home = os.environ.get("HERMES_HOME")
+
+    # Racines de scan par défaut
+    default_roots: List[Path] = []
+    if Path("/app/data").is_dir():
+        default_roots.append(Path("/app/data"))
+    if env_hermes_home and Path(env_hermes_home).is_dir():
+        default_roots.append(Path(env_hermes_home))
+    if p_dir.parent.is_dir() and (p_dir.parent / "data").is_dir():
+        default_roots.append(p_dir.parent / "data")
+
+    # Si profiles_dir pointe vers le dépôt local, scanner le ./data local
+    try:
+        if p_dir.resolve() == Path("./profiles").resolve() and Path("./data").is_dir():
+            default_roots.append(Path("./data"))
+    except Exception:
+        pass
+
+    roots_to_scan = [Path(r) for r in scan_roots] if scan_roots is not None else default_roots
+    allowed_mounts = _resolve_allowed_profile_mounts(p_dir, roots_to_scan, env_hermes_home)
+
+    # 1. Chemins précis prioritaires dans les volumes inscriptibles
+    specific_candidates: List[Path] = [
+        Path("/app/data/hermes_home/SOUL.md"),
+        Path("/app/data/SOUL.md"),
+        Path("./data/hermes_home/SOUL.md"),
+        Path("./data/SOUL.md"),
+    ]
+    if env_hermes_home:
+        specific_candidates.append(Path(env_hermes_home) / "SOUL.md")
+    if p_dir.parent.is_dir():
+        specific_candidates.append(p_dir.parent / "data" / "hermes_home" / "SOUL.md")
+        specific_candidates.append(p_dir.parent / "data" / "SOUL.md")
+        specific_candidates.append(p_dir.parent / "hermes_home" / "SOUL.md")
+
+    for cand in specific_candidates:
+        try:
+            if not cand.exists() and not cand.is_symlink():
+                continue
+            key = os.path.abspath(str(cand))
+            if key in checked_paths:
+                continue
+            checked_paths.add(key)
+            if not _is_legitimate_persona_file(cand, p_dir, allowed_mounts, lock_personas):
+                rogue_found.append(cand)
+        except Exception:
+            pass
+
+    # 2. Scan récursif des racines inscriptibles (sans carve-out aveugle)
+    for root_path in roots_to_scan:
+        if not root_path.is_dir():
+            continue
+        try:
+            for item in root_path.rglob("*"):
+                if item.name.lower() == "soul.md" and (item.is_file() or item.is_symlink()):
+                    try:
+                        key = os.path.abspath(str(item))
+                        if key in checked_paths:
+                            continue
+                        checked_paths.add(key)
+                        if not _is_legitimate_persona_file(item, p_dir, allowed_mounts, lock_personas):
+                            rogue_found.append(item)
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.debug("Erreur lors du scan rogue persona dans %s: %s", root_path, e)
+
+    return rogue_found
 
 
 def resolve_telemetry_dir() -> Path:
@@ -228,20 +455,16 @@ def verify_all_personas(
     errors: List[str] = []
     audit_entries: List[Dict[str, Any]] = []
 
-    # Contrôle de défense en profondeur : interdiction absolue de SOUL.md dans /app/data ou ./data
-    dangerous_paths = [
-        Path("/app/data/hermes_home/SOUL.md"),
-        Path("/app/data/SOUL.md"),
-        Path("./data/hermes_home/SOUL.md"),
-        Path("./data/SOUL.md"),
-    ]
-    for d_path in dangerous_paths:
-        if d_path.exists() and not d_path.is_symlink():
-            err_d = f"Fichier persona illégitime détecté dans un volume inscriptible : {d_path}"
-            errors.append(err_d)
-            all_valid = False
-            if record_logs:
-                log_integrity_event("rogue_persona", "unknown", "dangerous", "compromised", EVENT_STARTUP_MISMATCH, err_d)
+    # Contrôle de défense en profondeur & sanctuarisation du repli ambient (KAN-33 / KAN-54)
+    # Détection exhaustive de tout SOUL.md hors du dossier officiel profiles/
+    rogue_souls = find_rogue_personas(profiles_dir=p_dir, lock_file=l_file)
+    for r_path in rogue_souls:
+        err_d = f"Fichier persona illégitime détecté dans un volume inscriptible : {r_path}"
+        errors.append(err_d)
+        all_valid = False
+        if record_logs:
+            entry = log_integrity_event("rogue_persona", "unknown", "dangerous", "compromised", EVENT_ROGUE_PERSONA_DETECTED, err_d)
+            audit_entries.append(entry)
 
     for agent_name, meta in sorted(personas.items()):
         version = meta.get("version", "1.0.0")
@@ -413,7 +636,10 @@ def monitor_loop(
             print("🚨 [PER-INTEGRITY-002] Arrêt d'urgence immédiat du conteneur de l'agent compromis.", file=sys.stderr)
             try:
                 # Écriture d'un drapeau d'urgence sur disque
-                Path("/app/data/EMERGENCY_STOP_PER_INTEGRITY").touch(exist_ok=True)
+                flag_path = Path("/app/data/EMERGENCY_STOP_PER_INTEGRITY")
+                if not flag_path.parent.is_dir():
+                    flag_path = Path(resolve_telemetry_dir()).parent / "EMERGENCY_STOP_PER_INTEGRITY"
+                flag_path.touch(exist_ok=True)
             except Exception:
                 pass
 
