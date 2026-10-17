@@ -84,9 +84,8 @@ echo "==> [Orso Entrypoint] HERMES_HOME configuré sur : $HERMES_HOME"
 echo "==> [Orso Entrypoint] HERMES_CONFIG_PATH : $HERMES_CONFIG_PATH"
 
 # 4bis. Contrôle d'intégrité cryptographique des personas (KAN-33, KAN-54)
-# Purge préventive exhaustive de tout SOUL.md illégitime hors profiles/ (faille de repli ambient - KAN-54)
-find /app/data /home/orso/.hermes -name "[Ss][Oo][Uu][Ll].[Mm][Dd]" -delete 2>/dev/null || true
-rm -f /app/data/hermes_home/SOUL.md /app/data/SOUL.md /home/orso/.hermes/SOUL.md ./data/hermes_home/SOUL.md ./data/SOUL.md ./SOUL.md 2>/dev/null || true
+# Purge préventive ciblée des seuls emplacements racines de repli ambient (KAN-33) sans toucher aux sous-arborescences profiles/ montées
+rm -f /app/data/hermes_home/SOUL.md /app/data/SOUL.md /home/orso/.hermes/SOUL.md ./data/hermes_home/SOUL.md ./data/SOUL.md 2>/dev/null || true
 
 echo "==> [Orso Entrypoint] Contrôle d'intégrité des personas (KAN-33, KAN-54)..."
 INTEGRITY_SCRIPT="/app/scripts/security/persona_integrity.py"

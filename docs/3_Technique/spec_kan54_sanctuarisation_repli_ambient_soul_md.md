@@ -2,7 +2,7 @@
 
 > **Ticket Jira associé** : [KAN-54](https://orso-agents.atlassian.net/browse/KAN-54)  
 > **Composants** : `Sécurité (scripts/security/persona_integrity.py)`, `Outils Modèle (tools/file_tools_write_guards.py)`, `Docker & Entrypoint (docker/orso-entrypoint.sh)`, `Tests (tests/security/test_kan54_ambient_soul_fallback.py)`  
-> **Statut** : Validé et Testé à 100% (15/15 tests sécurité unitaires et d'intégration au vert)  
+> **Statut** : Validé et Testé à 100% (19/19 tests sécurité unitaires et d'intégration au vert)  
 > **Auteurs / Responsables** : Thibaut (Lead / PO), Antigravity (Architecte Projet)  
 > **Date** : 05 Octobre 2026  
 > **Source de Vérité ADR** : `docs/ADR/2026-10-05-07-sanctuarisation-repli-ambient-soul-md-kan54.md`  
@@ -36,9 +36,9 @@ L'Architecte a formalisé l'arbitrage dans l'ADR **2026-10-05-07** et sur le tic
 
 ## 3. Dispositif de Durcissement Mis en Œuvre (Option A)
 
-### 3.1 Détection exhaustive et Code d'événement stable `PER-INTEGRITY-004` (CA3)
+### 3.1 Détection exhaustive, Topologie Bind-Mount et Code d'événement stable `PER-INTEGRITY-004` (CA3)
 Dans `scripts/security/persona_integrity.py` :
-1. **Création de la fonction `find_rogue_personas(profiles_dir, scan_roots)`** :
+1. **Création de la fonction `find_rogue_personas(profiles_dir, scan_roots, lock_file)`** :
    - Recherche ciblée des candidats prioritaires dans les volumes de données :
      - `/app/data/hermes_home/SOUL.md`
      - `/app/data/SOUL.md`
@@ -46,11 +46,12 @@ Dans `scripts/security/persona_integrity.py` :
      - `./data/SOUL.md`
      - `HERMES_HOME / "SOUL.md"` (si `HERMES_HOME` est configuré et distinct de `profiles/`)
      - `<profiles_parent>/data/**/SOUL.md`
-   - Scan récursif de `/app/data` et `./data` pour déceler tout fichier nommé `SOUL.md` ou `soul.md` qui ne se trouve pas sous le répertoire légitime `profiles/`.
+   - Scan récursif de `/app/data` et `./data` pour déceler tout fichier nommé `SOUL.md` ou `soul.md` hors des emplacements légitimes.
+   - **Prise en charge vérifiée de la topologie bind-mount (`:ro`) sans angle mort** : En conteneur tenant, le répertoire officiel `profiles/` est monté en bind-mount `:ro` sur `/app/profiles`, `/app/data/hermes_home/profiles` et `/home/orso/.hermes/profiles`. `_is_legitimate_persona_file` valide un `SOUL.md` dans ces points de montage officiels **exclusivement** si sa structure est `<agent>/SOUL.md`, que `<agent>` est déclaré dans `personas.lock.json`, et que son empreinte SHA-256 concorde bit à bit avec `p_dir/<agent>/SOUL.md` et `personas.lock.json`. Aucun carve-out non vérifié (tel que `/spaces/<slug>/profiles/`) n'est toléré.
 2. **Code d'événement stable (CA3)** :
    - Introduction de la constante officielle `EVENT_ROGUE_PERSONA_DETECTED = "PER-INTEGRITY-004"`.
 3. **Contrôle au démarrage (Fail-Closed)** :
-   - `verify_all_personas` échoue immédiatement (`valid is False`, code retour 1) dès qu'un `SOUL.md` hors `profiles/` est détecté, consignant l'alerte `PER-INTEGRITY-004` dans `personas_integrity.log`, `personas_integrity.jsonl` et `telemetry_export.json`.
+   - `verify_all_personas` échoue immédiatement (`valid is False`, code retour 1) dès qu'un `SOUL.md` illégitime est détecté, consignant l'alerte `PER-INTEGRITY-004` dans `personas_integrity.log`, `personas_integrity.jsonl` et `telemetry_export.json`.
 4. **Surveillance périodique continue (`monitor_loop`)** :
    - Le moniteur d'arrière-plan inspecte les hashs et la présence de tout rogue persona. Dès détection, il journalise l'alerte avec horodatage probant et déclenche l'arrêt d'urgence du conteneur.
 
@@ -64,12 +65,11 @@ Dans `tools/file_tools_write_guards.py` (`_check_sensitive_path`) :
   ```
 - Les fichiers de travail normaux de l'agent (`notes.txt`, `reports/*.csv`, `*.pdf`) et les contrôles d'approbation d'instruction standard demeurent pleinement fonctionnels.
 
-### 3.3 Purge préventive récursive au démarrage
+### 3.3 Purge préventive ciblée au démarrage (CA5)
 Dans `docker/orso-entrypoint.sh` :
-- Purge récursive de tout fichier nommé `SOUL.md` sous `/app/data` et `/home/orso/.hermes` avant le démarrage d'Hermès :
+- Maintien de la purge préventive ciblée KAN-33 sur les seuls emplacements racines de repli ambient avant le démarrage d'Hermès, sans `find -delete` récursif susceptible d'impacter les sous-arborescences `profiles/` montées :
   ```bash
-  find /app/data /home/orso/.hermes -name "[Ss][Oo][Uu][Ll].[Mm][Dd]" -delete 2>/dev/null || true
-  rm -f /app/data/hermes_home/SOUL.md /app/data/SOUL.md /home/orso/.hermes/SOUL.md ./data/hermes_home/SOUL.md ./data/SOUL.md ./SOUL.md 2>/dev/null || true
+  rm -f /app/data/hermes_home/SOUL.md /app/data/SOUL.md /home/orso/.hermes/SOUL.md ./data/hermes_home/SOUL.md ./data/SOUL.md 2>/dev/null || true
   ```
 
 ---
@@ -80,9 +80,9 @@ Dans `docker/orso-entrypoint.sh` :
 | :--- | :--- | :--- |
 | **CA1 - Décision écrite et datée avant tout code** | **Validé** | Commentaire officiel consigné sur Jira KAN-54 le 05/10/2026 à 16:19 UTC. ADR `docs/ADR/2026-10-05-07-sanctuarisation-repli-ambient-soul-md-kan54.md` approuvé par Thibaut. |
 | **CA2 - Amendement moteur (si retenu)** | **N/A** | Option A (Garde-fou à la marge) retenue par arbitrage PO. Sanctuaire intact à 100 %. |
-| **CA3 - Détection en cours d'exécution & code stable** | **Validé** | Code stable `PER-INTEGRITY-004`. Test unitaire `test_ca3_runtime_rogue_soul_detection_and_stable_event_code` prouvant l'horodatage de création vs détection et la journalisation probante. Test `test_ca3_startup_verify_rejects_rogue_soul` prouvant le Fail-Closed au démarrage. |
-| **CA4 - Test de non-régression dédié** | **Validé** | Suite complète `tests/security/test_kan54_ambient_soul_fallback.py` (5 tests au vert à 100 %). |
-| **CA5 - Maintien du dispositif KAN-33** | **Validé** | Suite complète `tests/security/test_persona_integrity.py` (10 tests au vert à 100 %). Suite `test_file_write_safety.py` (59 tests au vert). |
+| **CA3 - Détection en cours d'exécution & code stable** | **Validé** | Code stable `PER-INTEGRITY-004`. Tests `test_ca3_runtime_rogue_soul_detection_and_stable_event_code`, `test_ca3_startup_verify_rejects_rogue_soul`, `test_ca3_bind_mount_topology_legitimate_personas_not_flagged_rogue` et `test_ca3_bind_mount_tampered_or_undeclared_and_no_spaces_blind_spot`. |
+| **CA4 - Test de non-régression dédié** | **Validé** | Suite complète `tests/security/test_kan54_ambient_soul_fallback.py` (9 tests au vert à 100 %). |
+| **CA5 - Maintien du dispositif KAN-33** | **Validé** | Suite complète `tests/security/test_persona_integrity.py` (10 tests au vert à 100 %) + `test_ca5_entrypoint_preserves_kan33_targeted_purge_without_destructive_find_delete`. |
 | **CA6 - Limite résiduelle explicitée** | **Validé** | Voir Section 5 ci-après. |
 
 ---

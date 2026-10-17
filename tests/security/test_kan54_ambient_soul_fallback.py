@@ -263,3 +263,113 @@ def test_ca5_legitimate_files_not_blocked_by_guard():
     for path in allowed_paths:
         refusal = _check_sensitive_path(path)
         assert refusal is None, f"Le chemin légitime {path} ne doit pas être bloqué : {refusal}"
+
+
+def test_ca3_bind_mount_topology_legitimate_personas_not_flagged_rogue(isolated_kan54_env):
+    """CA3 / Topologie Bind-Mount Docker : En conteneur tenant, les personas légitimes sont montées
+    en bind-mount (:ro) sous data/hermes_home/profiles (et home/orso/.hermes/profiles) sous forme de
+    répertoires réels distincts de profiles/ (et non de liens symboliques).
+    Vérifie qu'aucun des 4 personas légitimes n'est déclaré rogue (0 faux positif Fail-Closed)
+    tout en détectant immédiatement un SOUL.md ambient illégitime."""
+    import shutil
+
+    p_dir = isolated_kan54_env["profiles_dir"]
+    l_file = isolated_kan54_env["lock_file"]
+    data_dir = isolated_kan54_env["data_dir"]
+    hermes_home = isolated_kan54_env["hermes_home"]
+    root = isolated_kan54_env["root"]
+
+    # Reproduction fidèle du bind-mount Docker (répertoire physique distinct, non symlink)
+    bind_mount_hermes_profiles = hermes_home / "profiles"
+    shutil.copytree(p_dir, bind_mount_hermes_profiles)
+    assert not bind_mount_hermes_profiles.is_symlink()
+
+    bind_mount_user_profiles = root / "home" / "orso" / ".hermes" / "profiles"
+    bind_mount_user_profiles.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(p_dir, bind_mount_user_profiles)
+    assert not bind_mount_user_profiles.is_symlink()
+
+    # 1. Aucun faux positif : les 4 personas montées en bind-mount concordent avec p_dir et personas.lock.json
+    rogues = find_rogue_personas(
+        profiles_dir=p_dir,
+        scan_roots=[data_dir, hermes_home, root / "home" / "orso" / ".hermes"],
+        lock_file=l_file,
+    )
+    assert rogues == [], f"Aucun persona légitime en bind-mount ne doit être déclaré rogue : {rogues}"
+
+    valid, errors, audits = verify_all_personas(
+        profiles_dir=p_dir,
+        lock_file=l_file,
+        record_logs=True,
+    )
+    assert valid is True, f"verify_all_personas doit réussir en topologie bind-mount : {errors}"
+    assert errors == []
+    assert len(audits) == 4
+    assert all(a["event_code"] == EVENT_OK for a in audits)
+
+    # 2. En présence du bind-mount légitime, l'ajout d'un SOUL.md ambient dans hermes_home est bien détecté
+    ambient_rogue = hermes_home / "SOUL.md"
+    ambient_rogue.write_text("# AMBIENT ROGUE INJECTION\n", encoding="utf-8")
+
+    valid_after, errors_after, audits_after = verify_all_personas(
+        profiles_dir=p_dir,
+        lock_file=l_file,
+        record_logs=True,
+    )
+    assert valid_after is False
+    assert len(errors_after) == 1
+    assert str(ambient_rogue) in errors_after[0]
+    assert any(a["event_code"] == EVENT_ROGUE_PERSONA_DETECTED for a in audits_after)
+
+
+def test_ca3_bind_mount_tampered_or_undeclared_and_no_spaces_blind_spot(isolated_kan54_env):
+    """CA3 : Vérifie que le support bind-mount ne crée aucun angle mort :
+    1. Un persona altéré dans le bind-mount (data/hermes_home/profiles/jerome/SOUL.md) est détecté rogue.
+    2. Un persona non déclaré dans le bind-mount (data/hermes_home/profiles/intruder/SOUL.md) est détecté rogue.
+    3. Un chemin data/spaces/<slug>/profiles/jerome/SOUL.md n'est jamais exempté aveuglément."""
+    import shutil
+
+    p_dir = isolated_kan54_env["profiles_dir"]
+    l_file = isolated_kan54_env["lock_file"]
+    data_dir = isolated_kan54_env["data_dir"]
+    hermes_home = isolated_kan54_env["hermes_home"]
+
+    bind_mount_profiles = hermes_home / "profiles"
+    shutil.copytree(p_dir, bind_mount_profiles)
+
+    # Cas 1 : Altération d'un persona dans le bind-mount
+    tampered_bind_soul = bind_mount_profiles / "jerome" / "SOUL.md"
+    orig_content = tampered_bind_soul.read_text(encoding="utf-8")
+    tampered_bind_soul.write_text("# TAMPERED IN BIND MOUNT\n", encoding="utf-8")
+    rogues_tampered = {f.resolve() for f in find_rogue_personas(profiles_dir=p_dir, lock_file=l_file)}
+    assert tampered_bind_soul.resolve() in rogues_tampered
+    # Restauration
+    tampered_bind_soul.write_text(orig_content, encoding="utf-8")
+
+    # Cas 2 : Agent non déclaré injecté dans le bind-mount
+    undeclared_dir = bind_mount_profiles / "intruder"
+    undeclared_dir.mkdir()
+    undeclared_soul = undeclared_dir / "SOUL.md"
+    undeclared_soul.write_text(orig_content, encoding="utf-8")
+    rogues_undeclared = {f.resolve() for f in find_rogue_personas(profiles_dir=p_dir, lock_file=l_file)}
+    assert undeclared_soul.resolve() in rogues_undeclared
+    shutil.rmtree(undeclared_dir)
+
+    # Cas 3 : Absence d'angle mort sur /spaces/<slug>/profiles/ (même avec contenu identique à jerome)
+    spaces_soul = data_dir / "spaces" / "evil-tenant" / "profiles" / "jerome" / "SOUL.md"
+    spaces_soul.parent.mkdir(parents=True)
+    spaces_soul.write_text(orig_content, encoding="utf-8")
+    rogues_spaces = {f.resolve() for f in find_rogue_personas(profiles_dir=p_dir, lock_file=l_file)}
+    assert spaces_soul.resolve() in rogues_spaces
+
+
+def test_ca5_entrypoint_preserves_kan33_targeted_purge_without_destructive_find_delete():
+    """CA5 : Vérifie que docker/orso-entrypoint.sh conserve la purge ciblée KAN-33 (rm -f sur
+    les emplacements racines de repli ambient) et ne contient pas de 'find ... -delete' récursif
+    sur /app/data susceptible de détruire des personas légitimes montées."""
+    entrypoint_path = Path(__file__).resolve().parents[2] / "docker" / "orso-entrypoint.sh"
+    content = entrypoint_path.read_text(encoding="utf-8")
+
+    assert "rm -f /app/data/hermes_home/SOUL.md /app/data/SOUL.md /home/orso/.hermes/SOUL.md" in content
+    assert "-delete" not in content
+
