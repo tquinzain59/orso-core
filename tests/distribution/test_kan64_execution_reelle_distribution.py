@@ -190,11 +190,20 @@ class TestKAN64ExecutionReelleDistribution:
 
     def test_ca5_calculated_client_data_counter(self, tmp_path):
         """CA5 : Le compteur de données client est calculé dynamiquement, jamais codé en dur."""
-        report = run_full_ca5_audit()
-        assert report["status"] == "PASSED"
-        metrics = report["metrics"]
-        assert isinstance(metrics["client_data_in_engine_count"], int)
-        assert metrics["client_data_in_engine_count"] == 0
+        clean_img_result = {
+            "secrets": [],
+            "client_data": [],
+            "errors": [],
+            "scanned_files_count": 10,
+            "scanned_paths": ["app/run_agent.py"],
+            "applicative_paths": ["app/run_agent.py"],
+        }
+        with patch("scripts.security.audit_zero_secrets_and_client_data.audit_docker_image_for_secrets_and_client_data", return_value=clean_img_result):
+            report = run_full_ca5_audit(image_ref="ghcr.io/tquinzain59/orso-engine:v1.0.0", require_image=True)
+            assert report["status"] == "PASSED"
+            metrics = report["metrics"]
+            assert isinstance(metrics["client_data_in_engine_count"], int)
+            assert metrics["client_data_in_engine_count"] == 0
 
         # Vérifie que si un artefact client résiduel est présent, le compteur l'incrémente
         with patch.object(Path, "glob") as mock_glob:
