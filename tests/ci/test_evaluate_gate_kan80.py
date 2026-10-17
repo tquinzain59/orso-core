@@ -1,7 +1,10 @@
 """Tests unitaires et d'acceptation pour scripts/ci/evaluate_gate.py (KAN-80).
 
-Valide formellement CA1 (aucun vert vide en cas d'annulation) et CA2 (nommage exhaustif
-des contrôles exécutés, sautés et annulés).
+Valide formellement :
+- CA1 : aucun vert vide en cas d'annulation (fail-closed immédiat code 1).
+- CA2 : nommage exhaustif des contrôles exécutés, sautés, annulés et requis.
+- Condition 5 (Jarvis) : fermeture formelle de la classe du vert vide via contrôles requis
+  (échec code 1 si un contrôle requis est sauté, y compris le cas 1 exécuté / 18 sautés).
 """
 
 from __future__ import annotations
@@ -98,8 +101,71 @@ def test_evaluate_gate_nominal_pass_ca2():
     assert any(expected_verdict in line for line in log_lines)
 
 
+def test_condition5_jarvis_one_executed_eighteen_skipped_fails_when_required_skipped():
+    """Condition 5 (Jarvis) : Cas mesuré où 1 contrôle a tourné et 18 sont sautés.
+    
+    Si des contrôles requis (ex: 'tests', 'lint' déduits ou spécifiés) sont sautés,
+    le verdict ne doit plus être passant (code retour 0) mais impérativement FAILED avec code retour 1.
+    """
+    # 1 contrôle exécuté (detect), 18 sautés
+    needs_data = {
+        "detect": {
+            "result": "success",
+            "outputs": {
+                "python": "true",  # La détection a classé python -> tests & lint requis !
+                "frontend": "false",
+            },
+        },
+        "tests": {"result": "skipped"},
+        "tests-os": {"result": "skipped"},
+        "lint": {"result": "skipped"},
+        "js-tests": {"result": "skipped"},
+        "installer-tests": {"result": "skipped"},
+        "rust-tests": {"result": "skipped"},
+        "e2e-desktop": {"result": "skipped"},
+        "docs-site": {"result": "skipped"},
+        "history-check": {"result": "skipped"},
+        "contributor-check": {"result": "skipped"},
+        "uv-lockfile": {"result": "skipped"},
+        "case-collision-check": {"result": "skipped"},
+        "lockfile-diff": {"result": "skipped"},
+        "docker-lint": {"result": "skipped"},
+        "profile-artifact-check": {"result": "skipped"},
+        "supply-chain": {"result": "skipped"},
+        "review-labels": {"result": "skipped"},
+        "osv-scanner": {"result": "skipped"},
+    }
+
+    exit_code, metrics, log_lines = evaluate_needs(needs_data)
+
+    assert exit_code == 1, "Le cas '1 exécuté / 18 sautés' avec des contrôles requis sautés DOIT échouer (code 1)"
+    assert len(metrics["required_skipped_jobs"]) >= 2
+    assert "tests" in metrics["required_skipped_jobs"]
+    assert "lint" in metrics["required_skipped_jobs"]
+    assert any("::error::Gate failed: required check(s) were skipped: " in line for line in log_lines)
+    assert any("Verdict: FAIL" in line for line in log_lines)
+
+
+def test_condition5_explicit_required_checks_fail_if_skipped():
+    """Condition 5 : Liste explicite de contrôles requis (CLI ou env)."""
+    needs_data = {
+        "detect": {"result": "success"},
+        "osv-scanner": {"result": "success"},
+        "tests": {"result": "skipped"},
+        "lint": {"result": "skipped"},
+    }
+
+    # Spécification explicite : tests et lint sont requis
+    exit_code, metrics, log_lines = evaluate_needs(needs_data, required_checks=["detect", "tests", "lint"])
+
+    assert exit_code == 1
+    assert "tests" in metrics["required_skipped_jobs"]
+    assert "lint" in metrics["required_skipped_jobs"]
+    assert any("tests" in line and "skipped" in line for line in log_lines)
+
+
 def test_evaluate_gate_cli_subprocess(tmp_path: Path):
-    """Test d'intégration E2E du script CLI via stdin et variables d'environnement GitHub."""
+    """Test d'intégration E2E du script CLI via stdin, flags CLI et variables d'environnement."""
     script_path = Path(__file__).resolve().parents[2] / "scripts" / "ci" / "evaluate_gate.py"
     github_output = tmp_path / "github_output.txt"
     github_summary = tmp_path / "step_summary.md"
@@ -136,7 +202,28 @@ def test_evaluate_gate_cli_subprocess(tmp_path: Path):
     assert "ÉCHEC (ANNULÉ)" in summary_content
     assert "Contrôles annulés" in summary_content
 
-    # Cas 2 : Succès nominal (doit sortir avec code 0)
+    # Cas 2 : Rejet via flag CLI --required (Condition 5)
+    github_output.unlink()
+    github_summary.unlink()
+
+    needs_partial = json.dumps({
+        "detect": {"result": "success"},
+        "tests": {"result": "skipped"},
+    })
+
+    proc_req = subprocess.run(
+        [sys.executable, str(script_path), "--required", "detect,tests"],
+        input=needs_partial,
+        text=True,
+        capture_output=True,
+        env=env,
+    )
+    assert proc_req.returncode == 1, "Un contrôle requis sauté passé par --required DOIT renvoyer le code 1"
+    assert "required check(s) were skipped: tests" in proc_req.stdout
+    summary_req = github_summary.read_text(encoding="utf-8")
+    assert "ÉCHEC (CONTRÔLE REQUIS SAUTÉ)" in summary_req
+
+    # Cas 3 : Succès nominal (doit sortir avec code 0)
     github_output.unlink()
     github_summary.unlink()
 
@@ -146,15 +233,66 @@ def test_evaluate_gate_cli_subprocess(tmp_path: Path):
         "lint": {"result": "skipped"},
     })
 
-    proc = subprocess.run(
-        [sys.executable, str(script_path)],
+    proc_success = subprocess.run(
+        [sys.executable, str(script_path), "--required", "detect,tests"],
         input=needs_success,
         text=True,
         capture_output=True,
         env=env,
     )
-    assert proc.returncode == 0
-    assert "Verdict: PASS — 2 executed (2 success, 0 failure), 1 skipped, 0 cancelled" in proc.stdout
+    assert proc_success.returncode == 0
+    assert "Verdict: PASS — 2 executed (2 success, 0 failure), 1 skipped, 0 cancelled" in proc_success.stdout
+    summary_success = github_summary.read_text(encoding="utf-8")
+    assert "PASS" in summary_success
 
-    summary_content = github_summary.read_text(encoding="utf-8")
-    assert "PASS" in summary_content
+
+def test_npm_lock_on_push_does_not_require_lockfile_diff():
+    """Sur un événement 'push' (où detect-changes ouvre toutes les voies dont npm_lock='true'),
+    le job 'lockfile-diff' n'est jamais déclenché dans ci.yaml (condition event_name == 'pull_request').
+    Il est donc légitimement 'skipped' et ne doit pas provoquer un faux positif FAIL.
+    """
+    needs_data = {
+        "detect": {
+            "result": "success",
+            "outputs": {
+                "event_name": "push",
+                "npm_lock": "true",
+                "python": "true",
+            },
+        },
+        "tests": {"result": "success"},
+        "lint": {"result": "success"},
+        "profile-artifact-check": {"result": "success"},
+        "lockfile-diff": {"result": "skipped"},
+    }
+
+    exit_code, metrics, log_lines = evaluate_needs(needs_data)
+
+    assert exit_code == 0, "Un push vers main avec npm_lock='true' et lockfile-diff='skipped' DOIT passer (code 0)"
+    assert "lockfile-diff" not in metrics["required"]
+    assert metrics["required_skipped_jobs"] == []
+    assert any("Verdict: PASS — 4 executed (4 success, 0 failure), 1 skipped, 0 cancelled" in line for line in log_lines)
+
+
+def test_npm_lock_on_pull_request_requires_lockfile_diff():
+    """Sur un événement 'pull_request' avec npm_lock='true', 'lockfile-diff' est requis
+    et son état 'skipped' doit faire échouer la porte en fail-closed (code 1).
+    """
+    needs_data = {
+        "detect": {
+            "result": "success",
+            "outputs": {
+                "event_name": "pull_request",
+                "npm_lock": "true",
+            },
+        },
+        "lockfile-diff": {"result": "skipped"},
+    }
+
+    exit_code, metrics, log_lines = evaluate_needs(needs_data)
+
+    assert exit_code == 1, "Une PR avec npm_lock='true' et lockfile-diff='skipped' DOIT échouer (code 1)"
+    assert "lockfile-diff" in metrics["required"]
+    assert "lockfile-diff" in metrics["required_skipped_jobs"]
+    assert any("required check(s) were skipped: lockfile-diff" in line for line in log_lines)
+
