@@ -257,24 +257,46 @@ class TestCommandCodeFetchModelsPickerContract:
         assert profile is not None
         assert "base_url" in inspect.signature(profile.fetch_models).parameters
 
-    def test_resolve_provider_full(self):
+    def test_resolve_provider_full(
+        self, commandcode_profile, commandcode_anthropic_profile, monkeypatch
+    ):
         """Both profiles must resolve through the model-switch path.
 
         Regression: ``resolve_provider_full`` only knew models.dev + overlay
         providers, so plugin-only providers (commandcode) failed with
         "Unknown provider" on /model switches even though the picker listed
-        them.
+        them. When models.dev later indexed ``commandcode`` with a conflicting
+        ``CMD_API_KEY`` env var, the plugin profile's ``env_vars`` must remain
+        the single source of truth.
         """
+        from agent.models_dev import ProviderInfo
         from hermes_cli.providers import resolve_provider_full
 
         chat = resolve_provider_full("commandcode", {}, [])
         assert chat is not None and chat.id == "commandcode"
         assert chat.transport == "openai_chat"
         assert "COMMANDCODE_API_KEY" in chat.api_key_env_vars
+        assert chat.api_key_env_vars == commandcode_profile.env_vars
 
         anth = resolve_provider_full("commandcode-anthropic", {}, [])
         assert anth is not None and anth.id == "commandcode-anthropic"
         assert anth.transport == "anthropic_messages"
+        assert anth.api_key_env_vars == commandcode_anthropic_profile.env_vars
+
+        monkeypatch.setattr(
+            "agent.models_dev.get_provider_info",
+            lambda cid, **kw: ProviderInfo(
+                id="commandcode",
+                name="CommandCode",
+                env=("CMD_API_KEY",),
+                api="https://api.commandcode.ai/provider/v1",
+            )
+            if cid == "commandcode"
+            else None,
+        )
+        chat_mdev = resolve_provider_full("commandcode", {}, [])
+        assert chat_mdev is not None
+        assert chat_mdev.api_key_env_vars == commandcode_profile.env_vars
 
 
 # ── base_url endpoint override ───────────────────────────────────────────────

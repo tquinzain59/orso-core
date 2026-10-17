@@ -189,6 +189,14 @@ def get_provider(name: str, *, allow_network: bool = True) -> Optional[ProviderD
     canonical = normalize_provider(name)
     mdev_info = _models_dev_info(canonical, allow_network)
     overlay = HERMES_OVERLAYS.get(canonical)
+    if mdev_info is not None and overlay is None:
+        try:
+            from providers import get_provider_profile as _profile
+            _prof = _profile(canonical)
+            if _prof is not None and _prof.env_vars and not any(ev in _prof.env_vars for ev in mdev_info.env):
+                mdev_info = None
+        except Exception:
+            pass
     if mdev_info is not None:
         ov = overlay or HermesOverlay()
         env_vars = list(mdev_info.env)
