@@ -200,3 +200,50 @@ $ git log --all --oneline -G'v1/charges|stripe\.Charge|stripe\.Token|createToken
 $ git show 3dbdb8704a | grep -nE "^\+.*tok_[a-z]+" | cut -c1-120
 1038:+            ("tok_alert_50h", "tenant-alert", "boss@alert.fr", old_time, old_time),
 ```
+
+## Complément du 2026-10-18 — rejeu des contrôles au HEAD `9a9e099a0c`
+
+Les recherches 4, 6, 7 et `STRIPE_TEST` du §3 ont été rejouées sur le HEAD courant de `KAN-91-auto`. Entre `c13b03698c` (analyse initiale) et `9a9e099a0c`, `git diff --stat` ne montre que l'ajout de ce rapport : le code n'a pas bougé et les conclusions tiennent.
+
+```text
+$ git diff --stat c13b03698c HEAD
+ docs/3_Technique/requalification_KAN-91.md | 202 +++++++++++++++++++++++++++++
+ 1 file changed, 202 insertions(+)
+
+$ git grep -nI 'api\.stripe\.com' -- . ':!website' ':!docs' ':!tests'
+hermes_cli/web_routers/client_ui.py:2390:    url = f"https://api.stripe.com/v1/{endpoint}"
+olympe/ops_manager.py:2895:        url = f"https://api.stripe.com/v1/{endpoint}"
+scripts/iam/bootstrap_stripe_products.py:55:    url = f"https://api.stripe.com/v1/{endpoint}"
+[rc=0]
+
+$ git grep -nIE 'v1/(charges|tokens|sources)|"(charges|tokens|sources)(\?|/)|stripe\.(Charge|Token|Source)|createToken\(|createSource|[" '\''](tok|src)_[A-Za-z0-9]{8,}|payment_method_data|card\[(number|cvc|exp)|"source":\s*"(tok|src)_' -- . ':!docs' ':!tests' ':!*package-lock.json' ':!uv.lock' ':!**/node_modules/**' ':!hermes_cli/tui_dist'
+hermes_cli/worktree_ops.py:247:                src_resolved = src.resolve(strict=False)
+olympe/lifecycle_manager.py:379:            src_profiles = (source_template_dir / "profiles") if source_template_dir else (project_root / "profiles")
+olympe/lifecycle_manager.py:380:            if src_profiles.is_dir():
+plugins/platforms/discord/adapter.py:910:    def pcm_to_wav(pcm_data: bytes, output_path: str, src_rate: int = 48000, src_channels: int = 2):
+[rc=0]
+  -> 4 faux positifs (variables `src_*`), aucun lien avec Stripe.
+
+$ git grep -nIE 'js\.stripe\.com|@stripe/|loadStripe|stripe\.elements|confirmSetup|confirmPayment|confirmCard|createPaymentMethod|stripe-js' -- . ':!docs' ':!website' ':!*package-lock.json' ':!uv.lock'
+optional-skills/payments/stripe-link-cli/SKILL.md:16:  (...Shared Payment Tokens (SPT)...)
+optional-skills/payments/stripe-link-cli/SKILL.md:49:  npm install -g @stripe/link-cli
+optional-skills/payments/stripe-link-cli/SKILL.md:52:  npx @stripe/link-cli
+optional-skills/payments/stripe-link-cli/SKILL.md:161:  @stripe/link-cli --mcp
+optional-skills/payments/stripe-link-cli/SKILL.md:164:  hermes mcp add stripe-link --command "npx" --args "@stripe/link-cli --mcp"
+[rc=0]
+  -> Skill optionnelle « Link CLI » (documentation seule, non active, aucun appel à `api.stripe.com`).
+     Les « Shared Payment Tokens » de Link ne sont pas l'API Tokens dépréciée. Aucun formulaire de carte.
+
+$ git grep -nI 'STRIPE_TEST' -- . ':!docs'
+[rc=1]
+
+$ git grep -nE '"(default_)?source"|default_source|\[source\]|source\[' -- olympe/ops_manager.py hermes_cli/web_routers/client_ui.py scripts/iam/bootstrap_stripe_products.py olympe/server.py
+[rc=1]
+  -> aucun champ `source` / `default_source` émis vers Stripe (la seule occurrence de `"card"` est une lecture : client_ui.py:2834).
+
+$ ruff check olympe/ops_manager.py olympe/server.py hermes_cli/web_routers/client_ui.py scripts/iam/bootstrap_stripe_products.py   # ruff 0.15.10
+All checks passed!
+[rc=0]
+```
+
+Écart avec l'analyse initiale : la recherche 7 élargie à tout le dépôt remonte la skill optionnelle `optional-skills/payments/stripe-link-cli` (non active, hors périmètre de l'alerte). Cela n'est pas une nouvelle piste.
