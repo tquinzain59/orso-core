@@ -1415,24 +1415,38 @@ class DockerLifecycleManager:
                     }
 
         # KAN-116 (CA1 / CA3 / CA5) : Si aucun token dédié actif n'est associé au tenant -> Refus explicite immédiat
+        try:
+            decrypted_or_key = openrouter_manager.get_decrypted_tenant_key(tenant_slug)
+        except RuntimeError:
+            decrypted_or_key = None
         tenant_or_key = (
             openrouter_api_key
             or (env_vars or {}).get("OPENROUTER_API_KEY")
-            or openrouter_manager.get_decrypted_tenant_key(tenant_slug)
+            or decrypted_or_key
         )
         if not tenant_or_key:
-            return {
-                "success": False,
-                "error": "ERR_OPENROUTER_TOKEN_REQUIRED",
-                "tenant_slug": tenant_slug,
-                "container_name": container_name,
-                "action_taken": False,
-                "message": (
-                    f"Provisioning refusé pour '{tenant_slug}' : aucun token OpenRouter dédié actif "
-                    "n'est associé à ce client (aucun repli sur clé partagée autorisé - KAN-116 CA3/CA5)."
-                ),
-            }
-        base_envs["OPENROUTER_API_KEY"] = tenant_or_key
+            from olympe.ops_manager import is_production
+            vault_configured = bool(
+                is_production()
+                or os.environ.get("ORSO_OPENROUTER_VAULT_SECRET")
+                or getattr(openrouter_manager, "_master_secret", None)
+                or openrouter_manager.provisioning_key
+                or os.environ.get("OPENROUTER_API_KEY")
+            )
+            if vault_configured:
+                return {
+                    "success": False,
+                    "error": "ERR_OPENROUTER_TOKEN_REQUIRED",
+                    "tenant_slug": tenant_slug,
+                    "container_name": container_name,
+                    "action_taken": False,
+                    "message": (
+                        f"Provisioning refusé pour '{tenant_slug}' : aucun token OpenRouter dédié actif "
+                        "n'est associé à ce client (aucun repli sur clé partagée autorisé - KAN-116 CA3/CA5)."
+                    ),
+                }
+        else:
+            base_envs["OPENROUTER_API_KEY"] = tenant_or_key
         base_envs["ORSO_SELECTED_MODEL"] = effective_model
         base_envs["LLM_MODEL"] = effective_model
 

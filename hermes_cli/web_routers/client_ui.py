@@ -714,16 +714,13 @@ def _get_tenant_selected_model(
         if env_model in VALID_MODEL_IDS:
             return env_model
     try:
-        import yaml
-        from hermes_constants import get_hermes_home
-        cfg_file = get_hermes_home() / "config.yaml"
-        if cfg_file.exists():
-            raw_cfg = yaml.safe_load(cfg_file.read_text(encoding="utf-8")) or {}
-            m_cfg = raw_cfg.get("model")
-            if isinstance(m_cfg, dict) and m_cfg.get("default") in VALID_MODEL_IDS:
-                return m_cfg["default"]
-            if isinstance(m_cfg, str) and m_cfg in VALID_MODEL_IDS:
-                return m_cfg
+        from hermes_cli.config import load_config_readonly
+        raw_cfg = load_config_readonly() or {}
+        m_cfg = raw_cfg.get("model")
+        if isinstance(m_cfg, dict) and m_cfg.get("default") in VALID_MODEL_IDS:
+            return m_cfg["default"]
+        if isinstance(m_cfg, str) and m_cfg in VALID_MODEL_IDS:
+            return m_cfg
     except Exception:
         pass
     return DEFAULT_TENANT_MODEL_ID
@@ -3615,14 +3612,10 @@ async def update_client_selected_model(
     # Synchronisation immédiate dans le HERMES_HOME local du conteneur s'il est présent (KAN-122 CA3)
     try:
         import yaml
-        from hermes_constants import get_hermes_home
-        h_cfg_path = get_hermes_home() / "config.yaml"
+        from hermes_cli.config import get_config_path, read_user_config_raw
+        h_cfg_path = get_config_path()
         h_cfg_path.parent.mkdir(parents=True, exist_ok=True)
-        existing_cfg: Dict[str, Any] = {}
-        if h_cfg_path.exists():
-            loaded = yaml.safe_load(h_cfg_path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict):
-                existing_cfg = loaded
+        existing_cfg: Dict[str, Any] = dict(read_user_config_raw(h_cfg_path) or {})
         if not isinstance(existing_cfg.get("model"), dict):
             existing_cfg["model"] = {}
         existing_cfg["model"]["provider"] = "openrouter"
