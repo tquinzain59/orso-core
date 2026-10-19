@@ -30,6 +30,17 @@ Mesures équivalentes faites à la main le même jour (06:02:54Z) : `GET /api/ol
 
 Le 404 de CA2 du 28/09 n'est donc plus reproductible. Le tenant ne peut pas être lu, et on ne peut pas dire s'il existe.
 
+**Re-mesure du 2026-10-19 (10:01Z)**, même commande, même fichier d'identifiants (valeurs non affichées). Résultat identique, code retour 1 :
+
+```text
+Mesure du 2026-10-19T10:01:29+00:00 sur https://ops.orso-agents.fr
+CA1  GET /api/olympe/ops/tenants/clientx-orso (jeton drone) -> HTTP 401 Jeton de session non autorisé.
+CA2  POST /api/olympe/ops/auth/login (compte client de test) -> HTTP 401 Échec d'authentification : Invalid login credentials
+Verdict : CA1 KO / CA2 KO
+```
+
+Aucune décision de Thibaut n'est intervenue entre le 17 et le 19/10 : le blocage est inchangé. Contrôle `ruff check` et `ruff format --check` sur le script rejoué le 19/10 : verts, code retour 0.
+
 ## 2. Ce qui a été fait
 
 - Ajout de [`scripts/recette_en_ligne_kan109.py`](../../scripts/recette_en_ligne_kan109.py). Il rejoue en lecture seule les mesures de CA1 et CA2 et distingue :
