@@ -12,6 +12,7 @@ import {
   ClientSession,
   ClientTheme,
   ClientThemeContext,
+  ModelsConsumptionResponse,
 } from '@/types';
 import { ORSO_AGENTS, SAMPLE_INTEGRATIONS, SAMPLE_CHANNELS } from '@/lib/data';
 
@@ -1045,5 +1046,84 @@ export async function downloadClientInvoice(invoiceId: string, invoiceNumber?: s
     throw err;
   }
 }
+
+// ── Modèles & Consommation (KAN-116 / KAN-122 / KAN-123) ────────────────────
+
+export async function fetchClientModelsConsumption(): Promise<ModelsConsumptionResponse> {
+  const base = getApiBaseUrl();
+  const res = await fetch(`${base}/api/client/models-consumption`, {
+    method: 'GET',
+    headers: {
+      'Accept': 'application/json',
+      ...getAuthHeaders(),
+    },
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.detail || `Erreur lecture Modèles & Consommation (${res.status})`);
+  }
+  return data;
+}
+
+export async function updateClientSelectedModel(modelId: string): Promise<ModelsConsumptionResponse> {
+  const base = getApiBaseUrl();
+  const res = await fetch(`${base}/api/client/models-consumption/model`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      ...getAuthHeaders(),
+    },
+    body: JSON.stringify({ model_id: modelId }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.detail || `Erreur sélection modèle (${res.status})`);
+  }
+  return data;
+}
+
+export async function updateClientConsumptionThreshold(payload: {
+  limit_usd?: number;
+  alert_threshold_pct?: number;
+}): Promise<ModelsConsumptionResponse> {
+  const base = getApiBaseUrl();
+  const res = await fetch(`${base}/api/client/models-consumption/threshold`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      ...getAuthHeaders(),
+    },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.detail || `Erreur mise à jour du seuil (${res.status})`);
+  }
+  return data;
+}
+
+export async function addClientConsumptionCredits(payload: {
+  amount_usd: number;
+  mode: 'one_shot' | 'monthly_subscription';
+}): Promise<ModelsConsumptionResponse> {
+  const base = getApiBaseUrl();
+  const res = await fetch(`${base}/api/client/models-consumption/credits`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      ...getAuthHeaders(),
+    },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.detail || `Erreur ajout de crédits (${res.status})`);
+  }
+  return data;
+}
+
 
 

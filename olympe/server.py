@@ -192,6 +192,22 @@ class ContactFormRequest(BaseModel):
     consent: bool = Field(False, description="Consentement RGPD obligatoire")
 
 
+class UpdateTenantModelRequest(BaseModel):
+    model_id: str = Field(..., description="Identifiant du modèle OpenRouter sélectionné (KAN-122)")
+
+
+class UpdateTenantConsumptionThresholdRequest(BaseModel):
+    limit_usd: Optional[float] = Field(None, description="Plafond de consommation en USD (KAN-116 / KAN-123)")
+    alert_threshold_pct: Optional[float] = Field(None, description="Seuil d'alerte en % du plafond (KAN-123)")
+
+
+class AddTenantCreditsRequest(BaseModel):
+    amount_usd: float = Field(..., description="Montant de crédits supplémentaires en USD (KAN-123)")
+    mode: str = Field("one_shot", description="Mode de facturation Stripe : 'one_shot' ou 'monthly_subscription'")
+    payment_method_id: Optional[str] = Field(None, description="Identifiant moyen de paiement Stripe (pm_...) optionnel")
+    wait_for_webhook: bool = Field(False, description="Si vrai, attend le webhook payment_intent.succeeded avant de créditer")
+
+
 # ── Endpoints Supervision & Cycle de Vie Conteneurs ──────────────────────────
 
 @app.get("/health")
@@ -264,6 +280,17 @@ async def suspend_tenant(tenant_slug: str, actor: Dict[str, Any] = Depends(requi
 async def provision_tenant(req: ProvisionRequest, admin: Dict[str, Any] = Depends(require_superadmin)):
     """Provisionne un nouvel environnement conteneurisé dédié pour un client (strictement superadmin - KAN-40 / KAN-58 / KAN-59)."""
     _log.info("Provisioning d'un nouvel environnement par admin %s : %s (%s)", admin.get("email"), req.tenant_slug, req.tenant_id)
+    if os.environ.get("ORSO_OPENROUTER_VAULT_SECRET") or getattr(ops_manager.openrouter_manager, "_master_secret", None):
+        existing_rec = ops_manager.openrouter_manager.load_tenant_secret_record(req.tenant_slug)
+        if not existing_rec or (
+            existing_rec.get("status") == "active"
+            and not ops_manager.openrouter_manager.get_decrypted_tenant_key(req.tenant_slug)
+        ):
+            ops_manager.ensure_tenant_openrouter_token(
+                tenant_id=req.tenant_id,
+                tenant_slug=req.tenant_slug,
+                allow_simulated=not ops_manager.is_production,
+            )
     res = manager.provision_tenant(
         tenant_id=req.tenant_id,
         tenant_slug=req.tenant_slug,
@@ -524,9 +551,12 @@ async def get_tenant(tenant_id: str, actor: Dict[str, Any] = Depends(require_ops
 
 @app.delete("/api/olympe/ops/tenants/{tenant_id}")
 async def delete_tenant(tenant_id: str, actor: Dict[str, Any] = Depends(require_ops_actor("tenants:teardown:sandbox"))):
-    """Détruit proprement et de manière idempotente un tenant (restreint au périmètre sandbox - L3/CA2)."""
+    """Détruit proprement et de manière idempotente un tenant (restreint au périmètre sandbox - L3/CA2, KAN-116 CA5)."""
     check_sandbox_tenant_access(actor, tenant_id, ops_mgr=ops_manager)
-    return ops_manager.delete_tenant(tenant_id)
+    try:
+        return ops_manager.delete_tenant(tenant_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @app.post("/api/olympe/ops/tenants/{tenant_id}/agents")
@@ -547,13 +577,107 @@ async def update_agents(tenant_id: str, req: UpdateAgentsRequest, actor: Dict[st
 
 @app.post("/api/olympe/ops/tenants/{tenant_id}/subscription")
 async def update_subscription(tenant_id: str, req: UpdateSubscriptionRequest, admin: Dict[str, Any] = Depends(require_superadmin)):
-    """Met à jour le plan d'abonnement Stripe (strictement réservé au superadmin humain - CA3)."""
-    res = ops_manager.update_tenant_subscription(
-        tenant_id=tenant_id,
-        tier_id=req.tier_id,
-        status=req.status or "active",
+    """Met à jour le plan d'abonnement Stripe (strictement réservé au superadmin humain - CA3, KAN-116 CA5)."""
+    try:
+        res = ops_manager.update_tenant_subscription(
+            tenant_id=tenant_id,
+            tier_id=req.tier_id,
+            status=req.status or "active",
+        )
+        return res
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/api/olympe/ops/models/catalog")
+async def get_models_catalog(actor: Dict[str, Any] = Depends(require_ops_actor("tenants:read"))):
+    """Retourne le catalogue officiel des modèles LLM sélectionnables par les clients (KAN-122 CA1)."""
+    from olympe.openrouter_client import get_models_catalog as _get_catalog, DEFAULT_TENANT_MODEL_ID
+    return {
+        "default_model": DEFAULT_TENANT_MODEL_ID,
+        "models": _get_catalog(),
+    }
+
+
+@app.get("/api/olympe/ops/tenants/{tenant_id}/llm-settings")
+async def get_tenant_llm_settings_endpoint(tenant_id: str, actor: Dict[str, Any] = Depends(require_ops_actor("tenants:read"))):
+    """Retourne l'état Modèle, Consommation, Seuil et Token OpenRouter masqué d'un client (KAN-116 / KAN-122 / KAN-123)."""
+    check_sandbox_tenant_access(actor, tenant_id, ops_mgr=ops_manager)
+    return ops_manager.get_tenant_llm_settings(tenant_id)
+
+
+@app.post("/api/olympe/ops/tenants/{tenant_id}/model")
+async def update_tenant_model_endpoint(tenant_id: str, req: UpdateTenantModelRequest, admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Modifie le modèle LLM sélectionné pour l'organisation cliente (KAN-122 CA2)."""
+    try:
+        return ops_manager.update_tenant_model(tenant_id, req.model_id, actor=admin)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/olympe/ops/tenants/{tenant_id}/consumption-threshold")
+async def update_tenant_consumption_threshold_endpoint(
+    tenant_id: str,
+    req: UpdateTenantConsumptionThresholdRequest,
+    admin: Dict[str, Any] = Depends(require_superadmin),
+):
+    """Modifie le plafond de consommation (USD) et/ou le seuil d'alerte (%) d'un client depuis OPS (KAN-116 CA6 / KAN-123 CA4)."""
+    try:
+        return ops_manager.update_tenant_consumption_threshold(
+            tenant_id,
+            limit_usd=req.limit_usd,
+            alert_threshold_pct=req.alert_threshold_pct,
+            actor=admin,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.post("/api/olympe/ops/tenants/{tenant_id}/credits")
+async def add_tenant_credits_ops_endpoint(
+    tenant_id: str,
+    req: AddTenantCreditsRequest,
+    admin: Dict[str, Any] = Depends(require_superadmin),
+):
+    """Ajoute des crédits de consommation pour un client via Stripe (one_shot ou monthly_subscription) (KAN-123 CA5)."""
+    try:
+        return ops_manager.add_tenant_credits(
+            tenant_id,
+            amount_usd=req.amount_usd,
+            mode=req.mode,
+            actor=admin,
+            payment_method_id=req.payment_method_id,
+            wait_for_webhook=req.wait_for_webhook,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=402, detail=str(e))
+
+
+@app.post("/api/olympe/ops/tenants/{tenant_id}/openrouter/provision")
+async def provision_tenant_openrouter_token_endpoint(tenant_id: str, admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Crée ou renouvelle le token OpenRouter dédié d'un client (KAN-116 CA1)."""
+    detail = ops_manager.get_tenant_detail(tenant_id)
+    actual_id = detail["id"] if detail else tenant_id
+    actual_slug = (detail.get("slug") if detail else None) or tenant_id
+    return ops_manager.ensure_tenant_openrouter_token(
+        tenant_id=actual_id,
+        tenant_slug=actual_slug,
+        allow_simulated=not ops_manager.is_production,
     )
-    return res
+
+
+@app.post("/api/olympe/ops/tenants/{tenant_id}/openrouter/revoke")
+async def revoke_tenant_openrouter_token_endpoint(tenant_id: str, admin: Dict[str, Any] = Depends(require_superadmin)):
+    """Révoque immédiatement le token OpenRouter d'un client (KAN-116 CA5)."""
+    try:
+        return ops_manager.revoke_tenant_openrouter_token(tenant_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
 
 
 @app.get("/api/olympe/ops/tenants/{tenant_id}/users")
@@ -626,7 +750,10 @@ async def stripe_webhook(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Payload JSON invalide")
 
-    return ops_manager.handle_stripe_webhook(payload)
+    try:
+        return ops_manager.handle_stripe_webhook(payload)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @app.get("/api/olympe/ops/webhooks/deliveries")
@@ -750,6 +877,18 @@ async def provision_onboarding_order(tenant_id: str, admin: Dict[str, Any] = Dep
         # Détermination du forfait client pour application des quotas matériels (KAN-59)
         sub_info = tenant_detail.get("subscription", {})
         client_tier = sub_info.get("tier_id") or "1_agent"
+
+        if os.environ.get("ORSO_OPENROUTER_VAULT_SECRET") or getattr(ops_manager.openrouter_manager, "_master_secret", None):
+            existing_rec = ops_manager.openrouter_manager.load_tenant_secret_record(tenant_slug)
+            if not existing_rec or (
+                existing_rec.get("status") == "active"
+                and not ops_manager.openrouter_manager.get_decrypted_tenant_key(tenant_slug)
+            ):
+                ops_manager.ensure_tenant_openrouter_token(
+                    tenant_id=actual_tenant_id,
+                    tenant_slug=tenant_slug or actual_tenant_id,
+                    allow_simulated=not ops_manager.is_production,
+                )
 
         # Déclenchement du provisioning physique Docker
         prov_res = manager.provision_tenant(

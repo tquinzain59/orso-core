@@ -163,12 +163,28 @@ def test_provision_tenant(tmp_path):
                 assert res_no_hmac["error"] == "ERR_HMAC_KEY_REQUIRED"
                 assert "ORSO_PERSONA_HMAC_KEY est strictement requise" in res_no_hmac["message"]
 
-                # 2. Avec digest valide et clé HMAC : succès
+                # 1ter. Sans token OpenRouter dédié (même avec clé ambiante) : refus ERR_OPENROUTER_TOKEN_REQUIRED (KAN-116 CA5)
+                with patch.dict("os.environ", {"OPENROUTER_API_KEY": "sk-or-v1-ambient-shared-forbidden"}):
+                    res_no_or = manager.provision_tenant(
+                        tenant_id="test-uuid",
+                        tenant_slug="client-no-or",
+                        image_digest="sha256:d8a5f82c448bb95b28a9b49b43e8b0b8c6e07eb4838a1f2987a123456789abcd",
+                        persona_hmac_key="mock-fleet-hmac-key",
+                        env_vars={
+                            "HERMES_DASHBOARD_BASIC_AUTH_USERNAME": "admin",
+                            "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD": "testpassword",
+                        },
+                    )
+                assert res_no_or["success"] is False
+                assert res_no_or["error"] == "ERR_OPENROUTER_TOKEN_REQUIRED"
+
+                # 2. Avec digest valide, clé HMAC et token OpenRouter dédié : succès
                 res = manager.provision_tenant(
                     tenant_id="test-uuid",
                     tenant_slug="nouveau-client",
                     image_digest="sha256:d8a5f82c448bb95b28a9b49b43e8b0b8c6e07eb4838a1f2987a123456789abcd",
                     persona_hmac_key="mock-fleet-hmac-key",
+                    openrouter_api_key="sk-or-v1-dedicated-nouveau-client",
                     env_vars={
                         "HERMES_DASHBOARD_BASIC_AUTH_USERNAME": "admin",
                         "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD": "testpassword",

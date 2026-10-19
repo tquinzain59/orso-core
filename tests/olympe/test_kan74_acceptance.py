@@ -140,6 +140,7 @@ def test_kan74_ca4_all_four_lifecycle_routes_explicitly_name_mode_and_action_tak
 
     # 4. Route de provisioning : POST /api/olympe/tenants/provision
     # Hors production :
+    monkeypatch.setenv("ORSO_OPENROUTER_VAULT_SECRET", "test-vault-secret-kan74-0123456789abcdef")
     prov_payload = {
         "tenant_id": "test-new-client",
         "tenant_slug": "nouveau-client",

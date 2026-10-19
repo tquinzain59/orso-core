@@ -83,6 +83,34 @@ fi
 echo "==> [Orso Entrypoint] HERMES_HOME configuré sur : $HERMES_HOME"
 echo "==> [Orso Entrypoint] HERMES_CONFIG_PATH : $HERMES_CONFIG_PATH"
 
+# 4a. Synchronisation du modèle LLM sélectionné par le client (KAN-122 CA3)
+SELECTED_MODEL="${ORSO_SELECTED_MODEL:-${LLM_MODEL:-}}"
+if [ -n "$SELECTED_MODEL" ]; then
+    echo "==> [Orso Entrypoint] Application du modèle LLM client aux agents autonomes : $SELECTED_MODEL"
+    python3 -c '
+import os, pathlib, yaml
+model_id = (os.environ.get("ORSO_SELECTED_MODEL") or os.environ.get("LLM_MODEL") or "").strip()
+if model_id:
+    for p_str in (os.environ.get("HERMES_CONFIG_PATH", "/app/config/hermes.yaml"), os.path.join(os.environ.get("HERMES_HOME", "/app/data/hermes_home"), "config.yaml")):
+        p = pathlib.Path(p_str)
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            data = yaml.safe_load(p.read_text(encoding="utf-8")) if p.exists() else {}
+            if not isinstance(data, dict):
+                data = {}
+            if not isinstance(data.get("model"), dict):
+                data["model"] = {}
+            data["model"]["provider"] = "openrouter"
+            data["model"]["default"] = model_id
+            p.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        except Exception:
+            pass
+' 2>/dev/null || true
+    if [ "$(id -u)" = "0" ]; then
+        chown orso:orso "$HERMES_HOME/config.yaml" "$HERMES_CONFIG_PATH" 2>/dev/null || true
+    fi
+fi
+
 # 4bis. Contrôle d'intégrité cryptographique des personas (KAN-33, KAN-54)
 # Purge préventive ciblée des seuls emplacements racines de repli ambient (KAN-33) sans toucher aux sous-arborescences profiles/ montées
 rm -f /app/data/hermes_home/SOUL.md /app/data/SOUL.md /home/orso/.hermes/SOUL.md ./data/hermes_home/SOUL.md ./data/SOUL.md 2>/dev/null || true

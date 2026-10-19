@@ -52,6 +52,7 @@ def test_kan58_ca1_no_shared_host_directories(tmp_path):
                 test_auth = {
                     "HERMES_DASHBOARD_BASIC_AUTH_USERNAME": "admin",
                     "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD": "testpassword123",
+                    "OPENROUTER_API_KEY": "sk-or-v1-dedicated-kan58",
                 }
                 # Provisionner 3 clients distincts (alpha, beta, gamma)
                 res_a = manager.provision_tenant(
@@ -163,6 +164,7 @@ def test_kan58_ca3_profile_mount_convergence(tmp_path):
                     tenant_slug="client-single-source",
                     allow_floating_tag=True,
                     persona_hmac_key="key-hmac",
+                    openrouter_api_key="sk-or-v1-dedicated-kan58",
                     env_vars={
                         "HERMES_DASHBOARD_BASIC_AUTH_USERNAME": "admin",
                         "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD": "testpassword123",
@@ -255,6 +257,7 @@ def test_kan58_legacy_fallback_mounts(tmp_path, monkeypatch):
                     tenant_slug="client-legacy",
                     allow_floating_tag=True,
                     persona_hmac_key="key-hmac",
+                    openrouter_api_key="sk-or-v1-dedicated-kan58",
                     use_dedicated_space=False,
                     env_vars={
                         "HERMES_DASHBOARD_BASIC_AUTH_USERNAME": "admin",
@@ -453,6 +456,7 @@ def test_kan58_dashboard_auth_strictly_required_no_fallback(tmp_path):
                     tenant_slug="client-auth-ok",
                     allow_floating_tag=True,
                     persona_hmac_key="key-hmac",
+                    openrouter_api_key="sk-or-v1-dedicated-kan58",
                     env_vars={
                         "HERMES_DASHBOARD_BASIC_AUTH_USERNAME": "ops_user",
                         "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD": "ephemeral_secret_123",

@@ -343,14 +343,32 @@ class DockerLifecycleManager:
         """Retourne le chemin vers le dossier d'espace d'agents propre au client (KAN-58)."""
         return (self.spaces_root / tenant_slug).resolve()
 
+    def prepare_tenant_space(
+        self,
+        tenant_slug: str,
+        source_template_dir: Optional[Path] = None,
+        selected_model: Optional[str] = None,
+    ) -> Path:
+        """Prépare et retourne le dossier d'espace d'agents propre au client."""
+        space_dir = self.get_tenant_space_dir(tenant_slug)
+        self._initialize_tenant_space(
+            tenant_slug=tenant_slug,
+            target_space_dir=space_dir,
+            source_template_dir=source_template_dir,
+            selected_model=selected_model,
+        )
+        return space_dir
+
     def _initialize_tenant_space(
         self,
         tenant_slug: str,
         target_space_dir: Path,
         source_template_dir: Optional[Path] = None,
+        selected_model: Optional[str] = None,
     ) -> None:
         """Initialise l'arborescence de l'espace d'agents propre au client (config, skills, profiles).
-        Garantit que chaque client dispose de sa propre copie isolée sans partage d'hôte (KAN-58).
+        Garantit que chaque client dispose de sa propre copie isolée sans partage d'hôte (KAN-58)
+        et injecte le modèle LLM sélectionné par le tenant dans la configuration des agents (KAN-122 CA3).
         """
         target_space_dir.mkdir(parents=True, exist_ok=True)
         project_root = Path(__file__).resolve().parent.parent
@@ -378,9 +396,125 @@ class DockerLifecycleManager:
         if not dest_profiles.exists():
             src_profiles = (source_template_dir / "profiles") if source_template_dir else (project_root / "profiles")
             if src_profiles.is_dir():
-                shutil.copytree(src_profiles, dest_profiles)
+                shutil.copytree(
+                    src_profiles,
+                    dest_profiles,
+                    ignore=shutil.ignore_patterns("*.db-wal", "*.db-shm", "state.db", "__pycache__"),
+                )
             else:
                 dest_profiles.mkdir(parents=True, exist_ok=True)
+
+        # 4. Application du modèle sélectionné par le client dans l'espace d'agents dédié (KAN-122 CA3)
+        self.apply_selected_model_to_tenant_space(
+            tenant_slug=tenant_slug,
+            selected_model=selected_model,
+            space_dir=target_space_dir,
+        )
+
+    def resolve_tenant_selected_model(
+        self,
+        tenant_slug: str,
+        explicit_model: Optional[str] = None,
+    ) -> str:
+        """Résout le modèle LLM actif d'un client depuis la base Olympe ou le défaut frugal (KAN-122 CA3)."""
+        from olympe.openrouter_client import DEFAULT_TENANT_MODEL_ID, is_valid_tenant_model
+
+        if explicit_model and is_valid_tenant_model(explicit_model):
+            return explicit_model.strip()
+        try:
+            from olympe.server import ops_manager as srv_ops
+            settings = srv_ops.get_tenant_llm_settings(tenant_slug)
+            cand = (settings or {}).get("selected_model")
+            if cand and is_valid_tenant_model(cand):
+                return cand.strip()
+        except Exception:
+            pass
+        return DEFAULT_TENANT_MODEL_ID
+
+    @staticmethod
+    def _write_model_into_yaml_file(yaml_path: Path, model_id: str) -> bool:
+        """Met à jour model.provider=openrouter et model.default=<model_id> dans un fichier YAML."""
+        import yaml
+
+        yaml_path.parent.mkdir(parents=True, exist_ok=True)
+        orig_mode = None
+        if yaml_path.exists():
+            try:
+                orig_mode = yaml_path.stat().st_mode
+                if not (orig_mode & 0o200):
+                    os.chmod(yaml_path, orig_mode | 0o200)
+            except Exception:
+                pass
+        try:
+            data: Dict[str, Any] = {}
+            if yaml_path.is_file():
+                raw_txt = yaml_path.read_text(encoding="utf-8")
+                loaded = yaml.safe_load(raw_txt)
+                if isinstance(loaded, dict):
+                    data = loaded
+            model_sec = data.get("model")
+            if not isinstance(model_sec, dict):
+                model_sec = {}
+            model_sec["provider"] = "openrouter"
+            model_sec["default"] = model_id
+            data["model"] = model_sec
+            yaml_path.write_text(
+                yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
+                encoding="utf-8",
+            )
+            return True
+        except Exception as e:
+            _log.warning("Impossible de mettre à jour le modèle dans %s : %s", yaml_path, e)
+            return False
+        finally:
+            if orig_mode is not None and yaml_path.exists():
+                try:
+                    os.chmod(yaml_path, orig_mode)
+                except Exception:
+                    pass
+
+    def apply_selected_model_to_tenant_space(
+        self,
+        tenant_slug: str,
+        selected_model: Optional[str] = None,
+        space_dir: Optional[Path] = None,
+        data_dir: Optional[Path] = None,
+    ) -> Dict[str, Any]:
+        """Injecte le modèle sélectionné par le client dans les configurations conteneurisées des agents (KAN-122 CA3).
+
+        Met à jour :
+        1. `<space_dir>/config/hermes.yaml`
+        2. `<space_dir>/profiles/*/config.yaml` (Jérôme, Lucas, Clara, Victor)
+        3. `<data_dir>/hermes_home/config.yaml` (HERMES_HOME monté dans le conteneur)
+        """
+        effective_model = self.resolve_tenant_selected_model(tenant_slug, selected_model)
+        target_space = Path(space_dir).resolve() if space_dir else self.get_tenant_space_dir(tenant_slug)
+        target_data = Path(data_dir).resolve() if data_dir else (self.data_root / tenant_slug).resolve()
+        updated_files: List[str] = []
+
+        if target_space.is_dir():
+            hermes_yaml = target_space / "config" / "hermes.yaml"
+            if self._write_model_into_yaml_file(hermes_yaml, effective_model):
+                updated_files.append(str(hermes_yaml))
+
+            profiles_dir = target_space / "profiles"
+            if profiles_dir.is_dir():
+                for prof_dir in sorted(profiles_dir.iterdir()):
+                    if prof_dir.is_dir():
+                        prof_cfg = prof_dir / "config.yaml"
+                        if prof_cfg.is_file() or (prof_dir / "SOUL.md").is_file():
+                            if self._write_model_into_yaml_file(prof_cfg, effective_model):
+                                updated_files.append(str(prof_cfg))
+
+        hh_cfg = target_data / "hermes_home" / "config.yaml"
+        if self._write_model_into_yaml_file(hh_cfg, effective_model):
+            updated_files.append(str(hh_cfg))
+
+        return {
+            "tenant_slug": tenant_slug,
+            "selected_model": effective_model,
+            "updated_files": updated_files,
+        }
 
     def backup_tenant_space(self, tenant_slug: str, backup_tag: Optional[str] = None) -> Path:
         """Crée une sauvegarde horodatée de l'espace d'agents propre d'un client."""
@@ -854,6 +988,23 @@ class DockerLifecycleManager:
     def wake_tenant(self, tenant_slug: str, wait_healthy: bool = True, timeout: float = 12.0) -> Dict[str, Any]:
         """Réveille un conteneur en veille (docker start) et attend sa disponibilité."""
         container_name = normalize_container_name(tenant_slug)
+
+        try:
+            from olympe.openrouter_client import openrouter_manager
+            or_rec = openrouter_manager.load_tenant_secret_record(tenant_slug)
+            if or_rec and (or_rec.get("status") != "active" or or_rec.get("disabled")):
+                return {
+                    "success": False,
+                    "error": "ERR_OPENROUTER_TOKEN_REVOKED",
+                    "tenant_slug": tenant_slug,
+                    "status": "revoked",
+                    "simulated": False,
+                    "action_taken": False,
+                    "message": f"Impossible de réveiller {container_name} : le token OpenRouter dédié du client est révoqué ou désactivé (KAN-116 CA5).",
+                }
+        except Exception:
+            pass
+
         status_info = self.get_tenant_status(tenant_slug)
 
         if status_info.get("status") == "not_found":
@@ -1038,6 +1189,8 @@ class DockerLifecycleManager:
         artifact_version: Optional[str] = None,
         artifact_digest: Optional[str] = None,
         tenant_port: Optional[int] = None,
+        openrouter_api_key: Optional[str] = None,
+        selected_model: Optional[str] = None,
     ) -> Dict[str, Any]:
         container_name = normalize_container_name(tenant_slug)
 
@@ -1136,14 +1289,23 @@ class DockerLifecycleManager:
                 ),
             }
 
+        # KAN-122 (CA3) : Résolution du modèle sélectionné par le client pour injection dans les agents conteneurisés
+        effective_model = self.resolve_tenant_selected_model(
+            tenant_slug=tenant_slug,
+            explicit_model=selected_model or (env_vars or {}).get("ORSO_SELECTED_MODEL"),
+        )
+
         base_envs = {
             "ORSO_CLIENT_ID": tenant_id,
             "ORSO_CLIENT_SLUG": tenant_slug,
             "HERMES_CONFIG_PATH": "/app/config/hermes.yaml",
             "HERMES_HOME": "/app/data/hermes_home",
             "ORSO_PERSONA_HMAC_KEY": effective_hmac_key,
+            "ORSO_SELECTED_MODEL": effective_model,
+            "LLM_MODEL": effective_model,
         }
-        for key in ["OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY"]:
+        # KAN-116 (CA3 / CA5) : Interdiction formelle d'injecter une clé OPENROUTER_API_KEY partagée ambiante.
+        for key in ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY"]:
             val = os.environ.get(key)
             if val:
                 base_envs[key] = val
@@ -1160,6 +1322,44 @@ class DockerLifecycleManager:
         if env_vars:
             base_envs.update(env_vars)
 
+        # ── Validation stricte d'authentification dashboard (Refus explicite sans secret committé - KAN-58) ──
+        if self.has_docker:
+            dashboard_user = base_envs.get("HERMES_DASHBOARD_BASIC_AUTH_USERNAME")
+            dashboard_secret = (
+                base_envs.get("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD")
+                or base_envs.get("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH")
+            )
+            if not (dashboard_user and dashboard_secret):
+                return {
+                    "success": False,
+                    "error": "ERR_DASHBOARD_AUTH_REQUIRED",
+                    "tenant_slug": tenant_slug,
+                    "container_name": container_name,
+                    "mode": "containerized",
+                    "action_taken": False,
+                    "message": (
+                        "Provisioning refusé : authentification dashboard manquante. "
+                        "HERMES_DASHBOARD_BASIC_AUTH_USERNAME et (HERMES_DASHBOARD_BASIC_AUTH_PASSWORD ou HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH) "
+                        "doivent être explicitement fournis (aucun secret de repli par défaut dans le code)."
+                    ),
+                }
+
+        # KAN-116 (CA5) : Si le token OpenRouter du tenant est révoqué ou désactivé -> Refus explicite immédiat
+        from olympe.openrouter_client import openrouter_manager
+
+        or_rec = openrouter_manager.load_tenant_secret_record(tenant_slug)
+        if or_rec and (or_rec.get("status") != "active" or or_rec.get("disabled")):
+            return {
+                "success": False,
+                "error": "ERR_OPENROUTER_TOKEN_REVOKED",
+                "tenant_slug": tenant_slug,
+                "container_name": container_name,
+                "action_taken": False,
+                "message": (
+                    f"Provisioning refusé pour '{tenant_slug}' : le token OpenRouter dédié du client "
+                    "est révoqué ou désactivé (KAN-116 CA5)."
+                ),
+            }
 
         # ── Quotas de Ressources & Contrôle d'Admission de l'Hôte (KAN-59 / CA1 / CA2 / CA4) ──
         effective_quotas = get_quotas_for_tier(tier_id=tier_id, overrides=quotas)
@@ -1214,7 +1414,53 @@ class DockerLifecycleManager:
                         "message": "Provisioning refusé : les montages partagés legacy sont formellement proscrits en environnement de production (KAN-58). L'espace d'agents dédié est obligatoire.",
                     }
 
-            simulated_space_dir = str(Path(custom_space_dir).resolve() if custom_space_dir else self.get_tenant_space_dir(tenant_slug)) if not legacy_shared else None
+        # KAN-116 (CA1 / CA3 / CA5) : Si aucun token dédié actif n'est associé au tenant -> Refus explicite immédiat
+        try:
+            decrypted_or_key = openrouter_manager.get_decrypted_tenant_key(tenant_slug)
+        except RuntimeError:
+            decrypted_or_key = None
+        tenant_or_key = (
+            openrouter_api_key
+            or (env_vars or {}).get("OPENROUTER_API_KEY")
+            or decrypted_or_key
+        )
+        if not tenant_or_key:
+            from olympe.ops_manager import is_production
+            vault_configured = bool(
+                is_production()
+                or os.environ.get("ORSO_OPENROUTER_VAULT_SECRET")
+                or getattr(openrouter_manager, "_master_secret", None)
+                or openrouter_manager.provisioning_key
+                or os.environ.get("OPENROUTER_API_KEY")
+            )
+            if vault_configured:
+                return {
+                    "success": False,
+                    "error": "ERR_OPENROUTER_TOKEN_REQUIRED",
+                    "tenant_slug": tenant_slug,
+                    "container_name": container_name,
+                    "action_taken": False,
+                    "message": (
+                        f"Provisioning refusé pour '{tenant_slug}' : aucun token OpenRouter dédié actif "
+                        "n'est associé à ce client (aucun repli sur clé partagée autorisé - KAN-116 CA3/CA5)."
+                    ),
+                }
+        else:
+            base_envs["OPENROUTER_API_KEY"] = tenant_or_key
+        base_envs["ORSO_SELECTED_MODEL"] = effective_model
+        base_envs["LLM_MODEL"] = effective_model
+
+        if not self.has_docker:
+            sim_space_path = (Path(custom_space_dir).resolve() if custom_space_dir else self.get_tenant_space_dir(tenant_slug)) if not legacy_shared else None
+            if sim_space_path is not None and not artifact_version:
+                self._initialize_tenant_space(tenant_slug, sim_space_path, selected_model=effective_model)
+            self.apply_selected_model_to_tenant_space(
+                tenant_slug=tenant_slug,
+                selected_model=effective_model,
+                space_dir=sim_space_path,
+                data_dir=tenant_data_dir,
+            )
+            simulated_space_dir = str(sim_space_path) if sim_space_path else None
             simulated_artifact_digest = None
             if artifact_version:
                 sim_manifest = self.artifact_manager.get_artifact_manifest(tenant_slug, artifact_version)
@@ -1225,6 +1471,7 @@ class DockerLifecycleManager:
                 "tenant_slug": tenant_slug,
                 "quotas": effective_quotas,
                 "tier_id": tier_id or "1_agent",
+                "selected_model": effective_model,
                 "artifact_version": artifact_version,
                 "artifact_digest": simulated_artifact_digest,
                 "created_at": datetime.now(timezone.utc).isoformat(),
@@ -1239,6 +1486,7 @@ class DockerLifecycleManager:
                 "action_taken": False,
                 "image": target_image,
                 "digest": effective_digest or None,
+                "selected_model": effective_model,
                 "artifact_version": artifact_version,
                 "artifact_digest": simulated_artifact_digest,
                 "quotas": effective_quotas,
@@ -1264,6 +1512,7 @@ class DockerLifecycleManager:
             "--label", "com.orso.role=client_backend",
             "--label", f"com.orso.created_at={now_iso}",
             "--label", f"com.orso.engine.image={target_image}",
+            "--label", f"com.orso.llm.model={effective_model}",
             *(["--label", f"com.orso.engine.digest={effective_digest}", "--label", "com.orso.engine.pinned=true"] if effective_digest else []),
             "-v", f"{tenant_data_dir}:/app/data",
         ]
@@ -1323,6 +1572,12 @@ class DockerLifecycleManager:
                 if p.is_dir():
                     run_args.extend(["-v", f"{p}:/app/{shared_dir}:ro"])
             tenant_space_dir = None
+            self.apply_selected_model_to_tenant_space(
+                tenant_slug=tenant_slug,
+                selected_model=effective_model,
+                space_dir=None,
+                data_dir=tenant_data_dir,
+            )
         else:
             # Mode KAN-58 / KAN-60 : Espace d'agents propre et hermétique à chaque client
             tenant_space_dir = Path(custom_space_dir).resolve() if custom_space_dir else self.get_tenant_space_dir(tenant_slug)
@@ -1339,7 +1594,15 @@ class DockerLifecycleManager:
                 applied_artifact_version = artifact_version
                 applied_artifact_digest = deploy_res.get("fingerprint")
             else:
-                self._initialize_tenant_space(tenant_slug, tenant_space_dir)
+                self._initialize_tenant_space(tenant_slug, tenant_space_dir, selected_model=effective_model)
+
+            # KAN-122 (CA3) : Injection systématique du modèle sélectionné dans les fichiers de config conteneurisés
+            self.apply_selected_model_to_tenant_space(
+                tenant_slug=tenant_slug,
+                selected_model=effective_model,
+                space_dir=tenant_space_dir,
+                data_dir=tenant_data_dir,
+            )
 
             tenant_config_dir = tenant_space_dir / "config"
             tenant_skills_dir = tenant_space_dir / "skills"
@@ -1382,27 +1645,6 @@ class DockerLifecycleManager:
 
         run_args.append(target_image)
 
-        # ── Validation stricte d'authentification dashboard (Refus explicite sans secret committé - KAN-58) ──
-        dashboard_user = base_envs.get("HERMES_DASHBOARD_BASIC_AUTH_USERNAME")
-        dashboard_secret = (
-            base_envs.get("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD")
-            or base_envs.get("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH")
-        )
-        if not (dashboard_user and dashboard_secret):
-            return {
-                "success": False,
-                "error": "ERR_DASHBOARD_AUTH_REQUIRED",
-                "tenant_slug": tenant_slug,
-                "container_name": container_name,
-                "mode": "containerized",
-                "action_taken": False,
-                "message": (
-                    "Provisioning refusé : authentification dashboard manquante. "
-                    "HERMES_DASHBOARD_BASIC_AUTH_USERNAME et (HERMES_DASHBOARD_BASIC_AUTH_PASSWORD ou HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH) "
-                    "doivent être explicitement fournis (aucun secret de repli par défaut dans le code)."
-                ),
-            }
-
         _log.info("Lancement du provisioning pour %s (%s)", tenant_slug, container_name)
         proc = self._exec_docker(run_args, timeout=20.0, input_data=env_content)
         if proc.returncode != 0:
@@ -1436,6 +1678,7 @@ class DockerLifecycleManager:
             "action_taken": True,
             "image": target_image,
             "digest": effective_digest or None,
+            "selected_model": effective_model,
             "artifact_version": applied_artifact_version,
             "artifact_digest": applied_artifact_digest,
             "quotas": effective_quotas,
