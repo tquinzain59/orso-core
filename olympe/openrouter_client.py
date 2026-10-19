@@ -761,7 +761,10 @@ class OpenRouterProvisioningManager:
 
         # 1. Interrogation via Management API si key_hash et provisioning_key sont disponibles
         if effective_hash and self.provisioning_key:
-            code, data = self._api_request(f"keys/{effective_hash}", method="GET")
+            try:
+                code, data = self._api_request(f"keys/{effective_hash}", method="GET")
+            except Exception:
+                code, data = 503, {}
             if code == 200 and isinstance(data.get("data"), dict):
                 kd = data["data"]
                 usage_total = float(kd.get("usage") or 0.0)
@@ -779,10 +782,16 @@ class OpenRouterProvisioningManager:
                 live_fetched = True
 
         # 2. Sinon interrogation directe via la clé dédiée du tenant (`GET /api/v1/key`)
-        if not live_fetched:
-            tenant_raw_key = self.get_decrypted_tenant_key(tenant_slug)
-            if tenant_raw_key and not rec.get("simulated"):
-                code, data = self._api_request("key", method="GET", bearer_key=tenant_raw_key)
+        if not live_fetched and not rec.get("simulated"):
+            try:
+                tenant_raw_key = self.get_decrypted_tenant_key(tenant_slug)
+            except RuntimeError:
+                tenant_raw_key = None
+            if tenant_raw_key:
+                try:
+                    code, data = self._api_request("key", method="GET", bearer_key=tenant_raw_key)
+                except Exception:
+                    code, data = 503, {}
                 if code == 200 and isinstance(data.get("data"), dict):
                     kd = data["data"]
                     usage_total = float(kd.get("usage") or 0.0)

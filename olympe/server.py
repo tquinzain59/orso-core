@@ -551,9 +551,12 @@ async def get_tenant(tenant_id: str, actor: Dict[str, Any] = Depends(require_ops
 
 @app.delete("/api/olympe/ops/tenants/{tenant_id}")
 async def delete_tenant(tenant_id: str, actor: Dict[str, Any] = Depends(require_ops_actor("tenants:teardown:sandbox"))):
-    """Détruit proprement et de manière idempotente un tenant (restreint au périmètre sandbox - L3/CA2)."""
+    """Détruit proprement et de manière idempotente un tenant (restreint au périmètre sandbox - L3/CA2, KAN-116 CA5)."""
     check_sandbox_tenant_access(actor, tenant_id, ops_mgr=ops_manager)
-    return ops_manager.delete_tenant(tenant_id)
+    try:
+        return ops_manager.delete_tenant(tenant_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @app.post("/api/olympe/ops/tenants/{tenant_id}/agents")
@@ -574,13 +577,16 @@ async def update_agents(tenant_id: str, req: UpdateAgentsRequest, actor: Dict[st
 
 @app.post("/api/olympe/ops/tenants/{tenant_id}/subscription")
 async def update_subscription(tenant_id: str, req: UpdateSubscriptionRequest, admin: Dict[str, Any] = Depends(require_superadmin)):
-    """Met à jour le plan d'abonnement Stripe (strictement réservé au superadmin humain - CA3)."""
-    res = ops_manager.update_tenant_subscription(
-        tenant_id=tenant_id,
-        tier_id=req.tier_id,
-        status=req.status or "active",
-    )
-    return res
+    """Met à jour le plan d'abonnement Stripe (strictement réservé au superadmin humain - CA3, KAN-116 CA5)."""
+    try:
+        res = ops_manager.update_tenant_subscription(
+            tenant_id=tenant_id,
+            tier_id=req.tier_id,
+            status=req.status or "active",
+        )
+        return res
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @app.get("/api/olympe/ops/models/catalog")
@@ -744,7 +750,10 @@ async def stripe_webhook(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Payload JSON invalide")
 
-    return ops_manager.handle_stripe_webhook(payload)
+    try:
+        return ops_manager.handle_stripe_webhook(payload)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @app.get("/api/olympe/ops/webhooks/deliveries")

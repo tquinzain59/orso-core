@@ -303,6 +303,7 @@ def test_kan116_ca5_revocation_blocks_consumption_no_ambient_fallback_and_propag
 
     res = isolated_ops.create_sandbox_tenant("Cancel Co", "cancel-co", ["jerome"], "admin@cancel.co")
     tenant_id = res["tenant"]["id"]
+    isolated_ops.update_tenant_subscription(tenant_id, status="active")
     assert isolated_ops.openrouter_manager.get_decrypted_tenant_key("cancel-co") is not None
 
     # 1. Si le token est non-simulé et que l'API OpenRouter échoue (ou que la clé de provisioning manque), la révocation échoue explicitement
@@ -318,11 +319,84 @@ def test_kan116_ca5_revocation_blocks_consumption_no_ambient_fallback_and_propag
         with pytest.raises(RuntimeError, match="ERR_OPENROUTER_REVOKE_FAILED"):
             isolated_ops.revoke_tenant_openrouter_token(tenant_id)
 
-    # 2. Lorsque l'API OpenRouter confirme la révocation (200 OK), le token passe en 'revoked'
-    with patch.object(isolated_ops.openrouter_manager, "_api_request", return_value={"data": {"disabled": True}}):
-        sub_res = isolated_ops.update_tenant_subscription(tenant_id, status="canceled")
-        assert sub_res["success"] is True
-        assert sub_res["openrouter_revoked"] is True
+        # 1bis. Vérification dans les 3 flux de désactivation (update_tenant_subscription, handle_stripe_webhook, delete_tenant) :
+        # L'échec de révocation OpenRouter (api_revoked=False) ne doit JAMAIS être avalé et doit bloquer la désactivation !
+        with pytest.raises(RuntimeError, match="ERR_OPENROUTER_REVOKE_FAILED"):
+            isolated_ops.update_tenant_subscription(tenant_id, status="canceled")
+        # Le tenant est resté actif (aucune désactivation confirmée tant que la révocation échoue)
+        assert isolated_ops.get_tenant_detail(tenant_id)["subscription"]["status"] == "active"
+
+        with pytest.raises(RuntimeError, match="ERR_OPENROUTER_REVOKE_FAILED"):
+            isolated_ops.handle_stripe_webhook({
+                "id": "evt_cancel_fail_001",
+                "type": "customer.subscription.deleted",
+                "data": {
+                    "object": {
+                        "id": "sub_test_cancel-co",
+                        "customer": "cus_test_cancel-co",
+                        "status": "canceled",
+                        "metadata": {"tenant_slug": "cancel-co"},
+                    }
+                },
+            })
+        assert "evt_cancel_fail_001" not in isolated_ops._processed_events
+        assert isolated_ops.get_tenant_detail(tenant_id)["subscription"]["status"] == "active"
+
+        with pytest.raises(RuntimeError, match="ERR_OPENROUTER_REVOKE_FAILED"):
+            isolated_ops.delete_tenant(tenant_id)
+        assert isolated_ops.get_tenant_detail(tenant_id) is not None
+
+    # 2. Lorsque l'API OpenRouter confirme la révocation (200 OK), les 3 flux révoquent le token ET arrêtent le conteneur avant de confirmer
+    from olympe.server import manager as server_docker_mgr
+    with patch.object(
+        isolated_ops.openrouter_manager,
+        "_api_request",
+        return_value=(200, {"data": {"key": "sk-or-v1-live-test-key-0001", "hash": "hash_live_test_0001", "disabled": True}}),
+    ):
+        with patch.object(server_docker_mgr, "suspend_tenant", return_value={"success": True, "status": "sleeping"}) as mock_suspend:
+            sub_res = isolated_ops.update_tenant_subscription(tenant_id, status="canceled")
+            assert sub_res["success"] is True
+            assert sub_res["openrouter_revoked"] is True
+            assert sub_res["container_stopped"] is True
+            mock_suspend.assert_called_once_with("cancel-co")
+
+        # Vérification du flux webhook de résiliation (customer.subscription.deleted) : révoque le token + suspend le conteneur
+        res_wh_tenant = isolated_ops.create_sandbox_tenant("Webhook Cancel Co", "wh-cancel-co", ["jerome"], "admin@whcancel.co")
+        wh_tid = res_wh_tenant["tenant"]["id"]
+        rec_wh = isolated_ops.openrouter_manager.get_tenant_secret_record("wh-cancel-co")
+        rec_wh["simulated"] = False
+        isolated_ops.openrouter_manager.store_tenant_secret("wh-cancel-co", rec_wh)
+        with patch.object(server_docker_mgr, "suspend_tenant", return_value={"success": True, "status": "sleeping"}) as mock_wh_suspend:
+            wh_cancel_res = isolated_ops.handle_stripe_webhook({
+                "id": "evt_cancel_ok_002",
+                "type": "customer.subscription.deleted",
+                "data": {
+                    "object": {
+                        "id": "sub_test_wh-cancel-co",
+                        "customer": "cus_test_wh-cancel-co",
+                        "status": "canceled",
+                        "metadata": {"tenant_slug": "wh-cancel-co"},
+                    }
+                },
+            })
+            assert wh_cancel_res["status"] == "processed"
+            mock_wh_suspend.assert_called_once_with("wh-cancel-co")
+        assert isolated_ops.openrouter_manager.get_decrypted_tenant_key("wh-cancel-co") is None
+        assert isolated_ops.openrouter_manager.get_tenant_usage("wh-cancel-co", tenant_id=wh_tid)["status"] == "revoked"
+
+        # Vérification du flux delete_tenant : révoque le token (hard_delete) + détruit le conteneur (teardown_tenant)
+        res_del_tenant = isolated_ops.create_sandbox_tenant("Delete Cancel Co", "del-cancel-co", ["jerome"], "admin@delcancel.co")
+        del_tid = res_del_tenant["tenant"]["id"]
+        rec_del = isolated_ops.openrouter_manager.get_tenant_secret_record("del-cancel-co")
+        rec_del["simulated"] = False
+        isolated_ops.openrouter_manager.store_tenant_secret("del-cancel-co", rec_del)
+        with patch.object(server_docker_mgr, "teardown_tenant", return_value={"success": True, "status": "destroyed"}) as mock_teardown:
+            del_res = isolated_ops.delete_tenant(del_tid)
+            assert del_res["success"] is True
+            assert del_res["openrouter_revoked"] is True
+            assert del_res["container_stopped"] is True
+            mock_teardown.assert_called_once_with("del-cancel-co", remove_data=True)
+        assert isolated_ops.openrouter_manager.get_decrypted_tenant_key("del-cancel-co") is None
 
     assert isolated_ops.openrouter_manager.get_decrypted_tenant_key("cancel-co") is None
     usage_info = isolated_ops.openrouter_manager.get_tenant_usage("cancel-co", tenant_id=tenant_id)
@@ -786,9 +860,140 @@ def test_kan123_ca5_real_stripe_charge_subscription_failure_rejection_and_webhoo
         data_monthly = res_monthly.json()
         assert data_monthly["success"] is True
         assert data_monthly["operation"]["id"] == "sub_real_recurring_001"
+        assert data_monthly["operation"]["idempotency_key"] == "sub_init:sub_real_recurring_001"
         assert data_monthly["consumption"]["stripe_credit_subscription_id"] == "sub_real_recurring_001"
         assert data_monthly["consumption"]["limit_usd"] == 100.0
         assert data_monthly["consumption"]["monthly_addon_usd"] == 50.0
+
+        # 3bis. Réserve (3) Idempotence cohérente : la facture initiale de création d'abonnement (subscription_create)
+        # ne doit PAS recréditer une seconde fois si add_tenant_credits a déjà crédité en synchrone.
+        def stripe_monthly_webhooks(endpoint: str, method: str = "GET", data=None):
+            if endpoint == "subscriptions/sub_real_recurring_001":
+                return {
+                    "id": "sub_real_recurring_001",
+                    "status": "active",
+                    "metadata": {
+                        "tenant_id": tenant_id,
+                        "tenant_slug": "financia-solutions",
+                        "credit_mode": "monthly_subscription",
+                        "credits_usd": "50.0",
+                    },
+                }
+            if endpoint in ("invoices/in_initial_sub_001", "invoices/in_renewal_cycle_002"):
+                return {
+                    "id": endpoint.split("/")[1],
+                    "status": "paid",
+                    "billing_reason": "subscription_create" if "initial" in endpoint else "subscription_cycle",
+                    "parent": {
+                        "subscription_details": {
+                            "subscription": "sub_real_recurring_001",
+                            "metadata": {
+                                "tenant_id": tenant_id,
+                                "tenant_slug": "financia-solutions",
+                                "credit_mode": "monthly_subscription",
+                                "credits_usd": "50.0",
+                            },
+                        }
+                    },
+                    "metadata": {},
+                }
+            raise ValueError(f"Unexpected Stripe endpoint: {endpoint}")
+
+    with patch.object(isolated_ops, "_stripe_request", side_effect=stripe_monthly_webhooks):
+        wh_initial_inv = isolated_ops.handle_stripe_webhook({
+            "id": "evt_inv_initial_001",
+            "type": "invoice.payment_succeeded",
+            "data": {
+                "object": {
+                    "id": "in_initial_sub_001",
+                    "customer": "cus_financia_9876",
+                    "status": "paid",
+                    "billing_reason": "subscription_create",
+                    "parent": {
+                        "subscription_details": {
+                            "subscription": "sub_real_recurring_001",
+                            "metadata": {
+                                "tenant_id": tenant_id,
+                                "tenant_slug": "financia-solutions",
+                                "credit_mode": "monthly_subscription",
+                                "credits_usd": "50.0",
+                            },
+                        }
+                    },
+                    "metadata": {},
+                }
+            },
+        })
+        assert wh_initial_inv["status"] == "processed"
+        assert wh_initial_inv["credits_added_usd"] == 0.0
+        assert wh_initial_inv["new_limit_usd"] == 100.0
+
+        # 3ter. Réserves (1) & (2) : Renouvellement mensuel avec metadata dans invoice.parent.subscription_details.metadata
+        # (et metadata de premier niveau vide {}) -> crédite +50.0 USD (plafond passe à 150.0 USD)
+        # SANS écraser l'abonnement SaaS principal du tenant !
+        main_sub_before = dict(isolated_ops.get_tenant_detail(tenant_id)["subscription"])
+        wh_renewal = isolated_ops.handle_stripe_webhook({
+            "id": "evt_inv_renewal_002",
+            "type": "invoice.payment_succeeded",
+            "data": {
+                "object": {
+                    "id": "in_renewal_cycle_002",
+                    "customer": "cus_financia_9876",
+                    "status": "paid",
+                    "billing_reason": "subscription_cycle",
+                    "parent": {
+                        "subscription_details": {
+                            "subscription": "sub_real_recurring_001",
+                            "metadata": {
+                                "tenant_id": tenant_id,
+                                "tenant_slug": "financia-solutions",
+                                "credit_mode": "monthly_subscription",
+                                "credits_usd": "50.0",
+                            },
+                        }
+                    },
+                    "metadata": {},
+                }
+            },
+        })
+        assert wh_renewal["status"] == "processed"
+        assert wh_renewal["credits_added_usd"] == 50.0
+        assert wh_renewal["new_limit_usd"] == 150.0
+
+        # L'abonnement SaaS principal (sub_1Q1234567890, tier 1_agent, status active) n'a JAMAIS été écrasé
+        main_sub_after = isolated_ops.get_tenant_detail(tenant_id)["subscription"]
+        assert main_sub_after["stripe_subscription_id"] == main_sub_before["stripe_subscription_id"] == "sub_1Q1234567890"
+        assert main_sub_after["tier_id"] == "1_agent"
+        assert main_sub_after["status"] == "active"
+
+        # Une seconde livraison pour la même facture de renouvellement (même avec un event_id différent) ne double-crédite pas
+        wh_renewal_dup = isolated_ops.handle_stripe_webhook({
+            "id": "evt_inv_renewal_002_duplicate_delivery",
+            "type": "invoice.payment_succeeded",
+            "data": {
+                "object": {
+                    "id": "in_renewal_cycle_002",
+                    "customer": "cus_financia_9876",
+                    "status": "paid",
+                    "billing_reason": "subscription_cycle",
+                    "parent": {
+                        "subscription_details": {
+                            "subscription": "sub_real_recurring_001",
+                            "metadata": {
+                                "tenant_id": tenant_id,
+                                "tenant_slug": "financia-solutions",
+                                "credit_mode": "monthly_subscription",
+                                "credits_usd": "50.0",
+                            },
+                        }
+                    },
+                    "metadata": {},
+                }
+            },
+        })
+        assert wh_renewal_dup["status"] == "processed"
+        assert wh_renewal_dup["credits_added_usd"] == 0.0
+        assert wh_renewal_dup["new_limit_usd"] == 150.0
 
         # 4. Flux asynchrone wait_for_webhook=True + confirmation par webhook payment_intent.succeeded vérifié à la source
         def async_pi_stripe(endpoint: str, method: str = "GET", data=None):
@@ -807,11 +1012,11 @@ def test_kan123_ca5_real_stripe_charge_subscription_failure_rejection_and_webhoo
             headers={"Authorization": f"Bearer {admin_token}"},
         )
         assert res_pending.status_code == 200
-        # Tant que le webhook n'est pas reçu, le plafond reste à 100.0 USD
+        # Tant que le webhook n'est pas reçu, le plafond reste à 150.0 USD
         assert res_pending.json()["operation"]["status"] == "pending_webhook"
-        assert res_pending.json()["consumption"]["limit_usd"] == 100.0
+        assert res_pending.json()["consumption"]["limit_usd"] == 150.0
 
-        # Réception du webhook payment_intent.succeeded -> relecture à la source Stripe et incrément à 130.0 USD
+        # Réception du webhook payment_intent.succeeded -> relecture à la source Stripe et incrément à 180.0 USD
         wh_res = isolated_ops.handle_stripe_webhook({
             "id": "evt_pi_webhook_002",
             "type": "payment_intent.succeeded",
@@ -830,7 +1035,7 @@ def test_kan123_ca5_real_stripe_charge_subscription_failure_rejection_and_webhoo
             },
         })
         assert wh_res["status"] == "processed"
-        assert wh_res["new_limit_usd"] == 130.0
+        assert wh_res["new_limit_usd"] == 180.0
         final_state = isolated_ops.get_tenant_llm_settings(tenant_id)
-        assert final_state["consumption"]["limit_usd"] == 130.0
-        assert final_state["consumption"]["extra_credits_usd"] == 105.0
+        assert final_state["consumption"]["limit_usd"] == 180.0
+        assert final_state["consumption"]["extra_credits_usd"] == 155.0

@@ -1872,6 +1872,38 @@ class OpsManager:
         pricing = TIER_PRICING.get(tier_id, TIER_PRICING["custom"])
         is_deactivating = status in ["none", "inactive", "canceled"] or tier_id == "none"
 
+        tenant = self.get_tenant_detail(tenant_id)
+        actual_id = tenant["id"] if tenant else tenant_id
+        actual_slug = (tenant.get("slug") if tenant else None) or tenant_id
+
+        # ── KAN-116 CA5 : En cas de désactivation, révoquer le token OpenRouter et arrêter
+        # le conteneur AVANT de confirmer la désactivation. Tout échec est bloquant. ──
+        token_revoked = False
+        container_stopped = False
+        if is_deactivating:
+            or_mgr = getattr(self, "openrouter_manager", None) or openrouter_manager
+            has_token_record = bool(or_mgr.get_tenant_secret_record(actual_slug))
+            try:
+                rev_res = self.revoke_tenant_openrouter_token(actual_id, tenant_slug=actual_slug)
+                if isinstance(rev_res, dict) and (not rev_res.get("success") or not rev_res.get("api_revoked", True)):
+                    err_code = rev_res.get("error", "ERR_OPENROUTER_REVOKE_FAILED")
+                    err_msg = rev_res.get("message", f"Échec de la révocation du token OpenRouter pour '{actual_slug}'.")
+                    raise RuntimeError(f"{err_code}: {err_msg}")
+                token_revoked = True
+            except RuntimeError as exc:
+                if not has_token_record and "ERR_TENANT_KEY_NOT_FOUND" in str(exc):
+                    token_revoked = False
+                else:
+                    raise
+
+            from olympe.server import manager as docker_mgr
+            susp_res = docker_mgr.suspend_tenant(actual_slug)
+            if isinstance(susp_res, dict) and not susp_res.get("success") and susp_res.get("status") not in ("not_found", "sleeping"):
+                raise RuntimeError(
+                    f"ERR_CONTAINER_STOP_FAILED: {susp_res.get('message', f'Échec arrêt du conteneur pour {actual_slug}')}"
+                )
+            container_stopped = True
+
         if tenant_id in self._mock_tenants:
             sub = self._mock_tenants[tenant_id]["subscription"]
             sub["tier_id"] = tier_id
@@ -1879,32 +1911,31 @@ class OpsManager:
             sub["price_ht"] = pricing["price_ht"]
             sub["status"] = status
             sub["updated_at"] = _format_timestamp()
-            
+
             # VERROU 3 : Purge des agents et instance en cas de résiliation / downgrade
             max_agents = pricing.get("max_agents", 0)
             current_agents = self._mock_tenants[tenant_id].get("agents_enabled", {}).get("active", [])
-            
+
             if is_deactivating:
                 self._mock_tenants[tenant_id]["agents_enabled"]["active"] = []
                 self._mock_tenants[tenant_id]["instance"]["status"] = "not_provisioned"
                 self._mock_tenants[tenant_id]["instance"]["environment_status"] = "inactive"
                 if self.supabase_url and self.supabase_key:
-                    self._query_supabase(f"tenant_instances?tenant_id=eq.{tenant_id}", method="PATCH", payload={"agents_enabled": [], "status": "not_provisioned", "environment_status": "inactive"})
+                    self._query_supabase(
+                        f"tenant_instances?tenant_id=eq.{tenant_id}",
+                        method="PATCH",
+                        payload={"agents_enabled": [], "status": "not_provisioned", "environment_status": "inactive"},
+                    )
             elif len(current_agents) > max_agents and tier_id != "custom":
                 # Downgrade: troncature automatique
                 new_agents = current_agents[:max_agents]
                 self._mock_tenants[tenant_id]["agents_enabled"]["active"] = new_agents
                 if self.supabase_url and self.supabase_key:
-                    self._query_supabase(f"tenant_instances?tenant_id=eq.{tenant_id}", method="PATCH", payload={"agents_enabled": new_agents})
-
-        # Révocation automatique du token OpenRouter si le client est désactivé (KAN-116 CA5)
-        token_revoked = False
-        if is_deactivating:
-            try:
-                rev_res = self.revoke_tenant_openrouter_token(tenant_id)
-                token_revoked = bool(rev_res.get("success"))
-            except Exception as e:
-                _log.warning("Notice révocation token OpenRouter lors de la désactivation de %s : %s", tenant_id, e)
+                    self._query_supabase(
+                        f"tenant_instances?tenant_id=eq.{tenant_id}",
+                        method="PATCH",
+                        payload={"agents_enabled": new_agents},
+                    )
 
         # ── Persistance Supabase : PATCH si existant, sinon POST ────────────
         if self.supabase_url and self.supabase_key:
@@ -1941,6 +1972,7 @@ class OpsManager:
             "status": status,
             "openrouter_token_revoked": token_revoked,
             "openrouter_revoked": token_revoked,
+            "container_stopped": container_stopped,
         }
 
     def get_stats(self) -> Dict[str, Any]:
@@ -2217,7 +2249,7 @@ class OpsManager:
         return {"success": True, "tenant": tenant_record, "openrouter_token": or_token_meta}
 
     def delete_tenant(self, tenant_id_or_slug: str) -> Dict[str, Any]:
-        """Supprime proprement et de manière idempotente un tenant et ses ressources (L3/CA2)."""
+        """Supprime proprement et de manière idempotente un tenant et ses ressources (L3/CA2, KAN-116 CA5)."""
         target = tenant_id_or_slug.strip().lower()
 
         # Recherche dans les mocks
@@ -2228,12 +2260,39 @@ class OpsManager:
                 matched_id = tid
                 matched_slug = tdata.get("slug", target)
                 break
+        if not matched_id:
+            llm_row = self._db_get_llm_settings(target)
+            if llm_row and llm_row.get("tenant_slug"):
+                matched_slug = llm_row["tenant_slug"]
 
-        # Révocation immédiate du token OpenRouter dédié au tenant (KAN-116 CA5)
+        # ── 1. Révocation bloquante du token OpenRouter dédié AVANT suppression (KAN-116 CA5) ──
+        or_mgr = getattr(self, "openrouter_manager", None) or openrouter_manager
+        has_token_record = bool(or_mgr.get_tenant_secret_record(matched_slug))
+        token_revoked = False
         try:
-            self.revoke_tenant_openrouter_token(matched_id or target, tenant_slug=matched_slug, hard_delete=True)
-        except Exception as e:
-            _log.warning("Notice révocation token OpenRouter lors de delete_tenant %s: %s", matched_slug, e)
+            rev_res = self.revoke_tenant_openrouter_token(
+                matched_id or target,
+                tenant_slug=matched_slug,
+                hard_delete=True,
+            )
+            if isinstance(rev_res, dict) and (not rev_res.get("success") or not rev_res.get("api_revoked", True)):
+                err_code = rev_res.get("error", "ERR_OPENROUTER_REVOKE_FAILED")
+                err_msg = rev_res.get("message", f"Échec de la révocation du token OpenRouter pour '{matched_slug}'.")
+                raise RuntimeError(f"{err_code}: {err_msg}")
+            token_revoked = True
+        except RuntimeError as exc:
+            if not has_token_record and "ERR_TENANT_KEY_NOT_FOUND" in str(exc):
+                token_revoked = False
+            else:
+                raise
+
+        # ── 2. Arrêt et destruction du conteneur Docker AVANT confirmation (KAN-116 CA5) ──
+        from olympe.server import manager as docker_mgr
+        td_res = docker_mgr.teardown_tenant(matched_slug, remove_data=True)
+        if isinstance(td_res, dict) and not td_res.get("success") and td_res.get("status") not in ("not_found", "destroyed"):
+            raise RuntimeError(
+                f"ERR_CONTAINER_TEARDOWN_FAILED: {td_res.get('message', f'Échec destruction conteneur pour {matched_slug}')}"
+            )
 
         if matched_id:
             self._mock_tenants.pop(matched_id, None)
@@ -2254,29 +2313,106 @@ class OpsManager:
             except Exception as e:
                 _log.warning("Nettoyage Supabase pour %s: %s", target, e)
 
-        # Destruction Docker via lifecycle manager (idempotente)
-        try:
-            from olympe.server import manager as docker_mgr
-            docker_mgr.teardown_tenant(matched_slug, remove_data=True)
-        except Exception as e:
-            _log.warning("Teardown conteneur pour %s: %s", matched_slug, e)
-
         self.record_audit_event(
             actor={"actor": "drone-clientx", "role": "drone"},
             action="tenant:teardown:sandbox",
             target=matched_slug,
-            details={"status": "destroyed"},
+            details={"status": "destroyed", "openrouter_revoked": token_revoked},
         )
 
         return {
             "success": True,
             "tenant_slug": matched_slug,
             "status": "destroyed",
+            "openrouter_revoked": token_revoked,
+            "openrouter_token_revoked": token_revoked,
+            "container_stopped": True,
             "message": f"Tenant {matched_slug} détruit sans résidu.",
         }
 
+    @staticmethod
+    def _extract_stripe_object_subscription_id(data_obj: Dict[str, Any], event_type: str = "") -> Optional[str]:
+        """Extrait l'identifiant d'abonnement Stripe depuis un objet événement (Subscription ou Invoice multi-versions)."""
+        if not isinstance(data_obj, dict):
+            return None
+        if "subscription" in (event_type or ""):
+            return data_obj.get("id")
+        direct_sub = data_obj.get("subscription")
+        if isinstance(direct_sub, str) and direct_sub:
+            return direct_sub
+        if isinstance(direct_sub, dict) and direct_sub.get("id"):
+            return direct_sub.get("id")
+        parent_sub_details = ((data_obj.get("parent") or {}).get("subscription_details")) or {}
+        if isinstance(parent_sub_details, dict):
+            p_sub = parent_sub_details.get("subscription")
+            if isinstance(p_sub, str) and p_sub:
+                return p_sub
+            if isinstance(p_sub, dict) and p_sub.get("id"):
+                return p_sub.get("id")
+        sub_details = data_obj.get("subscription_details") or {}
+        if isinstance(sub_details, dict):
+            s_sub = sub_details.get("subscription")
+            if isinstance(s_sub, str) and s_sub:
+                return s_sub
+            if isinstance(s_sub, dict) and s_sub.get("id"):
+                return s_sub.get("id")
+        lines_data = ((data_obj.get("lines") or {}).get("data")) or []
+        if isinstance(lines_data, list):
+            for line in lines_data:
+                if not isinstance(line, dict):
+                    continue
+                l_sub = line.get("subscription")
+                if isinstance(l_sub, str) and l_sub:
+                    return l_sub
+                l_parent_sub = (((line.get("parent") or {}).get("subscription_item_details")) or {}).get("subscription")
+                if isinstance(l_parent_sub, str) and l_parent_sub:
+                    return l_parent_sub
+        return None
+
+    @staticmethod
+    def _extract_stripe_merged_metadata(
+        data_obj: Dict[str, Any],
+        live_sub_data: Optional[Dict[str, Any]] = None,
+        live_inv_data: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Fusionne les métadonnées Stripe depuis tous les emplacements d'une Invoice, Subscription ou PaymentIntent (KAN-123 CA5).
+
+        Lit notamment `invoice.parent.subscription_details.metadata`, `invoice.subscription_details.metadata`,
+        `invoice.lines.data[*].metadata`, `live_sub_data.metadata` et `data_obj.metadata`.
+        """
+        merged: Dict[str, Any] = {}
+        sources: List[Any] = []
+        if isinstance(data_obj, dict):
+            lines_data = ((data_obj.get("lines") or {}).get("data")) or []
+            if isinstance(lines_data, list):
+                for line in lines_data:
+                    if isinstance(line, dict):
+                        sources.append(line.get("metadata"))
+                        sources.append((((line.get("parent") or {}).get("subscription_item_details")) or {}).get("metadata"))
+            sources.append((data_obj.get("subscription_details") or {}).get("metadata"))
+            sources.append((((data_obj.get("parent") or {}).get("subscription_details")) or {}).get("metadata"))
+            sources.append(data_obj.get("metadata"))
+        if isinstance(live_inv_data, dict):
+            inv_lines = ((live_inv_data.get("lines") or {}).get("data")) or []
+            if isinstance(inv_lines, list):
+                for line in inv_lines:
+                    if isinstance(line, dict):
+                        sources.append(line.get("metadata"))
+                        sources.append((((line.get("parent") or {}).get("subscription_item_details")) or {}).get("metadata"))
+            sources.append((live_inv_data.get("subscription_details") or {}).get("metadata"))
+            sources.append((((live_inv_data.get("parent") or {}).get("subscription_details")) or {}).get("metadata"))
+            sources.append(live_inv_data.get("metadata"))
+        if isinstance(live_sub_data, dict):
+            sources.append(live_sub_data.get("metadata"))
+        for src in sources:
+            if isinstance(src, dict):
+                for k, v in src.items():
+                    if v is not None and v != "":
+                        merged[k] = v
+        return merged
+
     def handle_stripe_webhook(self, event: Dict[str, Any]) -> Dict[str, Any]:
-        """Traite les événements Webhook émis par Stripe Billing avec idempotence et réconciliation stricte (KAN-44)."""
+        """Traite les événements Webhook émis par Stripe Billing avec idempotence et réconciliation stricte (KAN-44, KAN-116, KAN-123)."""
         event_id = event.get("id") or f"evt_test_{int(time.time()*1000)}"
         event_type = event.get("type", "")
         data_obj = event.get("data", {}).get("object", {})
@@ -2284,8 +2420,9 @@ class OpsManager:
         _log.info("Réception d'un webhook Stripe : %s (id: %s)", event_type, event_id)
 
         cus_id = data_obj.get("customer")
-        sub_id = data_obj.get("id") if "subscription" in event_type else data_obj.get("subscription")
+        sub_id = self._extract_stripe_object_subscription_id(data_obj, event_type)
         status = data_obj.get("status")
+        initial_meta = self._extract_stripe_merged_metadata(data_obj)
 
         # ── 1. Vérification d'idempotence au rejeu (Décision 3 / KAN-44 CA4) ───
         if event_id in self._processed_events:
@@ -2375,7 +2512,8 @@ class OpsManager:
                 }
 
         # ── 2. Rapprochement certain client vers tenant (Décision 2 / KAN-44 CA1 & CA5) ───
-        meta_slug = data_obj.get("metadata", {}).get("tenant_slug") or data_obj.get("metadata", {}).get("slug")
+        meta_slug = initial_meta.get("tenant_slug") or initial_meta.get("slug")
+        meta_tenant_id = initial_meta.get("tenant_id")
         client_ref = data_obj.get("client_reference_id")
         matched_slug = None
         matched_tenant_id = None
@@ -2410,15 +2548,21 @@ class OpsManager:
         if not matched_slug:
             for tid, tdata in self._mock_tenants.items():
                 t_sub = tdata.get("subscription", {})
+                t_or = (tdata.get("openrouter") or {})
+                t_ae_or = ((tdata.get("agents_enabled") or {}).get("openrouter") or {})
+                credit_sub_id = t_or.get("stripe_credit_subscription_id") or t_ae_or.get("stripe_credit_subscription_id")
                 if (
                     (target_slug and tdata.get("slug") == target_slug)
+                    or (meta_tenant_id and tid == meta_tenant_id)
                     or (cus_id and t_sub.get("stripe_customer_id") == cus_id)
-                    or (sub_id and t_sub.get("stripe_subscription_id") == sub_id)
+                    or (sub_id and (t_sub.get("stripe_subscription_id") == sub_id or t_sub.get("subscription_id") == sub_id or credit_sub_id == sub_id))
                 ):
                     matched_slug = tdata.get("slug")
                     matched_tenant_id = tid
                     matched_sub_dict = t_sub
                     break
+        elif matched_tenant_id and matched_tenant_id in self._mock_tenants:
+            matched_sub_dict = self._mock_tenants[matched_tenant_id].get("subscription")
 
         # ── 3. Refus sans effet de bord si le client est inconnu (KAN-44 CA3) ─
         if not matched_slug:
@@ -2468,60 +2612,129 @@ class OpsManager:
 
         # ── 4. Relecture de l'abonnement à la source Stripe (Décision 4) ──────
         effective_status = status or "active"
-        effective_tier_id = data_obj.get("metadata", {}).get("tier_id")
+        effective_tier_id = initial_meta.get("tier_id")
+        live_sub_data: Optional[Dict[str, Any]] = None
         if sub_id and self.stripe_secret_key:
             try:
                 live_sub_data = self._stripe_request(f"subscriptions/{sub_id}")
                 if live_sub_data and live_sub_data.get("status"):
                     effective_status = live_sub_data.get("status")
-                    effective_tier_id = live_sub_data.get("metadata", {}).get("tier_id") or effective_tier_id
+                    effective_tier_id = (live_sub_data.get("metadata") or {}).get("tier_id") or effective_tier_id
                     _log.info("Relecture Stripe à la source réussie pour sub %s: statut=%s", sub_id, effective_status)
             except Exception as e:
                 _log.info("Relecture Stripe ignorée/échouée pour %s: %s (utilisation payload)", sub_id, e)
 
-        # ── 4bis. Traitement dédié des recharges de crédits IA par webhook (KAN-123 CA5) ──
-        meta_obj = data_obj.get("metadata") or {}
+        # ── 4bis. Traitement dédié des recharges et renouvellements mensuels de crédits IA (KAN-123 CA5) ──
+        actual_tid = matched_tenant_id or matched_slug
+        current_llm = self.get_tenant_llm_settings(actual_tid)
+        cur_or = current_llm.get("openrouter", {})
+        meta_obj = self._extract_stripe_merged_metadata(data_obj, live_sub_data=live_sub_data)
         credit_mode = meta_obj.get("credit_mode")
+        is_credit_addon_sub = bool(
+            sub_id
+            and cur_or.get("stripe_credit_subscription_id")
+            and sub_id == cur_or.get("stripe_credit_subscription_id")
+        )
+        if not credit_mode and is_credit_addon_sub:
+            credit_mode = "monthly_subscription"
+
         if event_type in ("payment_intent.succeeded", "invoice.payment_succeeded") and credit_mode in ("one_shot", "monthly_subscription"):
             tx_id = data_obj.get("id") or event_id
-            credits_usd = round(float(meta_obj.get("credits_usd") or 0.0), 2)
+            live_inv: Optional[Dict[str, Any]] = None
             verified_paid = False
             if self.stripe_secret_key:
                 if event_type == "payment_intent.succeeded":
                     live_pi = self._stripe_request(f"payment_intents/{tx_id}")
                     verified_paid = bool(live_pi and live_pi.get("status") == "succeeded")
+                    if isinstance(live_pi, dict):
+                        meta_obj = self._extract_stripe_merged_metadata(data_obj, live_sub_data=live_sub_data, live_inv_data=live_pi)
                 else:
                     live_inv = self._stripe_request(f"invoices/{tx_id}")
                     verified_paid = bool(live_inv and live_inv.get("status") == "paid")
+                    if isinstance(live_inv, dict):
+                        meta_obj = self._extract_stripe_merged_metadata(data_obj, live_sub_data=live_sub_data, live_inv_data=live_inv)
+                        if not sub_id:
+                            sub_id = self._extract_stripe_object_subscription_id(live_inv, event_type)
             else:
                 verified_paid = data_obj.get("status") in ("succeeded", "paid")
+
+            raw_credits = meta_obj.get("credits_usd")
+            if raw_credits is None and credit_mode == "monthly_subscription":
+                raw_credits = cur_or.get("monthly_credit_addon_usd")
+            credits_usd = round(float(raw_credits or 0.0), 2)
 
             if not verified_paid or credits_usd <= 0:
                 raise RuntimeError(
                     f"ERR_STRIPE_WEBHOOK_PAYMENT_UNVERIFIED: Paiement {tx_id} non confirmé à la source Stripe."
                 )
 
-            actual_tid = matched_tenant_id or matched_slug
-            current_llm = self.get_tenant_llm_settings(actual_tid)
-            cur_or = current_llm.get("openrouter", {})
             history = list(cur_or.get("credit_history") or [])
-            existing_entry = next((h for h in history if h.get("id") == tx_id), None)
+            billing_reason = data_obj.get("billing_reason") or (live_inv.get("billing_reason") if isinstance(live_inv, dict) else None)
+
+            if event_type == "payment_intent.succeeded":
+                canonical_key = f"pi:{tx_id}"
+                existing_entry = next(
+                    (h for h in history if h.get("idempotency_key") == canonical_key or h.get("id") == tx_id),
+                    None,
+                )
+            else:
+                canonical_key = f"inv:{tx_id}"
+                existing_entry = next(
+                    (
+                        h for h in history
+                        if h.get("idempotency_key") == canonical_key
+                        or h.get("invoice_id") == tx_id
+                        or h.get("id") == tx_id
+                    ),
+                    None,
+                )
+                if existing_entry is None and sub_id:
+                    unbound_sub_entry = next(
+                        (
+                            h for h in history
+                            if (
+                                h.get("subscription_id") == sub_id
+                                or h.get("id") == sub_id
+                                or h.get("idempotency_key") == f"sub_init:{sub_id}"
+                            )
+                            and not h.get("invoice_id")
+                        ),
+                        None,
+                    )
+                    if unbound_sub_entry is not None:
+                        if unbound_sub_entry.get("status") == "pending_webhook":
+                            existing_entry = unbound_sub_entry
+                        elif unbound_sub_entry.get("status") == "succeeded" and billing_reason == "subscription_create":
+                            existing_entry = unbound_sub_entry
 
             if existing_entry and existing_entry.get("status") == "succeeded":
+                existing_entry["idempotency_key"] = canonical_key
+                if event_type == "invoice.payment_succeeded":
+                    existing_entry["invoice_id"] = tx_id
+                if sub_id:
+                    existing_entry["subscription_id"] = sub_id
                 existing_entry["webhook_confirmed"] = True
                 existing_entry["webhook_event_id"] = event_id
                 new_limit = float(cur_or.get("limit_usd", DEFAULT_CONSUMPTION_LIMIT_USD))
                 new_extra = float(cur_or.get("extra_credits_usd", 0.0))
                 new_monthly = float(cur_or.get("monthly_credit_addon_usd", 0.0))
+                credits_added_this_event = 0.0
             else:
                 old_limit = float(cur_or.get("limit_usd", DEFAULT_CONSUMPTION_LIMIT_USD))
                 new_limit = round(old_limit + credits_usd, 2)
                 new_extra = round(float(cur_or.get("extra_credits_usd", 0.0)) + credits_usd, 2)
-                new_monthly = (
-                    round(float(cur_or.get("monthly_credit_addon_usd", 0.0)) + credits_usd, 2)
-                    if credit_mode == "monthly_subscription"
-                    else float(cur_or.get("monthly_credit_addon_usd", 0.0))
-                )
+                cur_monthly = float(cur_or.get("monthly_credit_addon_usd", 0.0))
+                if credit_mode == "monthly_subscription":
+                    if existing_entry and existing_entry.get("status") == "pending_webhook":
+                        new_monthly = round(cur_monthly + credits_usd, 2)
+                    elif cur_monthly <= 0:
+                        new_monthly = credits_usd
+                    else:
+                        new_monthly = cur_monthly
+                else:
+                    new_monthly = cur_monthly
+                credits_added_this_event = credits_usd
+
                 or_mgr = getattr(self, "openrouter_manager", None) or openrouter_manager
                 vault_rec = or_mgr.get_tenant_secret_record(matched_slug)
                 if vault_rec:
@@ -2541,12 +2754,21 @@ class OpsManager:
 
                 if existing_entry:
                     existing_entry["status"] = "succeeded"
+                    existing_entry["idempotency_key"] = canonical_key
+                    if event_type == "invoice.payment_succeeded":
+                        existing_entry["invoice_id"] = tx_id
+                    if sub_id:
+                        existing_entry["subscription_id"] = sub_id
                     existing_entry["webhook_confirmed"] = True
                     existing_entry["webhook_event_id"] = event_id
                     existing_entry["new_limit_usd"] = new_limit
                 else:
                     history.insert(0, {
                         "id": tx_id,
+                        "idempotency_key": canonical_key,
+                        "invoice_id": tx_id if event_type == "invoice.payment_succeeded" else None,
+                        "subscription_id": sub_id,
+                        "billing_reason": billing_reason or ("subscription_cycle" if credit_mode == "monthly_subscription" else "one_shot"),
                         "amount_usd": credits_usd,
                         "mode": credit_mode,
                         "mode_label": "Paiement unique (One-Shot)" if credit_mode == "one_shot" else "Abonnement mensuel récurrent",
@@ -2557,15 +2779,19 @@ class OpsManager:
                         "created_at": _format_timestamp(),
                     })
 
+            or_meta_update: Dict[str, Any] = {
+                "limit_usd": new_limit,
+                "extra_credits_usd": new_extra,
+                "monthly_credit_addon_usd": new_monthly,
+                "credit_history": history[:25],
+            }
+            if credit_mode == "monthly_subscription" and sub_id:
+                or_meta_update["stripe_credit_subscription_id"] = sub_id
+
             self._sync_tenant_agents_enabled_meta(
                 tenant_id=actual_tid,
                 tenant_slug=matched_slug,
-                openrouter_meta={
-                    "limit_usd": new_limit,
-                    "extra_credits_usd": new_extra,
-                    "monthly_credit_addon_usd": new_monthly,
-                    "credit_history": history[:25],
-                },
+                openrouter_meta=or_meta_update,
             )
             self._processed_events[event_id] = {
                 "event_id": event_id,
@@ -2584,7 +2810,8 @@ class OpsManager:
                 details={
                     "event_id": event_id,
                     "transaction_id": tx_id,
-                    "credits_usd": credits_usd,
+                    "idempotency_key": canonical_key,
+                    "credits_usd": credits_added_this_event,
                     "new_limit_usd": new_limit,
                 },
             )
@@ -2593,11 +2820,32 @@ class OpsManager:
                 "type": event_type,
                 "event_id": event_id,
                 "tenant_slug": matched_slug,
-                "credits_added_usd": credits_usd,
+                "credits_added_usd": credits_added_this_event,
                 "new_limit_usd": new_limit,
             }
 
-        # ── 5. Cycle de vie de l'environnement conteneurisé (Décision 5 / KAN-44) ───
+        # Protection de l'abonnement principal : un événement portant sur l'abonnement additionnel de crédits
+        # ne doit JAMAIS écraser l'abonnement SaaS principal ni suspendre le conteneur du tenant (KAN-123 CA5).
+        if credit_mode in ("one_shot", "monthly_subscription") or is_credit_addon_sub:
+            self._processed_events[event_id] = {
+                "event_id": event_id,
+                "event_type": event_type,
+                "customer_id": cus_id,
+                "subscription_id": sub_id,
+                "tenant_slug": matched_slug,
+                "status": "processed",
+                "replay_count": 0,
+                "processed_at": _format_timestamp(),
+            }
+            return {
+                "status": "processed",
+                "type": event_type,
+                "event_id": event_id,
+                "tenant_slug": matched_slug,
+                "credit_subscription_id": sub_id,
+            }
+
+        # ── 5. Cycle de vie de l'environnement conteneurisé (Décision 5 / KAN-44 & KAN-116 CA5) ───
         container_name = f"orso_client_{matched_slug.replace('-', '_')}"
         env_result = None
 
@@ -2654,27 +2902,47 @@ class OpsManager:
                 env_result = "error"
 
         elif effective_status in ("canceled", "unpaid", "past_due"):
-            try:
-                from olympe.server import manager as docker_mgr
-                _log.info("Mise en veille automatique conteneur pour %s suite à statut %s", matched_slug, effective_status)
-                docker_mgr.suspend_tenant(matched_slug)
-                env_result = "suspended"
-            except Exception as e:
-                _log.warning("Erreur suspension conteneur pour %s: %s", matched_slug, e)
-                env_result = "error"
+            # KAN-116 CA5 : Révocation bloquante du token OpenRouter et arrêt du conteneur
+            # AVANT de confirmer la désactivation en base/mémoire.
             or_mgr = getattr(self, "openrouter_manager", None) or openrouter_manager
-            if or_mgr.get_tenant_secret_record(matched_slug):
-                try:
-                    self.revoke_tenant_openrouter_token(matched_tenant_id or matched_slug, tenant_slug=matched_slug)
-                except Exception as e:
-                    _log.error("Erreur révocation token OpenRouter post-webhook pour %s: %s", matched_slug, e)
-                    env_result = "error"
+            has_token_record = bool(or_mgr.get_tenant_secret_record(matched_slug))
+            try:
+                rev_res = self.revoke_tenant_openrouter_token(
+                    matched_tenant_id or matched_slug,
+                    tenant_slug=matched_slug,
+                )
+                if isinstance(rev_res, dict) and (not rev_res.get("success") or not rev_res.get("api_revoked", True)):
+                    err_code = rev_res.get("error", "ERR_OPENROUTER_REVOKE_FAILED")
+                    err_msg = rev_res.get("message", f"Échec de la révocation du token OpenRouter pour '{matched_slug}'.")
+                    raise RuntimeError(f"{err_code}: {err_msg}")
+            except RuntimeError as exc:
+                if not has_token_record and "ERR_TENANT_KEY_NOT_FOUND" in str(exc):
+                    pass
+                else:
+                    raise
+
+            from olympe.server import manager as docker_mgr
+            _log.info("Mise en veille automatique conteneur pour %s suite à statut %s", matched_slug, effective_status)
+            susp_res = docker_mgr.suspend_tenant(matched_slug)
+            if isinstance(susp_res, dict) and not susp_res.get("success") and susp_res.get("status") not in ("not_found", "sleeping"):
+                raise RuntimeError(
+                    f"ERR_CONTAINER_STOP_FAILED: {susp_res.get('message', f'Échec suspension conteneur pour {matched_slug}')}"
+                )
+            env_result = "suspended"
 
         # ── 6. Synchronisation de l'état en base (Supabase) ou en mémoire ────
+        is_invoice_event = event_type.startswith("invoice.")
+        normalized_sub_status = "active" if (is_invoice_event and effective_status == "paid") else effective_status
+
         if self.supabase_url and self.supabase_key and matched_tenant_id:
             try:
-                sub_patch = {"status": effective_status.upper()}
-                if sub_id:
+                sub_patch: Dict[str, Any] = {"status": normalized_sub_status.upper()}
+                existing_main_sub_id = (
+                    (matched_sub_dict.get("stripe_subscription_id") or matched_sub_dict.get("subscription_id"))
+                    if isinstance(matched_sub_dict, dict)
+                    else None
+                )
+                if sub_id and (not is_invoice_event or not existing_main_sub_id or sub_id == existing_main_sub_id):
                     sub_patch["stripe_subscription_id"] = sub_id
                 if cus_id:
                     sub_patch["stripe_customer_id"] = cus_id
@@ -2713,8 +2981,9 @@ class OpsManager:
 
         # Synchronisation mémoire si présent
         if matched_sub_dict is not None:
-            matched_sub_dict["status"] = effective_status
-            if sub_id:
+            matched_sub_dict["status"] = normalized_sub_status
+            existing_main_sub_id = matched_sub_dict.get("stripe_subscription_id") or matched_sub_dict.get("subscription_id")
+            if sub_id and (not is_invoice_event or not existing_main_sub_id or sub_id == existing_main_sub_id):
                 matched_sub_dict["subscription_id"] = sub_id
             if cus_id:
                 matched_sub_dict["stripe_customer_id"] = cus_id
@@ -2727,6 +2996,7 @@ class OpsManager:
                 elif env_result == "suspended":
                     t_inst["status"] = "sleeping"
                     t_inst["environment_status"] = "inactive"
+                    self._mock_tenants[matched_tenant_id].get("agents_enabled", {})["active"] = []
 
                 if event_type == "invoice.payment_succeeded":
                     inv_id = data_obj.get("id")
@@ -3561,6 +3831,24 @@ class OpsManager:
                 "simulated": bool(existing.get("simulated", False)),
                 "created_at": existing.get("created_at"),
             }
+        elif not has_vault_secret and allow_simulated and not self.is_production:
+            import hashlib
+            raw_hash = hashlib.sha256(f"{tenant_id}:{tenant_slug}".encode("utf-8")).hexdigest()
+            public_meta = {
+                "has_dedicated_token": True,
+                "tenant_id": tenant_id,
+                "tenant_slug": tenant_slug,
+                "key_hash": raw_hash,
+                "key_label": f"orso-tenant-{tenant_slug}",
+                "key_masked": f"sk-or-v1-{raw_hash[:4]}••••{raw_hash[-4:]}",
+                "limit_usd": float(limit_usd),
+                "alert_threshold_pct": float(alert_threshold_pct),
+                "extra_credits_usd": 0.0,
+                "monthly_credit_addon_usd": 0.0,
+                "status": "active",
+                "simulated": True,
+                "created_at": _format_timestamp(),
+            }
         else:
             public_meta = or_mgr.create_tenant_key(
                 tenant_id=tenant_id,
@@ -3900,6 +4188,7 @@ class OpsManager:
         amount_cents = int(round(clean_amount * 100))
         stripe_sub_addon_id = cur_or.get("stripe_credit_subscription_id")
 
+        initial_inv_id: Optional[str] = None
         if mode == "one_shot":
             pi = self._stripe_request(
                 "payment_intents",
@@ -3932,6 +4221,7 @@ class OpsManager:
                     f"ERR_STRIPE_PAYMENT_REJECTED: Intention de paiement Stripe ({stripe_tx_id}) rejetée (statut: '{pi_status}')."
                 )
             payment_confirmed_now = (pi_status == "succeeded") and not wait_for_webhook
+            canonical_idempotency_key = f"pi:{stripe_tx_id}"
         else:
             sub_resp = self._stripe_request(
                 "subscriptions",
@@ -3959,8 +4249,14 @@ class OpsManager:
                     f"ERR_STRIPE_SUBSCRIPTION_NOT_ACTIVE: L'abonnement récurrent Stripe ({stripe_sub_addon_id}) "
                     f"n'est pas actif (statut: '{sub_status}'). Aucun crédit n'a été accordé."
                 )
+            latest_inv = sub_resp.get("latest_invoice")
+            if isinstance(latest_inv, dict) and latest_inv.get("id"):
+                initial_inv_id = str(latest_inv["id"])
+            elif isinstance(latest_inv, str) and latest_inv.strip():
+                initial_inv_id = latest_inv.strip()
             stripe_tx_id = stripe_sub_addon_id
             payment_confirmed_now = (sub_status == "active") and not wait_for_webhook
+            canonical_idempotency_key = f"inv:{initial_inv_id}" if initial_inv_id else f"sub_init:{stripe_sub_addon_id}"
 
         old_limit = float(cur_or.get("limit_usd", DEFAULT_CONSUMPTION_LIMIT_USD))
         history = list(cur_or.get("credit_history") or [])
@@ -3968,6 +4264,10 @@ class OpsManager:
         if not payment_confirmed_now:
             pending_entry = {
                 "id": stripe_tx_id,
+                "idempotency_key": canonical_idempotency_key,
+                "subscription_id": stripe_sub_addon_id if mode == "monthly_subscription" else None,
+                "invoice_id": initial_inv_id,
+                "billing_reason": "subscription_create" if mode == "monthly_subscription" else "one_shot",
                 "amount_usd": clean_amount,
                 "mode": mode,
                 "mode_label": "Paiement unique (One-Shot)" if mode == "one_shot" else "Abonnement mensuel récurrent",
@@ -4027,6 +4327,10 @@ class OpsManager:
 
         credit_entry = {
             "id": stripe_tx_id,
+            "idempotency_key": canonical_idempotency_key,
+            "subscription_id": stripe_sub_addon_id if mode == "monthly_subscription" else None,
+            "invoice_id": initial_inv_id,
+            "billing_reason": "subscription_create" if mode == "monthly_subscription" else "one_shot",
             "amount_usd": clean_amount,
             "mode": mode,
             "mode_label": "Paiement unique (One-Shot)" if mode == "one_shot" else "Abonnement mensuel récurrent",
@@ -4060,6 +4364,7 @@ class OpsManager:
                 "mode": mode,
                 "new_limit_usd": new_limit,
                 "stripe_transaction_id": stripe_tx_id,
+                "idempotency_key": canonical_idempotency_key,
                 "payment_method": effective_pm_id,
                 "status": "succeeded",
             },
