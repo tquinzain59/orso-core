@@ -152,6 +152,7 @@ def test_kan60_ca2_readonly_mount_and_isolation(tmp_path):
                     tenant_slug="poc-alpha",
                     allow_floating_tag=True,
                     persona_hmac_key="mock_key",
+                    openrouter_api_key="sk-or-v1-dedicated-kan60",
                     artifact_version="1.0.0",
                 )
 

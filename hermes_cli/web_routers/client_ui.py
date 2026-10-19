@@ -88,6 +88,8 @@ class ClientThresholdUpdateRequest(BaseModel):
 class ClientCreditsAddRequest(BaseModel):
     amount_usd: float = Field(..., description="Montant de crédits supplémentaires en USD (KAN-123)")
     mode: str = Field(default="one_shot", description="Mode de facturation Stripe : 'one_shot' ou 'monthly_subscription'")
+    payment_method_id: Optional[str] = Field(default=None, description="Identifiant moyen de paiement Stripe (pm_...) optionnel")
+    wait_for_webhook: bool = Field(default=False, description="Si vrai, attend le webhook payment_intent.succeeded avant de créditer")
 
 
 # ── Catalogues des Agents, Interfaces et Données Métier en Base ────────────
@@ -706,10 +708,24 @@ def _get_tenant_selected_model(
         except Exception:
             pass
 
-    # 3. Variable d'environnement éventuelle du conteneur ou défaut frugal DeepSeek
-    env_model = os.environ.get("ORSO_TENANT_MODEL", "").strip()
-    if env_model in VALID_MODEL_IDS:
-        return env_model
+    # 3. Variable d'environnement du conteneur ou config.yaml local ou défaut frugal DeepSeek
+    for env_k in ("ORSO_SELECTED_MODEL", "LLM_MODEL", "ORSO_TENANT_MODEL"):
+        env_model = os.environ.get(env_k, "").strip()
+        if env_model in VALID_MODEL_IDS:
+            return env_model
+    try:
+        import yaml
+        from hermes_constants import get_hermes_home
+        cfg_file = get_hermes_home() / "config.yaml"
+        if cfg_file.exists():
+            raw_cfg = yaml.safe_load(cfg_file.read_text(encoding="utf-8")) or {}
+            m_cfg = raw_cfg.get("model")
+            if isinstance(m_cfg, dict) and m_cfg.get("default") in VALID_MODEL_IDS:
+                return m_cfg["default"]
+            if isinstance(m_cfg, str) and m_cfg in VALID_MODEL_IDS:
+                return m_cfg
+    except Exception:
+        pass
     return DEFAULT_TENANT_MODEL_ID
 
 
@@ -2206,12 +2222,23 @@ async def _chat_stream_generator(
     full_response_text = ""
     llm_invoked = False
 
-    # 3. Tentative d'appel au LLM réel (OpenRouter avec clé dédiée du tenant ou globale, Gemini, OpenAI, ou AIAgent)
+    # 3. Tentative d'appel au LLM réel (OpenRouter strictement dédié au tenant, sans repli sur clé partagée)
     _, resolved_slug = _resolve_tenant_identity(tenant_id, tenant_slug)
-    tenant_or_key = openrouter_manager.get_decrypted_tenant_key(resolved_slug) if resolved_slug else None
-    openrouter_key = (tenant_or_key or os.environ.get("OPENROUTER_API_KEY", "")).strip()
-    google_key = os.environ.get("GOOGLE_API_KEY", "").strip()
-    openai_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    vault_rec = openrouter_manager.get_tenant_secret_record(resolved_slug) if resolved_slug else None
+    is_revoked = bool(vault_rec and vault_rec.get("status") == "revoked")
+    tenant_or_key = (
+        openrouter_manager.get_decrypted_tenant_key(resolved_slug)
+        if (resolved_slug and not is_revoked)
+        else None
+    )
+    container_own_key = (
+        os.environ.get("OPENROUTER_API_KEY", "").strip()
+        if (not is_revoked and os.environ.get("ORSO_CLIENT_SLUG", "").strip().lower() == (resolved_slug or "").lower())
+        else ""
+    )
+    openrouter_key = (tenant_or_key or container_own_key).strip()
+    google_key = os.environ.get("GOOGLE_API_KEY", "").strip() if not is_revoked else ""
+    openai_key = os.environ.get("OPENAI_API_KEY", "").strip() if not is_revoked else ""
     has_keys = bool(openrouter_key or google_key or openai_key)
     is_test_mode = os.environ.get("ORSO_TEST_MODE") == "1"
 
@@ -2418,6 +2445,22 @@ async def client_chat_endpoint(
     tenant = auth.get("tenant") or {}
     tenant_id = str(tenant.get("tenant_id") or tenant.get("tenant_slug") or os.environ.get("ORSO_CLIENT_ID", "default")).strip()
     tenant_slug = str(tenant.get("tenant_slug") or os.environ.get("ORSO_CLIENT_SLUG", "")).strip()
+
+    # Vérification stricte de non-révocation du token OpenRouter du client (KAN-116 CA5)
+    try:
+        from olympe.openrouter_client import openrouter_manager
+        _, resolved_slug = _resolve_tenant_identity(tenant_id, tenant_slug)
+        if resolved_slug:
+            rec = openrouter_manager.get_tenant_secret_record(resolved_slug)
+            if rec and rec.get("status") == "revoked":
+                raise HTTPException(
+                    status_code=403,
+                    detail="ERR_OPENROUTER_TOKEN_REVOKED: Le token OpenRouter dédié de votre organisation a été révoqué.",
+                )
+    except HTTPException:
+        raise
+    except Exception:
+        pass
 
     _verify_and_bind_client_session(
         session_id=cleaned_sid,
@@ -3569,6 +3612,28 @@ async def update_client_selected_model(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    # Synchronisation immédiate dans le HERMES_HOME local du conteneur s'il est présent (KAN-122 CA3)
+    try:
+        import yaml
+        from hermes_constants import get_hermes_home
+        h_cfg_path = get_hermes_home() / "config.yaml"
+        h_cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        existing_cfg: Dict[str, Any] = {}
+        if h_cfg_path.exists():
+            loaded = yaml.safe_load(h_cfg_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing_cfg = loaded
+        if not isinstance(existing_cfg.get("model"), dict):
+            existing_cfg["model"] = {}
+        existing_cfg["model"]["provider"] = "openrouter"
+        existing_cfg["model"]["default"] = req.model_id.strip()
+        h_cfg_path.write_text(
+            yaml.safe_dump(existing_cfg, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        _log.debug("Synchronisation config.yaml local pour modèle %s : %s", req.model_id, e)
+
     payload = _build_client_models_consumption_payload(tid, tslug)
     payload["success"] = True
     payload["message"] = f"Modèle actif mis à jour : {payload['current_model_info']['name']} ({payload['selected_model']})."
@@ -3594,6 +3659,8 @@ async def update_client_consumption_threshold(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
 
     payload = _build_client_models_consumption_payload(tid, tslug)
     payload["success"] = True
@@ -3622,9 +3689,13 @@ async def add_client_consumption_credits(
             amount_usd=req.amount_usd,
             mode=req.mode,
             actor=actor,
+            payment_method_id=req.payment_method_id,
+            wait_for_webhook=req.wait_for_webhook,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=402, detail=str(e))
 
     payload = _build_client_models_consumption_payload(tid, tslug)
     payload["success"] = True

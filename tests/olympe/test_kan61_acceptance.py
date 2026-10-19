@@ -303,6 +303,7 @@ def test_kan61_docker_lifecycle_manager_remote_integration(tmp_path, remote_mana
                     tenant_slug="poc-alpha",
                     allow_floating_tag=True,
                     persona_hmac_key="key-hmac",
+                    openrouter_api_key="sk-or-v1-dedicated-kan61",
                 )
                 assert res["success"] is True
 

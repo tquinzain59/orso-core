@@ -71,6 +71,7 @@ def test_kan59_ca1_no_container_without_quotas(tmp_path):
                     tenant_slug="client-ca1-default",
                     allow_floating_tag=True,
                     persona_hmac_key="mock-hmac-key",
+                    openrouter_api_key="sk-or-v1-dedicated-kan59",
                 )
                 assert res["success"] is True
                 assert res["quotas"] == DEFAULT_CLIENT_QUOTAS
@@ -122,6 +123,7 @@ def test_kan59_ca1_tier_quotas_applied(tmp_path):
                     tier_id="2_agents",
                     allow_floating_tag=True,
                     persona_hmac_key="mock-hmac-key",
+                    openrouter_api_key="sk-or-v1-dedicated-kan59",
                 )
                 assert res["success"] is True
                 assert res["quotas"]["cpus"] == "1.0"
@@ -158,6 +160,7 @@ def test_kan59_ca2_host_capacity_exceeded_refusal(tmp_path):
         tier_id="1_agent",
         allow_floating_tag=True,
         persona_hmac_key="hmac",
+        openrouter_api_key="sk-or-v1-dedicated-kan59-1",
     )
     assert res1["success"] is True
     assert res1["quotas"]["memory"] == "512m"
@@ -174,6 +177,7 @@ def test_kan59_ca2_host_capacity_exceeded_refusal(tmp_path):
         tier_id="1_agent",
         allow_floating_tag=True,
         persona_hmac_key="hmac",
+        openrouter_api_key="sk-or-v1-dedicated-kan59-2",
     )
     assert res2["success"] is True
 
@@ -188,6 +192,7 @@ def test_kan59_ca2_host_capacity_exceeded_refusal(tmp_path):
         tier_id="1_agent",
         allow_floating_tag=True,
         persona_hmac_key="hmac",
+        openrouter_api_key="sk-or-v1-dedicated-kan59-3",
     )
     assert res3["success"] is False
     assert res3["error"] == "ERR_HOST_CAPACITY_EXCEEDED"
@@ -219,6 +224,7 @@ def test_kan59_ca2_teardown_releases_host_capacity(tmp_path):
         tier_id="2_agents",  # 1024 Mo
         allow_floating_tag=True,
         persona_hmac_key="hmac",
+        openrouter_api_key="sk-or-v1-dedicated-kan59-rel",
     )
     assert manager.get_host_allocated_resources()["available_memory_mb"] == 0
 

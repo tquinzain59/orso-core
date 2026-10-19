@@ -2479,6 +2479,124 @@ class OpsManager:
             except Exception as e:
                 _log.info("Relecture Stripe ignorée/échouée pour %s: %s (utilisation payload)", sub_id, e)
 
+        # ── 4bis. Traitement dédié des recharges de crédits IA par webhook (KAN-123 CA5) ──
+        meta_obj = data_obj.get("metadata") or {}
+        credit_mode = meta_obj.get("credit_mode")
+        if event_type in ("payment_intent.succeeded", "invoice.payment_succeeded") and credit_mode in ("one_shot", "monthly_subscription"):
+            tx_id = data_obj.get("id") or event_id
+            credits_usd = round(float(meta_obj.get("credits_usd") or 0.0), 2)
+            verified_paid = False
+            if self.stripe_secret_key:
+                if event_type == "payment_intent.succeeded":
+                    live_pi = self._stripe_request(f"payment_intents/{tx_id}")
+                    verified_paid = bool(live_pi and live_pi.get("status") == "succeeded")
+                else:
+                    live_inv = self._stripe_request(f"invoices/{tx_id}")
+                    verified_paid = bool(live_inv and live_inv.get("status") == "paid")
+            else:
+                verified_paid = data_obj.get("status") in ("succeeded", "paid")
+
+            if not verified_paid or credits_usd <= 0:
+                raise RuntimeError(
+                    f"ERR_STRIPE_WEBHOOK_PAYMENT_UNVERIFIED: Paiement {tx_id} non confirmé à la source Stripe."
+                )
+
+            actual_tid = matched_tenant_id or matched_slug
+            current_llm = self.get_tenant_llm_settings(actual_tid)
+            cur_or = current_llm.get("openrouter", {})
+            history = list(cur_or.get("credit_history") or [])
+            existing_entry = next((h for h in history if h.get("id") == tx_id), None)
+
+            if existing_entry and existing_entry.get("status") == "succeeded":
+                existing_entry["webhook_confirmed"] = True
+                existing_entry["webhook_event_id"] = event_id
+                new_limit = float(cur_or.get("limit_usd", DEFAULT_CONSUMPTION_LIMIT_USD))
+                new_extra = float(cur_or.get("extra_credits_usd", 0.0))
+                new_monthly = float(cur_or.get("monthly_credit_addon_usd", 0.0))
+            else:
+                old_limit = float(cur_or.get("limit_usd", DEFAULT_CONSUMPTION_LIMIT_USD))
+                new_limit = round(old_limit + credits_usd, 2)
+                new_extra = round(float(cur_or.get("extra_credits_usd", 0.0)) + credits_usd, 2)
+                new_monthly = (
+                    round(float(cur_or.get("monthly_credit_addon_usd", 0.0)) + credits_usd, 2)
+                    if credit_mode == "monthly_subscription"
+                    else float(cur_or.get("monthly_credit_addon_usd", 0.0))
+                )
+                or_mgr = getattr(self, "openrouter_manager", None) or openrouter_manager
+                vault_rec = or_mgr.get_tenant_secret_record(matched_slug)
+                if vault_rec:
+                    vault_rec["extra_credits_usd"] = new_extra
+                    vault_rec["monthly_credit_addon_usd"] = new_monthly
+                    or_mgr.store_tenant_secret(matched_slug, vault_rec)
+                    upd_res = or_mgr.update_tenant_limit(
+                        tenant_slug=matched_slug,
+                        limit_usd=new_limit,
+                        alert_threshold_pct=float(cur_or.get("alert_threshold_pct", DEFAULT_CONSUMPTION_ALERT_THRESHOLD_PCT)),
+                    )
+                    if not upd_res.get("success") or not upd_res.get("api_updated"):
+                        raise RuntimeError(
+                            f"{upd_res.get('error', 'ERR_OPENROUTER_LIMIT_UPDATE_FAILED')}: "
+                            f"{upd_res.get('message', 'Échec mise à jour plafond OpenRouter post-webhook')}"
+                        )
+
+                if existing_entry:
+                    existing_entry["status"] = "succeeded"
+                    existing_entry["webhook_confirmed"] = True
+                    existing_entry["webhook_event_id"] = event_id
+                    existing_entry["new_limit_usd"] = new_limit
+                else:
+                    history.insert(0, {
+                        "id": tx_id,
+                        "amount_usd": credits_usd,
+                        "mode": credit_mode,
+                        "mode_label": "Paiement unique (One-Shot)" if credit_mode == "one_shot" else "Abonnement mensuel récurrent",
+                        "status": "succeeded",
+                        "webhook_confirmed": True,
+                        "webhook_event_id": event_id,
+                        "new_limit_usd": new_limit,
+                        "created_at": _format_timestamp(),
+                    })
+
+            self._sync_tenant_agents_enabled_meta(
+                tenant_id=actual_tid,
+                tenant_slug=matched_slug,
+                openrouter_meta={
+                    "limit_usd": new_limit,
+                    "extra_credits_usd": new_extra,
+                    "monthly_credit_addon_usd": new_monthly,
+                    "credit_history": history[:25],
+                },
+            )
+            self._processed_events[event_id] = {
+                "event_id": event_id,
+                "event_type": event_type,
+                "customer_id": cus_id,
+                "subscription_id": sub_id,
+                "tenant_slug": matched_slug,
+                "status": "processed",
+                "replay_count": 0,
+                "processed_at": _format_timestamp(),
+            }
+            self.record_audit_event(
+                actor={"actor": "stripe-webhook", "role": "system"},
+                action="llm:credits_webhook_confirmed",
+                target=actual_tid,
+                details={
+                    "event_id": event_id,
+                    "transaction_id": tx_id,
+                    "credits_usd": credits_usd,
+                    "new_limit_usd": new_limit,
+                },
+            )
+            return {
+                "status": "processed",
+                "type": event_type,
+                "event_id": event_id,
+                "tenant_slug": matched_slug,
+                "credits_added_usd": credits_usd,
+                "new_limit_usd": new_limit,
+            }
+
         # ── 5. Cycle de vie de l'environnement conteneurisé (Décision 5 / KAN-44) ───
         container_name = f"orso_client_{matched_slug.replace('-', '_')}"
         env_result = None
@@ -2544,10 +2662,13 @@ class OpsManager:
             except Exception as e:
                 _log.warning("Erreur suspension conteneur pour %s: %s", matched_slug, e)
                 env_result = "error"
-            try:
-                self.revoke_tenant_openrouter_token(matched_tenant_id or matched_slug, tenant_slug=matched_slug)
-            except Exception as e:
-                _log.warning("Erreur révocation token OpenRouter post-webhook pour %s: %s", matched_slug, e)
+            or_mgr = getattr(self, "openrouter_manager", None) or openrouter_manager
+            if or_mgr.get_tenant_secret_record(matched_slug):
+                try:
+                    self.revoke_tenant_openrouter_token(matched_tenant_id or matched_slug, tenant_slug=matched_slug)
+                except Exception as e:
+                    _log.error("Erreur révocation token OpenRouter post-webhook pour %s: %s", matched_slug, e)
+                    env_result = "error"
 
         # ── 6. Synchronisation de l'état en base (Supabase) ou en mémoire ────
         if self.supabase_url and self.supabase_key and matched_tenant_id:
@@ -2780,25 +2901,38 @@ class OpsManager:
         if not slug:
             slug = f"lead-{int(time.time())}"
 
-        # Création automatique du token OpenRouter dédié à l'onboarding du nouveau client (KAN-116 CA1, CA6 / KAN-123 CA4)
+        # Préparation des métadonnées OpenRouter du nouveau client (KAN-116 CA1, CA6 / KAN-123 CA4)
         tenant_id_new = f"tenant-{slug}"
-        or_token_meta = self.ensure_tenant_openrouter_token(
-            tenant_id=tenant_id_new,
-            tenant_slug=slug,
-            limit_usd=DEFAULT_CONSUMPTION_LIMIT_USD,
-            allow_simulated=not self.is_production,
-        )
-        or_meta_obj = {
-            "has_dedicated_token": bool(or_token_meta.get("key_hash")),
-            "key_hash": or_token_meta.get("key_hash"),
-            "key_masked": or_token_meta.get("key_masked"),
-            "key_label": or_token_meta.get("key_label"),
-            "status": or_token_meta.get("status", "active"),
-            "limit_usd": or_token_meta.get("limit_usd", DEFAULT_CONSUMPTION_LIMIT_USD),
-            "alert_threshold_pct": or_token_meta.get("alert_threshold_pct", DEFAULT_CONSUMPTION_ALERT_THRESHOLD_PCT),
-            "extra_credits_usd": 0.0,
-            "monthly_credit_addon_usd": 0.0,
-        }
+        if os.environ.get("ORSO_OPENROUTER_VAULT_SECRET") or getattr(self.openrouter_manager, "_master_secret", None):
+            or_token_meta = self.ensure_tenant_openrouter_token(
+                tenant_id=tenant_id_new,
+                tenant_slug=slug,
+                limit_usd=DEFAULT_CONSUMPTION_LIMIT_USD,
+                allow_simulated=not self.is_production,
+            )
+            or_meta_obj = {
+                "has_dedicated_token": bool(or_token_meta.get("key_hash")),
+                "key_hash": or_token_meta.get("key_hash"),
+                "key_masked": or_token_meta.get("key_masked"),
+                "key_label": or_token_meta.get("key_label"),
+                "status": or_token_meta.get("status", "active"),
+                "limit_usd": or_token_meta.get("limit_usd", DEFAULT_CONSUMPTION_LIMIT_USD),
+                "alert_threshold_pct": or_token_meta.get("alert_threshold_pct", DEFAULT_CONSUMPTION_ALERT_THRESHOLD_PCT),
+                "extra_credits_usd": 0.0,
+                "monthly_credit_addon_usd": 0.0,
+            }
+        else:
+            or_meta_obj = {
+                "has_dedicated_token": False,
+                "key_hash": None,
+                "key_masked": None,
+                "key_label": f"orso-{slug}",
+                "status": "pending_provisioning",
+                "limit_usd": DEFAULT_CONSUMPTION_LIMIT_USD,
+                "alert_threshold_pct": DEFAULT_CONSUMPTION_ALERT_THRESHOLD_PCT,
+                "extra_credits_usd": 0.0,
+                "monthly_credit_addon_usd": 0.0,
+            }
 
         pending_tenant = {
             "id": tenant_id_new,
@@ -2881,11 +3015,11 @@ class OpsManager:
             "slug": slug,
             "status": "pending_validation",
             "openrouter_token": {
-                "has_dedicated_token": bool(or_token_meta.get("key_hash")),
-                "key_hash": or_token_meta.get("key_hash"),
-                "key_masked": or_token_meta.get("key_masked"),
-                "key_label": or_token_meta.get("key_label"),
-                "limit_usd": or_token_meta.get("limit_usd", DEFAULT_CONSUMPTION_LIMIT_USD),
+                "has_dedicated_token": bool(or_meta_obj.get("key_hash")),
+                "key_hash": or_meta_obj.get("key_hash"),
+                "key_masked": or_meta_obj.get("key_masked"),
+                "key_label": or_meta_obj.get("key_label"),
+                "limit_usd": or_meta_obj.get("limit_usd", DEFAULT_CONSUMPTION_LIMIT_USD),
             },
             "message": "Votre message a été transmis avec succès à notre équipe d'exploitation.",
             "created_at": lead_record["created_at"],
@@ -2954,20 +3088,27 @@ class OpsManager:
         )
         execution_mode = "simulated" if effective_is_simulated else "containerized"
 
+        # CA2 KAN-74 : Interdiction d'écrire un statut actif ou prêt en production suite à un mode simulé
+        if effective_is_simulated and is_production():
+            raise ValueError("Interdiction formelle d'écrire un statut actif ou prêt en base de production suite à un provisioning simulé (CA2 KAN-74).")
+
         # S'assurer qu'un token OpenRouter dédié est créé et associé au tenant en base (KAN-116 CA1)
-        or_token_meta = self.ensure_tenant_openrouter_token(
-            tenant_id=actual_tenant_id,
-            tenant_slug=tenant_slug or actual_tenant_id,
-            limit_usd=DEFAULT_CONSUMPTION_LIMIT_USD,
-            allow_simulated=effective_is_simulated or not self.is_production,
-        )
+        or_mgr = getattr(self, "openrouter_manager", None) or openrouter_manager
+        or_token_meta: Dict[str, Any] = {}
+        if (
+            os.environ.get("ORSO_OPENROUTER_VAULT_SECRET")
+            or getattr(or_mgr, "_master_secret", None)
+            or or_mgr.get_tenant_secret_record(tenant_slug or actual_tenant_id)
+        ):
+            or_token_meta = self.ensure_tenant_openrouter_token(
+                tenant_id=actual_tenant_id,
+                tenant_slug=tenant_slug or actual_tenant_id,
+                limit_usd=DEFAULT_CONSUMPTION_LIMIT_USD,
+                allow_simulated=effective_is_simulated or not self.is_production,
+            )
 
         # 1. Traitement via le worker souverain si Supabase est configuré
         if self.supabase_url and self.supabase_key:
-            # CA2 KAN-74 : Interdiction d'écrire un statut actif ou prêt en production suite à un mode simulé
-            if effective_is_simulated and is_production():
-                raise ValueError("Interdiction formelle d'écrire un statut actif ou prêt en base de production suite à un provisioning simulé (CA2 KAN-74).")
-
             worker_res = onboarding_worker.provision_tenant_agents(actual_tenant_id)
             _log.info("Provisioning Supabase exécuté pour %s : %s", actual_tenant_id, worker_res)
 
@@ -3397,8 +3538,14 @@ class OpsManager:
         associé au tenant en base de données (sans jamais exposer la clé en clair).
         """
         or_mgr = getattr(self, "openrouter_manager", None) or openrouter_manager
+        has_vault_secret = bool(os.environ.get("ORSO_OPENROUTER_VAULT_SECRET") or getattr(or_mgr, "_master_secret", None))
         existing = or_mgr.get_tenant_secret_record(tenant_slug)
-        if existing and existing.get("status") == "active" and existing.get("key_encrypted"):
+        if (
+            existing
+            and existing.get("status") == "active"
+            and existing.get("key_encrypted")
+            and (not has_vault_secret or or_mgr.get_decrypted_tenant_key(tenant_slug))
+        ):
             public_meta = {
                 "has_dedicated_token": True,
                 "tenant_id": tenant_id,
@@ -3446,6 +3593,21 @@ class OpsManager:
             actual_slug = (llm_row or {}).get("tenant_slug") or tenant_id_or_slug
 
         res = or_mgr.revoke_tenant_key(actual_slug, hard_delete=hard_delete)
+        if not res.get("success") or not res.get("api_revoked"):
+            err_code = res.get("error", "ERR_OPENROUTER_REVOKE_FAILED")
+            err_msg = res.get("message", f"Échec de la révocation distante du token OpenRouter pour '{actual_slug}'.")
+            self.record_audit_event(
+                actor={"actor": "ops_manager", "role": "system"},
+                action="openrouter:token_revoke_failed",
+                target=actual_id,
+                details={
+                    "tenant_slug": actual_slug,
+                    "error": err_code,
+                    "message": err_msg,
+                },
+            )
+            raise RuntimeError(f"{err_code}: {err_msg}")
+
         self._sync_tenant_agents_enabled_meta(
             tenant_id=actual_id,
             tenant_slug=actual_slug,
@@ -3551,7 +3713,7 @@ class OpsManager:
         model_id: str,
         actor: Optional[ Any ] = None,
     ) -> Dict[str, Any]:
-        """Sélectionne et persiste le modèle LLM d'un client (KAN-122 CA1, CA2)."""
+        """Sélectionne, persiste et propage le modèle LLM d'un client aux agents conteneurisés (KAN-122 CA1, CA2, CA3)."""
         clean_model = (model_id or "").strip()
         if clean_model not in VALID_MODEL_IDS:
             raise ValueError(
@@ -3568,14 +3730,27 @@ class OpsManager:
             selected_model=clean_model,
         )
 
+        space_sync: Dict[str, Any] = {}
+        try:
+            from olympe.server import manager as docker_mgr
+            space_sync = docker_mgr.apply_selected_model_to_tenant_space(actual_slug, clean_model)
+        except Exception as e:
+            _log.warning("Synchronisation espace conteneur pour modèle %s (%s) : %s", clean_model, actual_slug, e)
+
         actor_obj = {"actor": actor, "role": "admin"} if isinstance(actor, str) else (actor or {"actor": "tenant_admin", "role": "admin"})
         self.record_audit_event(
             actor=actor_obj,
             action="llm:model_updated",
             target=actual_id,
-            details={"tenant_slug": actual_slug, "selected_model": clean_model},
+            details={
+                "tenant_slug": actual_slug,
+                "selected_model": clean_model,
+                "updated_files": space_sync.get("updated_files", []),
+            },
         )
-        return self.get_tenant_llm_settings(actual_id)
+        res = self.get_tenant_llm_settings(actual_id)
+        res["container_model_sync"] = space_sync
+        return res
 
     def update_tenant_consumption_threshold(
         self,
@@ -3618,11 +3793,15 @@ class OpsManager:
             )
             vault_rec = or_mgr.get_tenant_secret_record(actual_slug)
         if vault_rec:
-            or_mgr.update_tenant_limit(
+            upd_res = or_mgr.update_tenant_limit(
                 tenant_slug=actual_slug,
                 limit_usd=new_limit,
                 alert_threshold_pct=new_threshold_pct,
             )
+            if not upd_res.get("success") or not upd_res.get("api_updated"):
+                err_code = upd_res.get("error", "ERR_OPENROUTER_LIMIT_UPDATE_FAILED")
+                err_msg = upd_res.get("message", f"Échec de la mise à jour distante du plafond OpenRouter pour '{actual_slug}'.")
+                raise RuntimeError(f"{err_code}: {err_msg}")
 
         self._sync_tenant_agents_enabled_meta(
             tenant_id=actual_id,
@@ -3646,6 +3825,30 @@ class OpsManager:
         )
         return self.get_tenant_llm_settings(actual_id)
 
+    def _resolve_customer_payment_method(
+        self,
+        stripe_customer_id: str,
+        explicit_payment_method_id: Optional[str] = None,
+    ) -> str:
+        """Résout et valide le moyen de paiement Stripe du client pour un encaissement réel (KAN-123 CA5)."""
+        if explicit_payment_method_id and str(explicit_payment_method_id).strip():
+            return str(explicit_payment_method_id).strip()
+
+        cust = self._stripe_request(f"customers/{stripe_customer_id}")
+        inv_settings = (cust.get("invoice_settings") if isinstance(cust, dict) else None) or {}
+        default_pm = inv_settings.get("default_payment_method") or (cust.get("default_source") if isinstance(cust, dict) else None)
+        if default_pm and str(default_pm).strip():
+            return str(default_pm).strip()
+
+        pms = self._stripe_request(f"payment_methods?customer={urllib.parse.quote(stripe_customer_id)}&type=card&limit=1")
+        pm_list = (pms.get("data") if isinstance(pms, dict) else None) or []
+        if pm_list and pm_list[0].get("id"):
+            return str(pm_list[0]["id"]).strip()
+
+        raise RuntimeError(
+            f"ERR_STRIPE_PAYMENT_METHOD_REQUIRED: Aucun moyen de paiement actif enregistré pour le client Stripe '{stripe_customer_id}'."
+        )
+
     def add_tenant_credits(
         self,
         tenant_id_or_slug: Optional[str] = None,
@@ -3653,12 +3856,17 @@ class OpsManager:
         mode: str = "one_shot",
         actor: Optional[ Any ] = None,
         tenant_id: Optional[str] = None,
+        payment_method_id: Optional[str] = None,
+        wait_for_webhook: bool = False,
     ) -> Dict[str, Any]:
-        """Ajoute des crédits de consommation via Stripe (paiement one-shot ou abonnement mensuel) (KAN-123 CA5).
+        """Ajoute des crédits de consommation via un encaissement Stripe réel confirmé (KAN-123 CA5).
 
         Modes supportés :
-        - `one_shot` : Paiement immédiat Stripe (PaymentIntent / InvoiceItem) + relèvement immédiat du plafond.
-        - `monthly_subscription` : Souscription mensuelle récurrente de crédits supplémentaires + relèvement du plafond.
+        - `one_shot` : Débit immédiat Stripe (`POST /v1/payment_intents` avec `confirm=true`, `off_session=true`,
+          `payment_method`) et relèvement du plafond uniquement après confirmation (`status == "succeeded"` ou webhook).
+        - `monthly_subscription` : Création d'une vraie `Subscription` Stripe récurrente (`POST /v1/subscriptions`
+          avec `payment_behavior=error_if_incomplete` et `default_payment_method`) et relèvement après `status == "active"`.
+        Tout échec Stripe ou absence de moyen de paiement lève une erreur explicite sans accorder de crédits.
         """
         target_ref = tenant_id_or_slug or tenant_id or ""
         clean_amount = round(float(amount_usd), 2)
@@ -3666,6 +3874,12 @@ class OpsManager:
             raise ValueError("Le montant de crédits doit être compris entre 1 et 10 000 USD.")
         if mode not in ("one_shot", "monthly_subscription"):
             raise ValueError("Mode d'ajout de crédits invalide. Attendu : 'one_shot' ou 'monthly_subscription'.")
+
+        stripe_key = self.stripe_secret_key or os.environ.get("STRIPE_SECRET_KEY", "")
+        if not stripe_key:
+            raise RuntimeError(
+                "ERR_STRIPE_NOT_CONFIGURED: Clé secrète STRIPE_SECRET_KEY requise pour facturer des crédits supplémentaires."
+            )
 
         or_mgr = getattr(self, "openrouter_manager", None) or openrouter_manager
         tenant = self.get_tenant_detail(target_ref)
@@ -3676,54 +3890,107 @@ class OpsManager:
         cur_or = current.get("openrouter", {})
 
         sub = (tenant.get("subscription") if tenant else None) or {}
-        stripe_customer_id = sub.get("stripe_customer_id")
-        stripe_tx_id = f"pi_credit_{actual_slug}_{int(time.time())}"
+        stripe_customer_id = (sub.get("stripe_customer_id") or "").strip()
+        if not stripe_customer_id or stripe_customer_id.startswith("cus_sim"):
+            raise RuntimeError(
+                f"ERR_STRIPE_CUSTOMER_REQUIRED: Aucun client Stripe facturable associé au tenant '{actual_slug}'."
+            )
+
+        effective_pm_id = self._resolve_customer_payment_method(stripe_customer_id, payment_method_id)
+        amount_cents = int(round(clean_amount * 100))
         stripe_sub_addon_id = cur_or.get("stripe_credit_subscription_id")
 
-        # Si une clé Stripe réelle et un customer_id réel sont disponibles, déclencher l'opération Stripe
-        if self.stripe_secret_key and stripe_customer_id and not str(stripe_customer_id).startswith("cus_sim"):
-            try:
-                amount_cents = int(round(clean_amount * 100))
-                if mode == "one_shot":
-                    pi = self._stripe_request(
-                        "payment_intents",
-                        method="POST",
-                        data={
-                            "amount": str(amount_cents),
-                            "currency": "eur",
-                            "customer": stripe_customer_id,
-                            "description": f"Recharge crédits IA Orso Agents (+{clean_amount:.2f} $) - {actual_slug}",
-                            "metadata[tenant_id]": actual_id,
-                            "metadata[tenant_slug]": actual_slug,
-                            "metadata[credit_mode]": "one_shot",
-                            "metadata[credits_usd]": str(clean_amount),
-                        },
-                    )
-                    stripe_tx_id = pi.get("id", stripe_tx_id)
-                else:
-                    stripe_sub_addon_id = stripe_sub_addon_id or f"sub_cred_{actual_slug}_{int(time.time())}"
-                    inv_item = self._stripe_request(
-                        "invoiceitems",
-                        method="POST",
-                        data={
-                            "customer": stripe_customer_id,
-                            "amount": str(amount_cents),
-                            "currency": "eur",
-                            "description": f"Forfait mensuel crédits IA supplémentaires (+{clean_amount:.2f} $/mois) - {actual_slug}",
-                            "metadata[tenant_id]": actual_id,
-                            "metadata[tenant_slug]": actual_slug,
-                            "metadata[credit_mode]": "monthly_subscription",
-                            "metadata[credits_usd]": str(clean_amount),
-                        },
-                    )
-                    stripe_tx_id = inv_item.get("id", stripe_tx_id)
-            except Exception as e:
-                _log.warning("Opération Stripe crédits IA en repli contrôlé pour %s : %s", actual_slug, e)
+        if mode == "one_shot":
+            pi = self._stripe_request(
+                "payment_intents",
+                method="POST",
+                data={
+                    "amount": str(amount_cents),
+                    "currency": "eur",
+                    "customer": stripe_customer_id,
+                    "payment_method": effective_pm_id,
+                    "confirm": "true",
+                    "off_session": "true",
+                    "description": f"Recharge crédits IA Orso Agents (+{clean_amount:.2f} $) - {actual_slug}",
+                    "metadata[tenant_id]": actual_id,
+                    "metadata[tenant_slug]": actual_slug,
+                    "metadata[credit_mode]": "one_shot",
+                    "metadata[credits_usd]": str(clean_amount),
+                },
+            )
+            stripe_tx_id = pi.get("id")
+            pi_status = pi.get("status")
+            if not stripe_tx_id:
+                raise RuntimeError("ERR_STRIPE_PAYMENT_FAILED: Réponse PaymentIntent Stripe invalide (id manquant).")
+            if not wait_for_webhook and pi_status != "succeeded":
+                raise RuntimeError(
+                    f"ERR_STRIPE_PAYMENT_NOT_SUCCEEDED: Le paiement Stripe ({stripe_tx_id}) n'a pas été encaissé "
+                    f"(statut: '{pi_status}'). Aucun crédit n'a été accordé."
+                )
+            if wait_for_webhook and pi_status not in ("succeeded", "processing", "requires_action", "requires_capture"):
+                raise RuntimeError(
+                    f"ERR_STRIPE_PAYMENT_REJECTED: Intention de paiement Stripe ({stripe_tx_id}) rejetée (statut: '{pi_status}')."
+                )
+            payment_confirmed_now = (pi_status == "succeeded") and not wait_for_webhook
         else:
-            if mode == "monthly_subscription":
-                stripe_sub_addon_id = f"sub_cred_{actual_slug}_{int(time.time())}"
+            sub_resp = self._stripe_request(
+                "subscriptions",
+                method="POST",
+                data={
+                    "customer": stripe_customer_id,
+                    "default_payment_method": effective_pm_id,
+                    "payment_behavior": "error_if_incomplete",
+                    "items[0][price_data][currency]": "eur",
+                    "items[0][price_data][unit_amount]": str(amount_cents),
+                    "items[0][price_data][recurring][interval]": "month",
+                    "items[0][price_data][product_data][name]": f"Forfait mensuel crédits IA (+{clean_amount:.2f} $/mois) - {actual_slug}",
+                    "metadata[tenant_id]": actual_id,
+                    "metadata[tenant_slug]": actual_slug,
+                    "metadata[credit_mode]": "monthly_subscription",
+                    "metadata[credits_usd]": str(clean_amount),
+                },
+            )
+            stripe_sub_addon_id = sub_resp.get("id")
+            sub_status = sub_resp.get("status")
+            if not stripe_sub_addon_id or not str(stripe_sub_addon_id).startswith("sub_"):
+                raise RuntimeError("ERR_STRIPE_SUBSCRIPTION_FAILED: Identifiant Subscription Stripe invalide ou manquant.")
+            if not wait_for_webhook and sub_status != "active":
+                raise RuntimeError(
+                    f"ERR_STRIPE_SUBSCRIPTION_NOT_ACTIVE: L'abonnement récurrent Stripe ({stripe_sub_addon_id}) "
+                    f"n'est pas actif (statut: '{sub_status}'). Aucun crédit n'a été accordé."
+                )
+            stripe_tx_id = stripe_sub_addon_id
+            payment_confirmed_now = (sub_status == "active") and not wait_for_webhook
 
         old_limit = float(cur_or.get("limit_usd", DEFAULT_CONSUMPTION_LIMIT_USD))
+        history = list(cur_or.get("credit_history") or [])
+
+        if not payment_confirmed_now:
+            pending_entry = {
+                "id": stripe_tx_id,
+                "amount_usd": clean_amount,
+                "mode": mode,
+                "mode_label": "Paiement unique (One-Shot)" if mode == "one_shot" else "Abonnement mensuel récurrent",
+                "status": "pending_webhook",
+                "payment_method": effective_pm_id,
+                "new_limit_usd": old_limit,
+                "created_at": _format_timestamp(),
+            }
+            history.insert(0, pending_entry)
+            self._sync_tenant_agents_enabled_meta(
+                tenant_id=actual_id,
+                tenant_slug=actual_slug,
+                openrouter_meta={
+                    "stripe_credit_subscription_id": stripe_sub_addon_id,
+                    "credit_history": history[:25],
+                },
+            )
+            pending_state = self.get_tenant_llm_settings(actual_id)
+            pending_state["last_credit_transaction"] = pending_entry
+            pending_state["operation"] = pending_entry
+            pending_state["credits_history"] = history[:25]
+            return pending_state
+
         new_limit = round(old_limit + clean_amount, 2)
         new_extra_credits = round(float(cur_or.get("extra_credits_usd", 0.0)) + clean_amount, 2)
         new_monthly_addon = (
@@ -3732,7 +3999,7 @@ class OpsManager:
             else float(cur_or.get("monthly_credit_addon_usd", 0.0))
         )
 
-        # Mise à jour du coffre-fort OpenRouter et de l'API OpenRouter
+        # Mise à jour du coffre-fort OpenRouter et de l'API OpenRouter uniquement APRÈS paiement confirmé
         vault_rec = or_mgr.get_tenant_secret_record(actual_slug)
         if not vault_rec:
             self.ensure_tenant_openrouter_token(
@@ -3748,18 +4015,23 @@ class OpsManager:
             vault_rec["extra_credits_usd"] = new_extra_credits
             vault_rec["monthly_credit_addon_usd"] = new_monthly_addon
             or_mgr.store_tenant_secret(actual_slug, vault_rec)
-            or_mgr.update_tenant_limit(
+            upd_res = or_mgr.update_tenant_limit(
                 tenant_slug=actual_slug,
                 limit_usd=new_limit,
                 alert_threshold_pct=float(cur_or.get("alert_threshold_pct", DEFAULT_CONSUMPTION_ALERT_THRESHOLD_PCT)),
             )
+            if not upd_res.get("success") or not upd_res.get("api_updated"):
+                err_code = upd_res.get("error", "ERR_OPENROUTER_LIMIT_UPDATE_FAILED")
+                err_msg = upd_res.get("message", "Échec de la mise à jour du plafond OpenRouter après paiement.")
+                raise RuntimeError(f"{err_code}: {err_msg}")
 
-        history = list(cur_or.get("credit_history") or [])
         credit_entry = {
             "id": stripe_tx_id,
             "amount_usd": clean_amount,
             "mode": mode,
             "mode_label": "Paiement unique (One-Shot)" if mode == "one_shot" else "Abonnement mensuel récurrent",
+            "status": "succeeded",
+            "payment_method": effective_pm_id,
             "new_limit_usd": new_limit,
             "created_at": _format_timestamp(),
         }
@@ -3788,6 +4060,8 @@ class OpsManager:
                 "mode": mode,
                 "new_limit_usd": new_limit,
                 "stripe_transaction_id": stripe_tx_id,
+                "payment_method": effective_pm_id,
+                "status": "succeeded",
             },
         )
 

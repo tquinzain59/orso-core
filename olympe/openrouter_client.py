@@ -45,12 +45,12 @@ TENANT_MODELS_CATALOG: List[Dict[str, Any]] = [
         "openrouter_id": "deepseek/deepseek-v4-flash",
         "is_default": True,
         "tier": "frugal",
-        "description": "Modèle haute vélocité et ultra-frugal optimisé pour le recouvrement, la qualification et les relances métier.",
-        "input_price_per_1m_usd": 0.091,
-        "output_price_per_1m_usd": 0.182,
+        "description": "Modèle haute vélocité le plus frugal, optimisé par défaut pour le recouvrement, la qualification et les relances métier.",
+        "input_price_per_1m_usd": 0.028,
+        "output_price_per_1m_usd": 0.056,
         "pricing_per_m_tokens": {
-            "prompt_usd": 0.091,
-            "completion_usd": 0.182,
+            "prompt_usd": 0.028,
+            "completion_usd": 0.056,
         },
         "context_length": 128000,
     },
@@ -62,11 +62,11 @@ TENANT_MODELS_CATALOG: List[Dict[str, Any]] = [
         "is_default": False,
         "tier": "frugal",
         "description": "Modèle frugal souverain européen (Mistral AI) offrant une excellente maîtrise du français juridique et commercial.",
-        "input_price_per_1m_usd": 0.050,
-        "output_price_per_1m_usd": 0.080,
+        "input_price_per_1m_usd": 0.100,
+        "output_price_per_1m_usd": 0.300,
         "pricing_per_m_tokens": {
-            "prompt_usd": 0.050,
-            "completion_usd": 0.080,
+            "prompt_usd": 0.100,
+            "completion_usd": 0.300,
         },
         "context_length": 32768,
     },
@@ -111,13 +111,23 @@ def mask_secret_key(raw_key: Optional[str]) -> str:
 
 
 def _derive_encryption_key(master_secret: Optional[str] = None) -> bytes:
-    """Dérive une clé de chiffrement 32 octets à partir du secret maître hors dépôt."""
-    secret = (
-        master_secret
-        or os.environ.get("ORSO_OPENROUTER_VAULT_SECRET")
-        or os.environ.get("ORSO_PERSONA_HMAC_KEY")
-        or "orso-default-local-vault-key"
-    ).strip()
+    """Dérive une clé de chiffrement 32 octets exclusivement depuis ORSO_OPENROUTER_VAULT_SECRET (KAN-116 CA3).
+
+    Interdit formellement tout repli sur une constante par défaut ou sur ORSO_PERSONA_HMAC_KEY
+    (qui est injectée dans les conteneurs clients).
+    """
+    secret = (master_secret or os.environ.get("ORSO_OPENROUTER_VAULT_SECRET") or "").strip()
+    if not secret:
+        raise RuntimeError(
+            "ERR_OPENROUTER_VAULT_SECRET_REQUIRED: La variable d'environnement ORSO_OPENROUTER_VAULT_SECRET "
+            "est strictement obligatoire pour chiffrer/déchiffrer les tokens OpenRouter (aucun repli autorisé)."
+        )
+    persona_hmac = os.environ.get("ORSO_PERSONA_HMAC_KEY", "").strip()
+    if persona_hmac and hmac.compare_digest(secret, persona_hmac):
+        raise RuntimeError(
+            "ERR_VAULT_SECRET_MUST_DIFFER_FROM_PERSONA_HMAC: ORSO_OPENROUTER_VAULT_SECRET ne doit jamais "
+            "être identique à ORSO_PERSONA_HMAC_KEY (présente dans les conteneurs clients)."
+        )
     return hashlib.sha256(secret.encode("utf-8")).digest()
 
 
@@ -151,6 +161,7 @@ def decrypt_token(ciphertext: str, master_secret: Optional[str] = None) -> Optio
         return None
     if not ciphertext.startswith("enc:v1:"):
         return None
+    key = _derive_encryption_key(master_secret)
     try:
         raw = base64.urlsafe_b64decode(ciphertext[len("enc:v1:"):].encode("ascii"))
         if len(raw) < 48:
@@ -158,7 +169,6 @@ def decrypt_token(ciphertext: str, master_secret: Optional[str] = None) -> Optio
         nonce = raw[:16]
         mac = raw[16:48]
         cipher_bytes = raw[48:]
-        key = _derive_encryption_key(master_secret)
         expected_mac = hmac.new(key, nonce + cipher_bytes, hashlib.sha256).digest()
         if not hmac.compare_digest(mac, expected_mac):
             _log.error("[SECURITY] Échec de vérification d'intégrité HMAC lors du déchiffrement du token OpenRouter.")
@@ -218,6 +228,18 @@ class OpenRouterProvisioningManager:
             or ""
         ).strip()
 
+    @provisioning_key.setter
+    def provisioning_key(self, value: Optional[str]) -> None:
+        self._explicit_provisioning_key = value
+
+    @property
+    def provisioning_api_key(self) -> str:
+        return self.provisioning_key
+
+    @provisioning_api_key.setter
+    def provisioning_api_key(self, value: Optional[str]) -> None:
+        self._explicit_provisioning_key = value
+
     def _get_vault_file(self, tenant_slug: str) -> Path:
         clean_slug = "".join(c for c in tenant_slug.strip().lower() if c.isalnum() or c in ("-", "_"))
         if not clean_slug:
@@ -253,6 +275,7 @@ class OpenRouterProvisioningManager:
         limit_usd: float = DEFAULT_CONSUMPTION_LIMIT_USD,
         limit_reset: Optional[str] = DEFAULT_LIMIT_RESET,
         alert_threshold_pct: float = DEFAULT_CONSUMPTION_ALERT_THRESHOLD_PCT,
+        simulated: bool = False,
     ) -> Path:
         """Enregistre le token chiffré dans un fichier local à permissions restreintes 0600 (CA3)."""
         # Support de l'appel raccourci store_tenant_secret(tenant_slug, record_dict)
@@ -278,6 +301,7 @@ class OpenRouterProvisioningManager:
             "alert_threshold_pct": float(alert_threshold_pct),
             "status": "active",
             "disabled": False,
+            "simulated": bool(simulated),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         return self._write_vault_record(vault_file, record)
@@ -327,7 +351,7 @@ class OpenRouterProvisioningManager:
     def get_decrypted_tenant_key(self, tenant_slug: str) -> Optional[str]:
         """Déchiffre et retourne la clé API OpenRouter dédiée au tenant uniquement pour l'injection stdin conteneur."""
         rec = self.load_tenant_secret_record(tenant_slug)
-        if not rec or rec.get("status") == "revoked" or rec.get("disabled"):
+        if not rec or rec.get("status") != "active" or rec.get("disabled"):
             return None
         enc = rec.get("encrypted_key") or rec.get("key_encrypted")
         if not enc:
@@ -413,6 +437,7 @@ class OpenRouterProvisioningManager:
                 limit_usd=limit_usd,
                 limit_reset=limit_reset,
                 alert_threshold_pct=alert_threshold_pct,
+                simulated=True,
             )
             return {
                 "success": True,
@@ -475,6 +500,7 @@ class OpenRouterProvisioningManager:
             limit_usd=float(key_obj.get("limit") if key_obj.get("limit") is not None else limit_usd),
             limit_reset=key_obj.get("limit_reset") or limit_reset,
             alert_threshold_pct=alert_threshold_pct,
+            simulated=False,
         )
 
         _log.info(
@@ -486,6 +512,7 @@ class OpenRouterProvisioningManager:
         return {
             "success": True,
             "simulated": False,
+            "has_dedicated_token": True,
             "tenant_id": tenant_id,
             "tenant_slug": tenant_slug,
             "key_hash": key_hash,
@@ -495,6 +522,7 @@ class OpenRouterProvisioningManager:
             "limit_reset": key_obj.get("limit_reset") or limit_reset,
             "alert_threshold_pct": float(alert_threshold_pct),
             "status": "active",
+            "disabled": False,
             "vault_file": str(vault_path),
             "created_at": key_obj.get("created_at") or datetime.now(timezone.utc).isoformat(),
         }
@@ -505,28 +533,80 @@ class OpenRouterProvisioningManager:
         key_hash: Optional[str] = None,
         hard_delete: bool = False,
     ) -> Dict[str, Any]:
-        """Révoque ou désactive immédiatement le token OpenRouter d'un client désactivé (CA5)."""
+        """Révoque ou désactive immédiatement le token OpenRouter d'un client désactivé (CA5).
+
+        Si une clé de provisioning OpenRouter est configurée (ou si le jeton n'est pas simulé),
+        tout échec de révocation distante est propagé en erreur explicite (api_revoked=False, success=False).
+        """
         rec = self.load_tenant_secret_record(tenant_slug)
         effective_hash = key_hash or (rec.get("key_hash") if rec else None)
+        if not effective_hash:
+            return {
+                "success": False,
+                "error": "ERR_TENANT_KEY_NOT_FOUND",
+                "tenant_slug": tenant_slug,
+                "key_hash": None,
+                "api_revoked": False,
+                "message": f"Révocation impossible : aucun token OpenRouter associé au client '{tenant_slug}'.",
+            }
 
+        is_simulated_record = bool(rec and rec.get("simulated"))
+        require_remote = bool(self.provisioning_key or not is_simulated_record)
         api_revoked = False
-        if effective_hash and self.provisioning_key:
-            if hard_delete:
-                code, _ = self._api_request(f"keys/{effective_hash}", method="DELETE")
-                api_revoked = code in (200, 204, 404)
-            else:
-                # Désactivation réversible + révocation immédiate du droit d'appel sur OpenRouter
-                code, _ = self._api_request(
-                    f"keys/{effective_hash}",
-                    method="PATCH",
-                    payload={"disabled": True},
-                )
-                if code in (200, 204):
-                    api_revoked = True
+        last_code = 0
+
+        if require_remote:
+            if not self.provisioning_key:
+                return {
+                    "success": False,
+                    "error": "ERR_PROVISIONING_KEY_MISSING",
+                    "tenant_slug": tenant_slug,
+                    "key_hash": effective_hash,
+                    "api_revoked": False,
+                    "message": "Révocation refusée : la clé OPENROUTER_PROVISIONING_API_KEY est absente.",
+                }
+            try:
+                if hard_delete:
+                    res_del = self._api_request(f"keys/{effective_hash}", method="DELETE")
+                    last_code = res_del[0] if isinstance(res_del, tuple) else 200
+                    api_revoked = last_code in (200, 204, 404)
                 else:
-                    # Fallback DELETE si PATCH non supporté
-                    code_del, _ = self._api_request(f"keys/{effective_hash}", method="DELETE")
-                    api_revoked = code_del in (200, 204, 404)
+                    res_patch = self._api_request(
+                        f"keys/{effective_hash}",
+                        method="PATCH",
+                        payload={"disabled": True},
+                    )
+                    last_code = res_patch[0] if isinstance(res_patch, tuple) else 200
+                    if last_code in (200, 204):
+                        api_revoked = True
+                    else:
+                        res_del = self._api_request(f"keys/{effective_hash}", method="DELETE")
+                        code_del = res_del[0] if isinstance(res_del, tuple) else 200
+                        last_code = code_del
+                        api_revoked = code_del in (200, 204, 404)
+            except Exception as exc:
+                _log.error("Exception lors de la révocation distante OpenRouter pour %s : %s", tenant_slug, exc)
+                api_revoked = False
+                last_code = 500
+
+            if not api_revoked:
+                _log.error(
+                    "Échec de révocation distante OpenRouter pour %s (hash=%s, HTTP=%s)",
+                    tenant_slug,
+                    effective_hash[:12],
+                    last_code,
+                )
+                return {
+                    "success": False,
+                    "error": "ERR_OPENROUTER_REVOKE_FAILED",
+                    "tenant_slug": tenant_slug,
+                    "key_hash": effective_hash,
+                    "api_revoked": False,
+                    "http_status": last_code,
+                    "message": f"Échec de la révocation du token sur l'API OpenRouter (HTTP {last_code}).",
+                }
+        else:
+            api_revoked = True
 
         vault_file = self._get_vault_file(tenant_slug)
         if rec and vault_file.is_file():
@@ -535,13 +615,10 @@ class OpenRouterProvisioningManager:
             rec["revoked_at"] = datetime.now(timezone.utc).isoformat()
             if hard_delete:
                 rec["encrypted_key"] = ""
-            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-            fd = os.open(str(vault_file), flags, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(rec, f, indent=2, ensure_ascii=False)
-            os.chmod(vault_file, 0o600)
+                rec["key_encrypted"] = ""
+            self._write_vault_record(vault_file, rec)
 
-        _log.info("Token OpenRouter révoqué pour le tenant %s (hash=%s, api_revoked=%s)", tenant_slug, (effective_hash or "")[:12], api_revoked)
+        _log.info("Token OpenRouter révoqué pour le tenant %s (hash=%s, api_revoked=%s)", tenant_slug, effective_hash[:12], api_revoked)
         return {
             "success": True,
             "tenant_slug": tenant_slug,
@@ -560,20 +637,70 @@ class OpenRouterProvisioningManager:
         limit_reset: Optional[str] = DEFAULT_LIMIT_RESET,
         alert_threshold_pct: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Met à jour le plafond de consommation et le seuil d'alerte d'un client (KAN-116 CA6 / KAN-123 CA4)."""
+        """Met à jour le plafond de consommation et le seuil d'alerte d'un client (KAN-116 CA6 / KAN-123 CA4).
+
+        Si une clé de provisioning OpenRouter est configurée (ou si le jeton n'est pas simulé),
+        tout échec de mise à jour distante est propagé en erreur explicite (api_updated=False, success=False).
+        """
         if limit_usd < 0:
             raise ValueError("Le plafond de consommation doit être positif ou nul.")
 
         rec = self.load_tenant_secret_record(tenant_slug)
         effective_hash = key_hash or (rec.get("key_hash") if rec else None)
+        if not effective_hash:
+            return {
+                "success": False,
+                "error": "ERR_TENANT_KEY_NOT_FOUND",
+                "tenant_slug": tenant_slug,
+                "key_hash": None,
+                "api_updated": False,
+                "message": f"Mise à jour du plafond impossible : aucun token OpenRouter associé au client '{tenant_slug}'.",
+            }
 
+        is_simulated_record = bool(rec and rec.get("simulated"))
+        require_remote = bool(self.provisioning_key or not is_simulated_record)
         api_updated = False
-        if effective_hash and self.provisioning_key:
+        code = 0
+
+        if require_remote:
+            if not self.provisioning_key:
+                return {
+                    "success": False,
+                    "error": "ERR_PROVISIONING_KEY_MISSING",
+                    "tenant_slug": tenant_slug,
+                    "key_hash": effective_hash,
+                    "api_updated": False,
+                    "message": "Mise à jour du plafond refusée : la clé OPENROUTER_PROVISIONING_API_KEY est absente.",
+                }
             patch_payload: Dict[str, Any] = {"limit": float(limit_usd)}
             if limit_reset is not None:
                 patch_payload["limit_reset"] = limit_reset
-            code, _ = self._api_request(f"keys/{effective_hash}", method="PATCH", payload=patch_payload)
-            api_updated = code in (200, 204)
+            try:
+                res_patch = self._api_request(f"keys/{effective_hash}", method="PATCH", payload=patch_payload)
+                code = res_patch[0] if isinstance(res_patch, tuple) else 200
+                api_updated = code in (200, 204)
+            except Exception as exc:
+                _log.error("Exception lors de la mise à jour distante du plafond OpenRouter pour %s : %s", tenant_slug, exc)
+                code = 500
+                api_updated = False
+            if not api_updated:
+                _log.error(
+                    "Échec de mise à jour du plafond OpenRouter pour %s (hash=%s, HTTP=%s)",
+                    tenant_slug,
+                    effective_hash[:12],
+                    code,
+                )
+                return {
+                    "success": False,
+                    "error": "ERR_OPENROUTER_LIMIT_UPDATE_FAILED",
+                    "tenant_slug": tenant_slug,
+                    "key_hash": effective_hash,
+                    "api_updated": False,
+                    "http_status": code,
+                    "message": f"Échec de la mise à jour du plafond sur l'API OpenRouter (HTTP {code}).",
+                }
+        else:
+            api_updated = True
 
         if rec:
             rec["limit_usd"] = float(limit_usd)
@@ -583,11 +710,7 @@ class OpenRouterProvisioningManager:
                 rec["alert_threshold_pct"] = float(alert_threshold_pct)
             rec["updated_at"] = datetime.now(timezone.utc).isoformat()
             vault_file = self._get_vault_file(tenant_slug)
-            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-            fd = os.open(str(vault_file), flags, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(rec, f, indent=2, ensure_ascii=False)
-            os.chmod(vault_file, 0o600)
+            self._write_vault_record(vault_file, rec)
 
         return {
             "success": True,

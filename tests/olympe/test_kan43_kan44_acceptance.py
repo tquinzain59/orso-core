@@ -373,6 +373,7 @@ def test_kan44_ca2_explicit_provisioning_verifies_return_and_reports_execution_m
     # ── Cas B1 : Succès du provisioning sur chemin simulé explicite ──
     monkeypatch.setenv("ORSO_TARGET_ENGINE_DIGEST", "sha256:" + "f" * 64)
     monkeypatch.setenv("ORSO_PERSONA_HMAC_KEY", "test_secret_hmac_key_for_acceptance_0123456789")
+    monkeypatch.setenv("ORSO_OPENROUTER_VAULT_SECRET", "test_vault_secret_for_kan44_acceptance_0123456789")
     monkeypatch.setattr(manager, "has_docker", False)
 
     resp_sim = client.post(f"/api/olympe/ops/onboarding/{tenant_id}/provision", headers=admin_headers)
