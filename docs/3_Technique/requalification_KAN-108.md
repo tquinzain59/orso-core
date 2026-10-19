@@ -65,3 +65,34 @@ Chaque critère d'acceptation touche à un point que le ticket réserve explicit
 - Ne pas passer le ticket à « prêt » tant que les trois arbitrages ne sont pas rendus.
 - Aucune vérification `ruff` n'est applicable : aucun fichier Python n'a été modifié.
 - Sanctuaire non touché. Pas de `git push`, `main` non touchée.
+
+## Revérification du 19/10/2026
+
+Seconde passe sur la même branche, avant toute modification. Conclusion inchangée : aucune modification de code, le ticket reste en attente.
+
+Commande :
+
+```
+curl -sI -m 15 https://www.orso-agents.fr/experts-comptables.html | head -4
+```
+
+Sortie brute :
+
+```
+HTTP/2 404
+cache-control: public, max-age=0, must-revalidate
+content-type: text/plain; charset=utf-8
+date: Mon, 19 Oct 2026 23:01:36 GMT
+```
+
+Commande :
+
+```
+grep -rIli "cabinet\|partenaire\|partner\|commission" hermes_cli/web_routers profiles
+```
+
+Résultat : seul `hermes_cli/web_routers/client_ui.py` sort côté routeurs, et uniquement pour deux descriptions d'agents (lignes 466 et 479, « conformité des partenaires », « partenaires et fournisseurs »). Aucune notion de cabinet, de commission ou de rattachement client. Les autres correspondances sont des skills de profils métiers sans lien avec le programme partenaire.
+
+Commande : `git ls-files | grep -i -E "vitrine|\.html$"`. Aucun fichier de la vitrine publique dans `orso-core` : seules des specs (`spec_kan45_vitrine_onboarding_ops.md`, `spec_kan46_securisation_secrets_vitrine_iam.md`) et des fixtures sans rapport.
+
+Aucun fichier Python modifié : `ruff` non applicable. Pas de handoff séparé : ce rapport en tient lieu. Sanctuaire non touché, pas de `git push`, `main` non touchée.
