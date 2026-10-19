@@ -209,3 +209,63 @@ export interface BillingData {
   stripe_portal_enabled: boolean;
 }
 
+export interface TenantModelInfo {
+  id: string;
+  name: string;
+  provider: string;
+  origin: string;
+  badge: string;
+  description: string;
+  input_price_per_1m_usd: number;
+  output_price_per_1m_usd: number;
+  is_default: boolean;
+}
+
+export interface CreditTransactionEntry {
+  id: string;
+  amount_usd: number;
+  mode: 'one_shot' | 'monthly_subscription' | string;
+  mode_label: string;
+  new_limit_usd: number;
+  created_at: string;
+}
+
+export interface TenantConsumptionData {
+  period_label: string;
+  period_start: string;
+  cost_usd: number;
+  limit_usd: number;
+  remaining_usd: number;
+  usage_pct: number;
+  alert_threshold_pct: number;
+  alert_threshold_usd: number;
+  threshold_reached: boolean;
+  limit_exceeded: boolean;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  sessions_count: number;
+  extra_credits_usd: number;
+  monthly_credit_addon_usd: number;
+  stripe_credit_subscription_id?: string | null;
+  credit_history: CreditTransactionEntry[];
+  openrouter_token?: {
+    key_hash: string;
+    key_masked: string;
+    key_label: string;
+    status: string;
+  };
+}
+
+export interface ModelsConsumptionResponse {
+  tenant_id: string;
+  tenant_slug: string;
+  selected_model: string;
+  current_model_info: TenantModelInfo;
+  available_models: TenantModelInfo[];
+  consumption: TenantConsumptionData;
+  success?: boolean;
+  message?: string;
+}
+
+

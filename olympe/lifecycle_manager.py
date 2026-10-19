@@ -1148,6 +1148,16 @@ class DockerLifecycleManager:
             if val:
                 base_envs[key] = val
 
+        # KAN-116 (CA1 / CA3) : Injection prioritaire du token OpenRouter dédié au tenant
+        # déchiffré à la volée depuis le coffre-fort 0600 et transmis exclusivement via --env-file /dev/stdin.
+        try:
+            from olympe.openrouter_client import openrouter_manager
+            tenant_or_key = openrouter_manager.get_decrypted_tenant_key(tenant_slug)
+            if tenant_or_key:
+                base_envs["OPENROUTER_API_KEY"] = tenant_or_key
+        except Exception as e:
+            _log.warning("Impossible de charger la clé OpenRouter dédiée pour %s : %s", tenant_slug, e)
+
         for auth_key in ["HERMES_DASHBOARD_BASIC_AUTH_USERNAME", "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD", "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH"]:
             val = os.environ.get(auth_key)
             if val:
@@ -1160,6 +1170,27 @@ class DockerLifecycleManager:
         if env_vars:
             base_envs.update(env_vars)
 
+        # ── Validation stricte d'authentification dashboard (Refus explicite sans secret committé - KAN-58) ──
+        if self.has_docker:
+            dashboard_user = base_envs.get("HERMES_DASHBOARD_BASIC_AUTH_USERNAME")
+            dashboard_secret = (
+                base_envs.get("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD")
+                or base_envs.get("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH")
+            )
+            if not (dashboard_user and dashboard_secret):
+                return {
+                    "success": False,
+                    "error": "ERR_DASHBOARD_AUTH_REQUIRED",
+                    "tenant_slug": tenant_slug,
+                    "container_name": container_name,
+                    "mode": "containerized",
+                    "action_taken": False,
+                    "message": (
+                        "Provisioning refusé : authentification dashboard manquante. "
+                        "HERMES_DASHBOARD_BASIC_AUTH_USERNAME et (HERMES_DASHBOARD_BASIC_AUTH_PASSWORD ou HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH) "
+                        "doivent être explicitement fournis (aucun secret de repli par défaut dans le code)."
+                    ),
+                }
 
         # ── Quotas de Ressources & Contrôle d'Admission de l'Hôte (KAN-59 / CA1 / CA2 / CA4) ──
         effective_quotas = get_quotas_for_tier(tier_id=tier_id, overrides=quotas)

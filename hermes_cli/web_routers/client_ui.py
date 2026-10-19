@@ -76,6 +76,20 @@ class SubscriptionUpdateRequest(BaseModel):
     tier_id: str = Field(..., description="Identifiant du palier sélectionné (1_agent, 2_agents, 3_agents, 4_agents)")
 
 
+class ClientModelSelectRequest(BaseModel):
+    model_id: str = Field(..., description="Identifiant OpenRouter du modèle sélectionné pour le client (KAN-122)")
+
+
+class ClientThresholdUpdateRequest(BaseModel):
+    limit_usd: Optional[float] = Field(default=None, description="Plafond de consommation en USD (KAN-123)")
+    alert_threshold_pct: Optional[float] = Field(default=None, description="Seuil d'alerte en % du plafond (KAN-123)")
+
+
+class ClientCreditsAddRequest(BaseModel):
+    amount_usd: float = Field(..., description="Montant de crédits supplémentaires en USD (KAN-123)")
+    mode: str = Field(default="one_shot", description="Mode de facturation Stripe : 'one_shot' ou 'monthly_subscription'")
+
+
 # ── Catalogues des Agents, Interfaces et Données Métier en Base ────────────
 
 ALL_AGENTS_METADATA: List[Dict[str, Any]] = [
@@ -599,6 +613,199 @@ def _get_tenant_enabled_agents(
 
     # Fallback par défaut
     return ["jerome"]
+
+
+_CLIENT_OPS_MANAGER_CACHE: Optional[Any] = None
+
+
+def _get_client_ops_manager() -> Any:
+    """Retourne une instance partagée d'OpsManager pour la persistance des paramètres LLM du client."""
+    global _CLIENT_OPS_MANAGER_CACHE
+    try:
+        from olympe.server import ops_manager as server_ops_mgr
+        if server_ops_mgr is not None:
+            return server_ops_mgr
+    except Exception:
+        pass
+    try:
+        from olympe.ops_manager import OpsManager
+        if _CLIENT_OPS_MANAGER_CACHE is None:
+            _CLIENT_OPS_MANAGER_CACHE = OpsManager()
+        return _CLIENT_OPS_MANAGER_CACHE
+    except Exception as e:
+        _log.debug("OpsManager indisponible depuis client_ui : %s", e)
+        return None
+
+
+def _resolve_tenant_identity(
+    tenant_id: Optional[str] = None,
+    tenant_slug: Optional[str] = None,
+) -> Tuple[str, str]:
+    """Résout le couple (tenant_id, tenant_slug) canonique du client."""
+    tid = (tenant_id or os.environ.get("ORSO_CLIENT_ID") or "").strip()
+    tslug = (tenant_slug or os.environ.get("ORSO_CLIENT_SLUG") or "").strip().lower()
+
+    if not tslug and tid:
+        for s_slug, s_info in _SEED_TENANTS.items():
+            if s_info.get("id") == tid:
+                tslug = s_slug
+                break
+    if not tid and tslug and tslug in _SEED_TENANTS:
+        tid = _SEED_TENANTS[tslug]["id"]
+
+    if not tslug:
+        tslug = tid.lower().replace("_", "-") if tid else "financia-solutions"
+    if not tid:
+        tid = tslug
+    return tid, tslug
+
+
+def _get_tenant_selected_model(
+    tenant_id: Optional[str] = None,
+    tenant_slug: Optional[str] = None,
+) -> str:
+    """Résout le modèle LLM actif sélectionné pour l'organisation cliente (KAN-122 CA2, CA3)."""
+    from olympe.openrouter_client import DEFAULT_TENANT_MODEL_ID, VALID_MODEL_IDS
+
+    tid, tslug = _resolve_tenant_identity(tenant_id, tenant_slug)
+
+    # 1. Lecture depuis OpsManager (SQLite tenant_llm_settings + Supabase tenant_instances.agents_enabled)
+    ops_mgr = _get_client_ops_manager()
+    if ops_mgr is not None:
+        try:
+            row = ops_mgr._db_get_llm_settings(tid, tslug)
+            if row and row.get("selected_model") in VALID_MODEL_IDS:
+                return row["selected_model"]
+            settings = ops_mgr.get_tenant_llm_settings(tid or tslug)
+            model = settings.get("selected_model")
+            if model in VALID_MODEL_IDS:
+                return model
+        except Exception as e:
+            _log.debug("Lecture modèle via OpsManager ignorée : %s", e)
+
+    # 2. Lecture directe Supabase si configuré
+    supabase_url = os.environ.get("SUPABASE_URL", "").strip()
+    service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    if supabase_url and service_key and tid:
+        try:
+            url = f"{supabase_url}/rest/v1/tenant_instances?tenant_id=eq.{tid}&select=agents_enabled"
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "apikey": service_key,
+                    "Authorization": f"Bearer {service_key}",
+                    "User-Agent": "OrsoCore/1.0",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=3.0) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                if data and isinstance(data[0].get("agents_enabled"), dict):
+                    m = data[0]["agents_enabled"].get("selected_model")
+                    if m in VALID_MODEL_IDS:
+                        return m
+        except Exception:
+            pass
+
+    # 3. Variable d'environnement éventuelle du conteneur ou défaut frugal DeepSeek
+    env_model = os.environ.get("ORSO_TENANT_MODEL", "").strip()
+    if env_model in VALID_MODEL_IDS:
+        return env_model
+    return DEFAULT_TENANT_MODEL_ID
+
+
+def _aggregate_tenant_session_tokens(
+    tenant_id: Optional[str] = None,
+    tenant_slug: Optional[str] = None,
+    selected_model: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Agrège les tokens et coûts des conversations du client depuis SessionDB (KAN-123 CA3)."""
+    from olympe.openrouter_client import get_model_catalog_entry, DEFAULT_TENANT_MODEL_ID
+
+    tid, tslug = _resolve_tenant_identity(tenant_id, tenant_slug)
+    model_info = get_model_catalog_entry(selected_model or DEFAULT_TENANT_MODEL_ID)
+    in_rate = float(model_info.get("input_price_per_1m_usd", 0.14)) / 1_000_000.0
+    out_rate = float(model_info.get("output_price_per_1m_usd", 0.28)) / 1_000_000.0
+
+    # Récupérer la liste des session_ids appartenant à ce tenant
+    tenant_session_ids: set[str] = set()
+    try:
+        db_path = _get_client_sessions_db_path()
+        if db_path.exists():
+            with sqlite3.connect(str(db_path), timeout=5.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT session_id FROM client_chat_sessions WHERE tenant_id = ? OR tenant_id = ?;",
+                    (tid, tslug),
+                )
+                for (sid,) in cursor.fetchall():
+                    if sid:
+                        tenant_session_ids.add(str(sid))
+    except Exception:
+        pass
+
+    input_tokens = 0
+    output_tokens = 0
+    estimated_cost = 0.0
+    sessions_count = len(tenant_session_ids)
+
+    for agent_id in ("jerome", "lucas", "clara", "victor"):
+        candidates = []
+        profile_dir = _find_profile_dir(agent_id)
+        if profile_dir:
+            candidates.append(profile_dir.resolve() / "state.db")
+        candidates.append((PROJECT_ROOT / "data" / "agents" / agent_id / "state.db").resolve())
+        seen_paths: set[str] = set()
+        for state_db in candidates:
+            sp = str(state_db)
+            if sp in seen_paths or not state_db.exists():
+                continue
+            seen_paths.add(sp)
+            try:
+                with sqlite3.connect(sp, timeout=5.0) as conn:
+                    cur = conn.cursor()
+                    if tenant_session_ids:
+                        placeholders = ",".join("?" for _ in tenant_session_ids)
+                        params = tuple(tenant_session_ids)
+                        cur.execute(
+                            f"SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(estimated_cost_usd), 0.0) FROM sessions WHERE id IN ({placeholders});",
+                            params,
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            input_tokens += int(row[0] or 0)
+                            output_tokens += int(row[1] or 0)
+                            estimated_cost += float(row[2] or 0.0)
+
+                        # Si les compteurs de tokens sont à 0 (ex: mode résilient), estimer depuis la longueur des messages
+                        cur.execute(
+                            f"SELECT role, LENGTH(COALESCE(content, '')) FROM messages WHERE session_id IN ({placeholders});",
+                            params,
+                        )
+                        msg_in = 0
+                        msg_out = 0
+                        for role, char_len in cur.fetchall():
+                            est_tok = max(1, int((char_len or 0) / 4))
+                            if role == "user":
+                                msg_in += est_tok
+                            else:
+                                msg_out += est_tok
+                        if input_tokens == 0 and msg_in > 0:
+                            input_tokens += msg_in
+                        if output_tokens == 0 and msg_out > 0:
+                            output_tokens += msg_out
+            except Exception:
+                continue
+
+    if estimated_cost <= 0.0 and (input_tokens > 0 or output_tokens > 0):
+        estimated_cost = round((input_tokens * in_rate) + (output_tokens * out_rate), 6)
+
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+        "estimated_cost_usd": round(estimated_cost, 4),
+        "sessions_count": sessions_count,
+    }
 
 
 _SYNC_OVERRIDES: Dict[Tuple[str, str], Dict[str, Any]] = {}
@@ -1231,6 +1438,8 @@ async def client_status():
         or os.environ.get("ANTHROPIC_API_KEY")
     )
     auth_disabled = os.environ.get("ORSO_AUTH_DISABLED") == "1"
+    cid = os.environ.get("ORSO_CLIENT_ID")
+    cslug = os.environ.get("ORSO_CLIENT_SLUG")
     return {
         "module": "Orso UI Client",
         "version": "1.0.0",
@@ -1238,8 +1447,9 @@ async def client_status():
         "dist_path": str(CLIENT_DIST),
         "agents": ["jerome", "lucas", "clara", "victor"],
         "llm_connected": has_api_key,
-        "client_id": os.environ.get("ORSO_CLIENT_ID"),
-        "client_slug": os.environ.get("ORSO_CLIENT_SLUG"),
+        "active_model": _get_tenant_selected_model(cid, cslug),
+        "client_id": cid,
+        "client_slug": cslug,
         "auth_required": not auth_disabled,
     }
 
@@ -1943,13 +2153,25 @@ def _verify_and_bind_client_session(
 # ── Moteur d'Inférence et de Streaming SSE ──────────────────────────────────
 
 async def _chat_stream_generator(
-    agent_id: str, prompt: str, session_id: str, theme_context: str = ""
+    agent_id: str,
+    prompt: str,
+    session_id: str,
+    theme_context: str = "",
+    selected_model: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+    tenant_slug: Optional[str] = None,
 ) -> AsyncGenerator[str, None]:
     """Générateur SSE qui interroge le LLM avec le profil de Jérôme (ou de l'agent choisi),
     stream les tokens en temps réel et transmet les cartes d'actions prêtes à valider.
     """
-    # 1. Événement de début
-    yield f"event: start\ndata: {json.dumps({'session_id': session_id, 'agent_id': agent_id})}\n\n"
+    from olympe.openrouter_client import DEFAULT_TENANT_MODEL_ID, VALID_MODEL_IDS, openrouter_manager
+
+    effective_model = selected_model if (selected_model and selected_model in VALID_MODEL_IDS) else _get_tenant_selected_model(tenant_id, tenant_slug)
+    if effective_model not in VALID_MODEL_IDS:
+        effective_model = DEFAULT_TENANT_MODEL_ID
+
+    # 1. Événement de début (inclut le modèle effectivement sélectionné - KAN-122 CA3)
+    yield f"event: start\ndata: {json.dumps({'session_id': session_id, 'agent_id': agent_id, 'model': effective_model})}\n\n"
     await asyncio.sleep(0.01)
 
     # 2. Préparation du système et de la personnalité
@@ -1984,8 +2206,10 @@ async def _chat_stream_generator(
     full_response_text = ""
     llm_invoked = False
 
-    # 3. Tentative d'appel au LLM réel (OpenRouter, Gemini, OpenAI, ou AIAgent)
-    openrouter_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    # 3. Tentative d'appel au LLM réel (OpenRouter avec clé dédiée du tenant ou globale, Gemini, OpenAI, ou AIAgent)
+    _, resolved_slug = _resolve_tenant_identity(tenant_id, tenant_slug)
+    tenant_or_key = openrouter_manager.get_decrypted_tenant_key(resolved_slug) if resolved_slug else None
+    openrouter_key = (tenant_or_key or os.environ.get("OPENROUTER_API_KEY", "")).strip()
     google_key = os.environ.get("GOOGLE_API_KEY", "").strip()
     openai_key = os.environ.get("OPENAI_API_KEY", "").strip()
     has_keys = bool(openrouter_key or google_key or openai_key)
@@ -1996,7 +2220,7 @@ async def _chat_stream_generator(
         try:
             from run_agent import AIAgent
 
-            configured_model = "deepseek/deepseek-v4-flash"
+            configured_model = effective_model
             configured_provider = "openrouter"
             if google_key and not openrouter_key:
                 configured_provider = "gemini"
@@ -2026,6 +2250,7 @@ async def _chat_stream_generator(
                     agent = AIAgent(
                         model=configured_model,
                         provider=configured_provider,
+                        api_key=openrouter_key if configured_provider == "openrouter" and openrouter_key else None,
                         ephemeral_system_prompt=system_instruction,
                         session_id=session_id,
                         session_db=sdb,
@@ -2146,7 +2371,7 @@ async def _chat_stream_generator(
         yield f"event: action_card\ndata: {json.dumps(action_card, ensure_ascii=False)}\n\n"
         await asyncio.sleep(0.01)
 
-    # Enregistrement pérenne du tour dans SessionDB en mode résilient (CA2)
+    # Enregistrement pérenne du tour dans SessionDB en mode résilient (CA2 + KAN-122 CA3)
     if not llm_invoked and clean_text:
         try:
             from hermes_state import SessionDB
@@ -2157,14 +2382,21 @@ async def _chat_stream_generator(
                 agent_home = (PROJECT_ROOT / "data" / "agents" / agent_id).resolve()
                 agent_home.mkdir(parents=True, exist_ok=True)
             db = SessionDB(agent_home / "state.db")
-            db.create_session(session_id, source="client_ui", model="resilient")
+            db.create_session(session_id, source="client_ui", model=effective_model)
+            # S'assurer que le modèle de la session reflète le modèle sélectionné par le client
+            try:
+                with sqlite3.connect(str(agent_home / "state.db"), timeout=5.0) as _sconn:
+                    _sconn.execute("UPDATE sessions SET model = ? WHERE id = ?;", (effective_model, session_id))
+                    _sconn.commit()
+            except Exception:
+                pass
             db.append_message(session_id, "user", {"content": prompt})
             db.append_message(session_id, "assistant", {"content": clean_text})
         except Exception as save_err:
             _log.warning("Impossible d'enregistrer le tour résilient dans SessionDB: %s", save_err)
 
-    # 6. Événement de fin avec le texte consolidé
-    yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'full_text': clean_text}, ensure_ascii=False)}\n\n"
+    # 6. Événement de fin avec le texte consolidé et le modèle utilisé (KAN-122 CA3)
+    yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'full_text': clean_text, 'model': effective_model}, ensure_ascii=False)}\n\n"
 
 
 @router.post("/api/client/chat")
@@ -2185,6 +2417,7 @@ async def client_chat_endpoint(
     user_id = str(auth.get("sub") or auth.get("user_id") or "anonymous").strip()
     tenant = auth.get("tenant") or {}
     tenant_id = str(tenant.get("tenant_id") or tenant.get("tenant_slug") or os.environ.get("ORSO_CLIENT_ID", "default")).strip()
+    tenant_slug = str(tenant.get("tenant_slug") or os.environ.get("ORSO_CLIENT_SLUG", "")).strip()
 
     _verify_and_bind_client_session(
         session_id=cleaned_sid,
@@ -2193,6 +2426,9 @@ async def client_chat_endpoint(
         agent_id=req.agent_id,
         create_if_missing=True,
     )
+
+    # Résolution du modèle sélectionné par le client (KAN-122 CA2, CA3)
+    selected_model = _get_tenant_selected_model(tenant_id=tenant_id, tenant_slug=tenant_slug)
 
     # Titrage automatique du moteur borné à 6 mots (KAN-83)
     try:
@@ -2232,6 +2468,9 @@ async def client_chat_endpoint(
             prompt=req.message,
             session_id=cleaned_sid,
             theme_context=theme_context,
+            selected_model=selected_model,
+            tenant_id=tenant_id,
+            tenant_slug=tenant_slug,
         ),
         media_type="text/event-stream",
         headers={
@@ -3143,6 +3382,261 @@ async def download_client_invoice(
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="facture-{invoice_id}.pdf"'},
     )
+
+
+# ── Endpoints Modèles & Consommation (KAN-116 / KAN-122 / KAN-123) ───────────
+
+def _require_client_admin(auth: Dict[str, Any]) -> Tuple[str, str, Dict[str, Any]]:
+    """Vérifie que l'utilisateur connecté possède le profil administrateur (KAN-123 CA1).
+
+    Retourne (tenant_id, tenant_slug, actor_info) ou lève HTTPException 403.
+    """
+    _, _, is_admin = _resolve_user_system_role_and_job_title(auth)
+    if not is_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Accès refusé : L'onglet Modèles & Consommation est strictement réservé aux comptes administrateurs.",
+        )
+    tenant = dict(auth.get("tenant") or auth.get("app_metadata") or {})
+    tid, tslug = _resolve_tenant_identity(
+        tenant.get("tenant_id"),
+        tenant.get("tenant_slug"),
+    )
+    actor = {
+        "actor": auth.get("email") or auth.get("sub") or "client_admin",
+        "role": "client_admin",
+    }
+    return tid, tslug, actor
+
+
+def _build_client_models_consumption_payload(tenant_id: str, tenant_slug: str) -> Dict[str, Any]:
+    """Construit la charge utile complète Modèles & Consommation pour l'espace client (KAN-122 & KAN-123)."""
+    from olympe.openrouter_client import (
+        DEFAULT_CONSUMPTION_ALERT_THRESHOLD_PCT,
+        DEFAULT_CONSUMPTION_LIMIT_USD,
+        DEFAULT_TENANT_MODEL_ID,
+        get_model_catalog_entry,
+        get_models_catalog,
+        openrouter_manager,
+    )
+
+    ops_mgr = _get_client_ops_manager()
+    or_mgr = getattr(ops_mgr, "openrouter_manager", None) or openrouter_manager
+    if ops_mgr is not None:
+        llm_state = ops_mgr.get_tenant_llm_settings(tenant_id or tenant_slug)
+        # S'assurer qu'un token OpenRouter dédié est initialisé pour le client (en préservant le seuil existant)
+        rec = or_mgr.get_tenant_secret_record(tenant_slug)
+        if not rec:
+            try:
+                cur_or = llm_state.get("openrouter") or {}
+                ops_mgr.ensure_tenant_openrouter_token(
+                    tenant_id=tenant_id,
+                    tenant_slug=tenant_slug,
+                    limit_usd=float(cur_or.get("limit_usd", DEFAULT_CONSUMPTION_LIMIT_USD)),
+                    alert_threshold_pct=float(cur_or.get("alert_threshold_pct", DEFAULT_CONSUMPTION_ALERT_THRESHOLD_PCT)),
+                    allow_simulated=not ops_mgr.is_production,
+                )
+                llm_state = ops_mgr.get_tenant_llm_settings(tenant_id or tenant_slug)
+            except Exception as e:
+                _log.debug("Initialisation token OpenRouter différée pour %s : %s", tenant_slug, e)
+    else:
+        selected_m = _get_tenant_selected_model(tenant_id, tenant_slug)
+        usage_info = or_mgr.get_tenant_usage(tenant_slug)
+        llm_state = {
+            "tenant_id": tenant_id,
+            "tenant_slug": tenant_slug,
+            "selected_model": selected_m,
+            "current_model_info": get_model_catalog_entry(selected_m),
+            "available_models": get_models_catalog(),
+            "openrouter": usage_info,
+        }
+
+    selected_model = llm_state.get("selected_model") or DEFAULT_TENANT_MODEL_ID
+    or_data = llm_state.get("openrouter") or {}
+    local_tokens = _aggregate_tenant_session_tokens(tenant_id, tenant_slug, selected_model=selected_model)
+
+    or_usage_usd = float(or_data.get("usage_usd", 0.0))
+    local_cost_usd = float(local_tokens.get("estimated_cost_usd", 0.0))
+    effective_cost_usd = round(max(or_usage_usd, local_cost_usd), 4)
+
+    limit_usd = float(or_data.get("limit_usd", DEFAULT_CONSUMPTION_LIMIT_USD))
+    alert_threshold_pct = float(or_data.get("alert_threshold_pct", DEFAULT_CONSUMPTION_ALERT_THRESHOLD_PCT))
+    alert_threshold_usd = round(limit_usd * (alert_threshold_pct / 100.0), 4)
+    usage_pct = round((effective_cost_usd / limit_usd) * 100.0, 2) if limit_usd > 0 else 0.0
+    threshold_reached = usage_pct >= alert_threshold_pct
+    limit_exceeded = effective_cost_usd >= limit_usd and limit_usd > 0
+
+    in_tokens = int(local_tokens.get("input_tokens", 0))
+    out_tokens = int(local_tokens.get("output_tokens", 0))
+    # Si OpenRouter rapporte une consommation mais qu'aucune session locale n'est présente sur ce noeud,
+    # estimer le volume de tokens correspondant à partir du tarif du modèle actif
+    if in_tokens == 0 and out_tokens == 0 and effective_cost_usd > 0:
+        m_info = get_model_catalog_entry(selected_model)
+        avg_price_per_1m = (float(m_info.get("input_price_per_1m_usd", 0.14)) + float(m_info.get("output_price_per_1m_usd", 0.28))) / 2.0
+        est_total = int((effective_cost_usd / max(0.01, avg_price_per_1m)) * 1_000_000)
+        in_tokens = int(est_total * 0.65)
+        out_tokens = max(0, est_total - in_tokens)
+
+    now = datetime.now()
+    months_fr = [
+        "Janvier", "Février", "Mars", "Avril", "Mai", "Juin",
+        "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre",
+    ]
+    month_label = f"{months_fr[now.month - 1]} {now.year}"
+    period_start = f"01/{now.month:02d}/{now.year}"
+    period_label = f"Période mensuelle en cours ({month_label})"
+    remaining_usd = round(max(0.0, limit_usd - effective_cost_usd), 4)
+    sessions_cnt = int(local_tokens.get("sessions_count", 0))
+    extra_credits = float(or_data.get("extra_credits_usd", 0.0))
+    monthly_addon = float(or_data.get("monthly_credit_addon_usd", 0.0))
+    credit_hist = or_data.get("credit_history", [])
+    model_info_obj = get_model_catalog_entry(selected_model)
+    catalog_list = get_models_catalog()
+
+    return {
+        "tenant_id": tenant_id,
+        "tenant_slug": tenant_slug,
+        "selected_model": selected_model,
+        "current_model_info": model_info_obj,
+        "active_model_info": model_info_obj,
+        "available_models": catalog_list,
+        "models_catalog": catalog_list,
+        "credits_history": credit_hist,
+        "consumption": {
+            "period_label": period_label,
+            "period_start": period_start,
+            "period": {
+                "label": period_label,
+                "start": period_start,
+            },
+            "cost_usd": effective_cost_usd,
+            "usage_usd": effective_cost_usd,
+            "limit_usd": limit_usd,
+            "remaining_usd": remaining_usd,
+            "limit_remaining_usd": remaining_usd,
+            "usage_pct": usage_pct,
+            "alert_threshold_pct": alert_threshold_pct,
+            "alert_threshold_usd": alert_threshold_usd,
+            "threshold_reached": threshold_reached,
+            "limit_exceeded": limit_exceeded,
+            "input_tokens": in_tokens,
+            "output_tokens": out_tokens,
+            "total_tokens": in_tokens + out_tokens,
+            "sessions_count": sessions_cnt,
+            "tokens": {
+                "input_tokens": in_tokens,
+                "output_tokens": out_tokens,
+                "total_tokens": in_tokens + out_tokens,
+                "sessions_count": sessions_cnt,
+            },
+            "extra_credits_usd": extra_credits,
+            "monthly_credit_addon_usd": monthly_addon,
+            "monthly_addon_usd": monthly_addon,
+            "stripe_credit_subscription_id": or_data.get("stripe_credit_subscription_id"),
+            "credit_history": credit_hist,
+            "openrouter_token": {
+                "key_hash": or_data.get("key_hash", ""),
+                "key_masked": or_data.get("key_masked", ""),
+                "key_label": or_data.get("key_label", f"orso-tenant-{tenant_slug}"),
+                "status": or_data.get("status", "active"),
+            },
+        },
+    }
+
+
+@router.get("/api/client/models-consumption")
+async def get_client_models_consumption(auth: Dict[str, Any] = Depends(verify_client_access)):
+    """Retourne le modèle courant, le catalogue de modèles, la consommation, le seuil et les crédits (KAN-122 & KAN-123).
+
+    Strictement réservé aux comptes administrateurs de l'espace client (CA1 KAN-123).
+    """
+    tid, tslug, _ = _require_client_admin(auth)
+    return _build_client_models_consumption_payload(tid, tslug)
+
+
+@router.post("/api/client/models-consumption/model")
+async def update_client_selected_model(
+    req: ClientModelSelectRequest,
+    auth: Dict[str, Any] = Depends(verify_client_access),
+):
+    """Permet au compte administrateur client de sélectionner le modèle utilisé par ses agents (KAN-122 CA2, KAN-123 CA2)."""
+    tid, tslug, actor = _require_client_admin(auth)
+    ops_mgr = _get_client_ops_manager()
+    if ops_mgr is None:
+        raise HTTPException(status_code=500, detail="Service de configuration des modèles indisponible.")
+    try:
+        ops_mgr.update_tenant_model(tid or tslug, req.model_id, actor=actor)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    payload = _build_client_models_consumption_payload(tid, tslug)
+    payload["success"] = True
+    payload["message"] = f"Modèle actif mis à jour : {payload['current_model_info']['name']} ({payload['selected_model']})."
+    return payload
+
+
+@router.post("/api/client/models-consumption/threshold")
+async def update_client_consumption_threshold(
+    req: ClientThresholdUpdateRequest,
+    auth: Dict[str, Any] = Depends(verify_client_access),
+):
+    """Permet à l'administrateur client de modifier son seuil d'alerte (%) et/ou son plafond de consommation (KAN-123 CA4)."""
+    tid, tslug, actor = _require_client_admin(auth)
+    ops_mgr = _get_client_ops_manager()
+    if ops_mgr is None:
+        raise HTTPException(status_code=500, detail="Service de gestion des seuils indisponible.")
+    try:
+        ops_mgr.update_tenant_consumption_threshold(
+            tid or tslug,
+            limit_usd=req.limit_usd,
+            alert_threshold_pct=req.alert_threshold_pct,
+            actor=actor,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    payload = _build_client_models_consumption_payload(tid, tslug)
+    payload["success"] = True
+    payload["message"] = (
+        f"Seuil de consommation enregistré : alerte à {payload['consumption']['alert_threshold_pct']}% "
+        f"(plafond : {payload['consumption']['limit_usd']:.2f} $)."
+    )
+    return payload
+
+
+@router.post("/api/client/models-consumption/credits")
+async def add_client_consumption_credits(
+    req: ClientCreditsAddRequest,
+    auth: Dict[str, Any] = Depends(verify_client_access),
+):
+    """Permet à l'administrateur client d'ajouter des crédits de consommation via Stripe
+    (paiement one-shot ou abonnement mensuel de crédits supplémentaires) (KAN-123 CA5).
+    """
+    tid, tslug, actor = _require_client_admin(auth)
+    ops_mgr = _get_client_ops_manager()
+    if ops_mgr is None:
+        raise HTTPException(status_code=500, detail="Service de facturation des crédits indisponible.")
+    try:
+        res = ops_mgr.add_tenant_credits(
+            tid or tslug,
+            amount_usd=req.amount_usd,
+            mode=req.mode,
+            actor=actor,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    payload = _build_client_models_consumption_payload(tid, tslug)
+    payload["success"] = True
+    payload["last_credit_transaction"] = res.get("last_credit_transaction")
+    payload["operation"] = res.get("last_credit_transaction")
+    payload["credits_history"] = payload["consumption"].get("credit_history", [])
+    mode_txt = "en paiement unique (One-Shot)" if req.mode == "one_shot" else "en abonnement mensuel récurrent"
+    payload["message"] = (
+        f"+{req.amount_usd:.2f} $ de crédits IA ajoutés avec succès {mode_txt} via Stripe. "
+        f"Nouveau plafond : {payload['consumption']['limit_usd']:.2f} $."
+    )
+    return payload
 
 
 @router.get("/client")

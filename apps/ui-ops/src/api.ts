@@ -438,6 +438,46 @@ export async function fetchAuthAuditLog(): Promise<{ events: AuthAuditEvent[] }>
   return res.json();
 }
 
+export async function fetchTenantLlmSettings(tenantId: string): Promise<any> {
+  const res = await fetch(`${getBaseUrl()}/api/olympe/ops/tenants/${tenantId}/llm-settings`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) {
+    throw new Error(`Erreur récupération paramètres LLM (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function updateTenantModelOps(tenantId: string, modelId: string): Promise<any> {
+  const res = await fetch(`${getBaseUrl()}/api/olympe/ops/tenants/${tenantId}/model`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ model_id: modelId }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Erreur mise à jour modèle" }));
+    throw new Error(err.detail || `Échec mise à jour modèle (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function updateTenantConsumptionThresholdOps(
+  tenantId: string,
+  payload: { limit_usd?: number; alert_threshold_pct?: number }
+): Promise<any> {
+  const res = await fetch(`${getBaseUrl()}/api/olympe/ops/tenants/${tenantId}/consumption-threshold`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Erreur mise à jour seuil" }));
+    throw new Error(err.detail || `Échec mise à jour seuil (${res.status})`);
+  }
+  return res.json();
+}
+
+
 
 
 

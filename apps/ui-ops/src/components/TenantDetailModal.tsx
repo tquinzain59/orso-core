@@ -21,7 +21,14 @@ import {
 } from "lucide-react";
 import { Tenant, AgentId, TenantUser } from "../types";
 import { AGENTS_CATALOG, AGENT_SLUG_ALIASES } from "../data";
-import { fetchTenantUsers, createTenantUser, deleteTenantUser } from "../api";
+import {
+  fetchTenantUsers,
+  createTenantUser,
+  deleteTenantUser,
+  fetchTenantLlmSettings,
+  updateTenantModelOps,
+  updateTenantConsumptionThresholdOps,
+} from "../api";
 
 interface TenantDetailModalProps {
   tenant: Tenant | null;
@@ -105,6 +112,13 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
   const [saving, setSaving] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  // État Modèle LLM & Seuil de consommation OpenRouter (KAN-116 / KAN-122 / KAN-123)
+  const [selectedModel, setSelectedModel] = useState<string>("deepseek/deepseek-v4-flash");
+  const [limitUsd, setLimitUsd] = useState<number>(25);
+  const [alertThresholdPct, setAlertThresholdPct] = useState<number>(80);
+  const [orKeyMasked, setOrKeyMasked] = useState<string>("");
+  const [orUsageUsd, setOrUsageUsd] = useState<number>(0);
+
   // Synchronisation de l'état local avec les props tenant
   useEffect(() => {
     if (tenant) {
@@ -117,7 +131,7 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
     }
   }, [tenant?.id, tenant?.subscription?.tier_id, tenant?.subscription?.status, tenant?.agents_enabled]);
 
-  // Synchronisation des utilisateurs si nécessaire
+  // Synchronisation des utilisateurs et des paramètres LLM / Consommation
   useEffect(() => {
     if (tenant?.id) {
       fetchTenantUsers(tenant.id)
@@ -125,6 +139,20 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
           if (res && res.length > 0) setUsers(res);
         })
         .catch((err) => console.warn("Erreur chargement utilisateurs tenant:", err));
+
+      fetchTenantLlmSettings(tenant.id)
+        .then((res) => {
+          if (res) {
+            if (res.selected_model) setSelectedModel(res.selected_model);
+            if (res.openrouter) {
+              setLimitUsd(Number(res.openrouter.limit_usd ?? 25));
+              setAlertThresholdPct(Number(res.openrouter.alert_threshold_pct ?? 80));
+              setOrKeyMasked(res.openrouter.key_masked || "");
+              setOrUsageUsd(Number(res.openrouter.usage_usd ?? 0));
+            }
+          }
+        })
+        .catch(() => {});
     }
   }, [tenant?.id]);
 
@@ -272,6 +300,12 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
       await onSaveSubscription(tenant.id, selectedTier, selectedStatus);
       // 2. Persister les agents une fois le forfait confirmé en base.
       await onSaveAgents(tenant.id, activeAgents, trials);
+      // 3. Persister le modèle LLM et le seuil de consommation (KAN-122 / KAN-123 CA4)
+      await updateTenantModelOps(tenant.id, selectedModel);
+      await updateTenantConsumptionThresholdOps(tenant.id, {
+        limit_usd: Number(limitUsd),
+        alert_threshold_pct: Number(alertThresholdPct),
+      });
       setToastMessage("Modifications enregistrées avec succès !");
       setTimeout(() => setToastMessage(null), 3000);
     } catch (e: any) {
@@ -887,6 +921,61 @@ export const TenantDetailModal: React.FC<TenantDetailModalProps> = ({
                   <div className="text-sm font-extrabold text-white mt-1.5">{tier.price}</div>
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* Section 4 : Modèle LLM, Token OpenRouter Dédié & Seuil de Consommation (KAN-116 / KAN-122 / KAN-123 CA4) */}
+          <div className="p-4 rounded-2xl bg-slate-950/80 border border-slate-800 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  Modèle IA & Plafond de Consommation OpenRouter
+                </span>
+                <div className="text-xs text-slate-300 mt-0.5">
+                  Token dédié : <code className="font-mono text-sky-400">{orKeyMasked || "Provisionné à l'activation"}</code> • Conso actuelle :{" "}
+                  <strong className="text-white">{orUsageUsd.toFixed(2)} $</strong> / {limitUsd.toFixed(2)} $
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1">Modèle actif (KAN-122)</label>
+                <select
+                  value={selectedModel}
+                  onChange={(e) => setSelectedModel(e.target.value)}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-xs text-white focus:outline-none focus:border-sky-500"
+                >
+                  <option value="deepseek/deepseek-v4-flash">DeepSeek V4 Flash (Défaut frugal)</option>
+                  <option value="mistralai/mistral-small-24b-instruct-2501">Mistral Small 3 (Frugal souverain EU)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1">Plafond mensuel ($ USD)</label>
+                <input
+                  type="number"
+                  min={5}
+                  max={10000}
+                  step={5}
+                  value={limitUsd}
+                  onChange={(e) => setLimitUsd(Number(e.target.value))}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-xs text-white focus:outline-none focus:border-sky-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1">Seuil d'alerte (%)</label>
+                <input
+                  type="number"
+                  min={10}
+                  max={100}
+                  step={5}
+                  value={alertThresholdPct}
+                  onChange={(e) => setAlertThresholdPct(Number(e.target.value))}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-xs text-white focus:outline-none focus:border-sky-500"
+                />
+              </div>
             </div>
           </div>
         </div>

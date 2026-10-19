@@ -5,6 +5,7 @@ import { ChatView } from '@/pages/ChatView';
 import { IntegrationsView } from '@/pages/IntegrationsView';
 import { ChannelsView } from '@/pages/ChannelsView';
 import { SettingsView } from '@/pages/SettingsView';
+import { ModelsConsumptionView } from '@/pages/ModelsConsumptionView';
 import {
   checkBackendHealth,
   checkSessionMe,
@@ -21,6 +22,7 @@ import {
   Layers,
   Smartphone,
   Settings,
+  Cpu,
   Lock,
   LogOut,
   ShieldCheck,
@@ -29,7 +31,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 
-type Tab = 'chat' | 'integrations' | 'channels' | 'settings';
+type Tab = 'chat' | 'integrations' | 'channels' | 'models' | 'settings';
 
 
 export const App: React.FC = () => {
@@ -54,9 +56,9 @@ export const App: React.FC = () => {
   const [loginPassword, setLoginPassword] = useState<string>('');
   const [showLoginModal, setShowLoginModal] = useState<boolean>(false);
 
-  // Redirection de sécurité : si non-admin, seul l'onglet chat est accessible
+  // Redirection de sécurité : si non-admin, seul l'onglet chat est accessible (CA1 KAN-123)
   useEffect(() => {
-    if (!isAdmin && (currentTab === 'integrations' || currentTab === 'channels')) {
+    if (!isAdmin && (currentTab === 'integrations' || currentTab === 'channels' || currentTab === 'models')) {
       setCurrentTab('chat');
     }
   }, [isAdmin, currentTab]);
@@ -248,7 +250,7 @@ export const App: React.FC = () => {
             <span>Discussion</span>
           </button>
 
-          {/* Onglets Interfaces et Canaux réservés aux Administrateurs */}
+          {/* Onglets Interfaces, Canaux et Modèles & Consommation réservés aux Administrateurs (KAN-123 CA1) */}
           {isAdmin && (
             <>
               <button
@@ -273,6 +275,18 @@ export const App: React.FC = () => {
               >
                 <Smartphone className="w-4 h-4" />
                 <span>Canaux (WhatsApp/Telegram)</span>
+              </button>
+
+              <button
+                onClick={() => setCurrentTab('models')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                  currentTab === 'models'
+                    ? 'bg-blue-600 text-white shadow-md shadow-blue-900/30 scale-100'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                }`}
+              >
+                <Cpu className="w-4 h-4" />
+                <span>Modèles & Consommation</span>
               </button>
             </>
           )}
@@ -380,6 +394,7 @@ export const App: React.FC = () => {
         )}
         {currentTab === 'integrations' && <IntegrationsView />}
         {currentTab === 'channels' && <ChannelsView />}
+        {currentTab === 'models' && isAdmin && <ModelsConsumptionView />}
         {currentTab === 'settings' && (
           <SettingsView
             isAdmin={isAdmin}

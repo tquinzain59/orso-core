@@ -17,6 +17,18 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from olympe.onboarding_worker import onboarding_worker
+from olympe.openrouter_client import (
+    DEFAULT_CONSUMPTION_ALERT_THRESHOLD_PCT,
+    DEFAULT_CONSUMPTION_LIMIT_USD,
+    DEFAULT_TENANT_MODEL_ID,
+    TENANT_MODELS_CATALOG,
+    VALID_MODEL_IDS,
+    get_model_catalog_entry,
+    get_model_info,
+    get_models_catalog,
+    is_valid_tenant_model,
+    openrouter_manager,
+)
 from olympe.ovh_client import ovh_client
 
 _log = logging.getLogger("orso.olympe.ops")
@@ -105,7 +117,9 @@ def normalize_agent_slug(slug: Optional[str]) -> str:
 
 
 def normalize_agents_enabled(agents_data: Any) -> Dict[str, Any]:
-    """Normalise la structure agents_enabled vers les slugs canoniques (jerome, lucas, clara, victor)."""
+    """Normalise la structure agents_enabled vers les slugs canoniques (jerome, lucas, clara, victor)
+    tout en préservant les métadonnées de configuration tenant (selected_model, openrouter, etc.).
+    """
     if isinstance(agents_data, list):
         active = [normalize_agent_slug(a) for a in agents_data if a]
         return {"active": list(dict.fromkeys(active)), "trials": {}}
@@ -120,7 +134,11 @@ def normalize_agents_enabled(agents_data: Any) -> Dict[str, Any]:
             for k, v in raw_trials.items():
                 norm_k = normalize_agent_slug(k)
                 trials[norm_k] = v
-        return {"active": list(dict.fromkeys(active)), "trials": trials}
+        res: Dict[str, Any] = {"active": list(dict.fromkeys(active)), "trials": trials}
+        for k, v in agents_data.items():
+            if k not in ("active", "trials"):
+                res[k] = v
+        return res
     return {"active": [], "trials": {}}
 
 
@@ -247,6 +265,24 @@ def _init_ops_db(db_path: Path) -> None:
         conn.execute(
             """CREATE INDEX IF NOT EXISTS idx_rate_limits_ip_time ON rate_limits (ip, timestamp);"""
         )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS tenant_llm_settings (
+                tenant_id TEXT PRIMARY KEY,
+                tenant_slug TEXT NOT NULL,
+                selected_model TEXT NOT NULL,
+                openrouter_key_hash TEXT,
+                openrouter_key_masked TEXT,
+                openrouter_key_label TEXT,
+                openrouter_key_status TEXT DEFAULT 'active',
+                consumption_limit_usd REAL DEFAULT 25.0,
+                alert_threshold_pct REAL DEFAULT 80.0,
+                extra_credits_usd REAL DEFAULT 0.0,
+                monthly_credit_addon_usd REAL DEFAULT 0.0,
+                stripe_credit_subscription_id TEXT,
+                updated_at TEXT NOT NULL,
+                data_json TEXT
+            );"""
+        )
         conn.commit()
 
 
@@ -309,6 +345,7 @@ class OpsManager:
 
         # Table des événements Webhooks déjà traités pour idempotence au rejeu (Décision 3 / KAN-44 CA4)
         self._processed_events: Dict[str, Dict[str, Any]] = {}
+        self.openrouter_manager = openrouter_manager
 
     @property
     def is_production(self) -> bool:
@@ -1144,7 +1181,7 @@ class OpsManager:
                                 self._query_supabase(
                                     f"tenant_instances?tenant_id=eq.{t['id']}",
                                     method="PATCH",
-                                    payload={"agents_enabled": agents_data["active"]},
+                                    payload={"agents_enabled": agents_data},
                                 )
                                 for ai in raw_agent_instances:
                                     s = str(ai.get("agent_slug", "")).lower()
@@ -1208,6 +1245,16 @@ class OpsManager:
 
                     contact_email = primary_contact.get("email") or cached.get("contact", {}).get("email", "")
 
+                    llm_row = self._db_get_llm_settings(tenant_id, t.get("slug"))
+                    selected_model = (
+                        (llm_row or {}).get("selected_model")
+                        or agents_data.get("selected_model")
+                        or DEFAULT_TENANT_MODEL_ID
+                    )
+                    agents_data["selected_model"] = selected_model
+                    if llm_row and llm_row.get("openrouter"):
+                        agents_data["openrouter"] = {**(agents_data.get("openrouter") or {}), **llm_row["openrouter"]}
+
                     item = {
                         "id": tenant_id,
                         "name": t.get("name"),
@@ -1238,6 +1285,8 @@ class OpsManager:
                             "environment_status": instance_info.get("environment_status", "inactive"),
                         },
                         "agents_enabled": agents_data,
+                        "selected_model": selected_model,
+                        "openrouter": agents_data.get("openrouter") or {},
                         "agent_instances": norm_agent_instances,
                         "subscription": sub,
                         "invoices": inv_list,
@@ -1766,17 +1815,25 @@ class OpsManager:
         clean_active = [a for a in normalized_active if a in ["jerome", "lucas", "clara", "victor"]]
         clean_trials = {normalize_agent_slug(k): v for k, v in (trials_config or {}).items()}
 
+        existing_meta = {}
+        if isinstance(tenant.get("agents_enabled"), dict):
+            for k, v in tenant["agents_enabled"].items():
+                if k not in ("active", "trials"):
+                    existing_meta[k] = v
+
         payload_agents = {
+            **existing_meta,
             "active": clean_active,
             "trials": clean_trials,
         }
 
         # 1. Mise à jour Supabase si configuré
         if self.supabase_url and self.supabase_key:
+            sb_payload = payload_agents if existing_meta or clean_trials else clean_active
             sb_update = self._query_supabase(
                 f"tenant_instances?tenant_id=eq.{tenant_id}",
                 method="PATCH",
-                payload={"agents_enabled": clean_active},
+                payload={"agents_enabled": sb_payload},
             )
             _log.info("Mise à jour Supabase pour le tenant %s : %s", tenant_id, sb_update)
 
@@ -1808,11 +1865,12 @@ class OpsManager:
     def update_tenant_subscription(
         self,
         tenant_id: str,
-        tier_id: str,
+        tier_id: str = "1_agent",
         status: str = "active",
     ) -> Dict[str, Any]:
         """Met à jour le plan d'abonnement d'un client (99€, 169€, 279€ HT)."""
         pricing = TIER_PRICING.get(tier_id, TIER_PRICING["custom"])
+        is_deactivating = status in ["none", "inactive", "canceled"] or tier_id == "none"
 
         if tenant_id in self._mock_tenants:
             sub = self._mock_tenants[tenant_id]["subscription"]
@@ -1826,7 +1884,7 @@ class OpsManager:
             max_agents = pricing.get("max_agents", 0)
             current_agents = self._mock_tenants[tenant_id].get("agents_enabled", {}).get("active", [])
             
-            if status in ["none", "inactive", "canceled"] or tier_id == "none":
+            if is_deactivating:
                 self._mock_tenants[tenant_id]["agents_enabled"]["active"] = []
                 self._mock_tenants[tenant_id]["instance"]["status"] = "not_provisioned"
                 self._mock_tenants[tenant_id]["instance"]["environment_status"] = "inactive"
@@ -1838,6 +1896,15 @@ class OpsManager:
                 self._mock_tenants[tenant_id]["agents_enabled"]["active"] = new_agents
                 if self.supabase_url and self.supabase_key:
                     self._query_supabase(f"tenant_instances?tenant_id=eq.{tenant_id}", method="PATCH", payload={"agents_enabled": new_agents})
+
+        # Révocation automatique du token OpenRouter si le client est désactivé (KAN-116 CA5)
+        token_revoked = False
+        if is_deactivating:
+            try:
+                rev_res = self.revoke_tenant_openrouter_token(tenant_id)
+                token_revoked = bool(rev_res.get("success"))
+            except Exception as e:
+                _log.warning("Notice révocation token OpenRouter lors de la désactivation de %s : %s", tenant_id, e)
 
         # ── Persistance Supabase : PATCH si existant, sinon POST ────────────
         if self.supabase_url and self.supabase_key:
@@ -1872,6 +1939,8 @@ class OpsManager:
             "tier_id": tier_id,
             "price_ht": pricing["price_ht"],
             "status": status,
+            "openrouter_token_revoked": token_revoked,
+            "openrouter_revoked": token_revoked,
         }
 
     def get_stats(self) -> Dict[str, Any]:
@@ -1967,13 +2036,38 @@ class OpsManager:
         self,
         tenant_slug: str = "clientx-orso",
         name: str = "CLIENTX-ORSO (TEST)",
-        contact_email: str = "test-drone-notifications@orso-agents.fr",
+        contact_email: Any = "test-drone-notifications@orso-agents.fr",
         contact_name: str = "Dirigeant Test ClientX",
         quotas: Optional[Dict[str, Any]] = None,
         stripe_customer_id: Optional[str] = None,
+        slug: Optional[str] = None,
+        tier_Agents: Optional[List[str]] = None,
+        admin_email: Optional[str] = None,
+        duration_days: int = 30,
     ) -> Dict[str, Any]:
         """Crée ou provisionne un tenant de test sandbox hermétique (L3/CA2)."""
         from olympe.lifecycle_manager import get_quotas_for_tier
+        # Support de l'appel positionnel (name, slug, tier_agents, admin_email)
+        if slug is not None:
+            actual_name = tenant_slug if tenant_slug != "clientx-orso" else name
+            tenant_slug = slug
+            name = actual_name
+        elif " " in tenant_slug and "-" in name and name.islower():
+            name, tenant_slug = tenant_slug, name
+
+        active_agents = ["jerome"]
+        if isinstance(contact_email, list):
+            active_agents = [normalize_agent_slug(a) for a in contact_email] or ["jerome"]
+            if isinstance(contact_name, str) and "@" in contact_name:
+                contact_email = contact_name
+                contact_name = f"Dirigeant {name}"
+            else:
+                contact_email = admin_email or "test-drone-notifications@orso-agents.fr"
+        elif tier_Agents:
+            active_agents = [normalize_agent_slug(a) for a in tier_Agents] or ["jerome"]
+        if admin_email:
+            contact_email = admin_email
+
         tenant_id = f"test-tenant-{tenant_slug}"
         effective_quotas = get_quotas_for_tier(tier_id="1_agent", overrides=quotas)
 
@@ -1988,7 +2082,7 @@ class OpsManager:
             "created_at": _format_timestamp(),
             "contact": {
                 "full_name": contact_name,
-                "email": contact_email,
+                "email": str(contact_email),
                 "phone": "+33 6 00 00 00 00",
                 "role": "Dirigeant",
             },
@@ -1996,7 +2090,7 @@ class OpsManager:
             "users": [
                 {
                     "id": f"usr_{tenant_slug.replace('-', '_')}_001",
-                    "email": contact_email,
+                    "email": str(contact_email),
                     "full_name": contact_name,
                     "role": "Dirigeant",
                     "is_admin": True,
@@ -2011,14 +2105,15 @@ class OpsManager:
                 "environment_status": "pending_validation",
             },
             "agents_enabled": {
-                "active": ["jerome"],
+                "active": active_agents,
                 "trials": {
-                    "jerome": {
+                    ag: {
                         "is_trial": True,
                         "start_date": _format_timestamp(),
                         "end_date": "2026-10-31T23:59:59Z",
-                        "days_remaining": 30,
+                        "days_remaining": duration_days,
                     }
+                    for ag in active_agents
                 },
             },
             "subscription": {
@@ -2026,7 +2121,7 @@ class OpsManager:
                 "tier_label": "Starter (1 agent)",
                 "price_ht": 99.00,
                 "status": "pending_validation",
-                "trial_days": 30,
+                "trial_days": duration_days,
                 "stripe_customer_id": stripe_customer_id or f"cus_test_{tenant_slug}",
                 "subscription_id": f"sub_test_{tenant_slug}",
                 "current_period_end": "2026-10-31T23:59:59Z",
@@ -2039,6 +2134,29 @@ class OpsManager:
             },
             "invoices": [],
         }
+
+        # Création à la volée du token OpenRouter dédié au tenant (KAN-116 CA1, CA3, CA6)
+        or_token_meta = self.ensure_tenant_openrouter_token(
+            tenant_id=tenant_id,
+            tenant_slug=tenant_slug,
+            limit_usd=DEFAULT_CONSUMPTION_LIMIT_USD,
+            allow_simulated=not self.is_production,
+        )
+        or_meta_obj = {
+            "has_dedicated_token": bool(or_token_meta.get("key_hash")),
+            "key_hash": or_token_meta.get("key_hash"),
+            "key_masked": or_token_meta.get("key_masked"),
+            "key_label": or_token_meta.get("key_label"),
+            "status": or_token_meta.get("status", "active"),
+            "limit_usd": or_token_meta.get("limit_usd", DEFAULT_CONSUMPTION_LIMIT_USD),
+            "alert_threshold_pct": or_token_meta.get("alert_threshold_pct", DEFAULT_CONSUMPTION_ALERT_THRESHOLD_PCT),
+            "extra_credits_usd": 0.0,
+            "monthly_credit_addon_usd": 0.0,
+        }
+        tenant_record["selected_model"] = DEFAULT_TENANT_MODEL_ID
+        tenant_record["openrouter"] = dict(or_meta_obj)
+        tenant_record["agents_enabled"]["selected_model"] = DEFAULT_TENANT_MODEL_ID
+        tenant_record["agents_enabled"]["openrouter"] = dict(or_meta_obj)
 
         # Provisioning Docker via Lifecycle Manager
         is_container_ready = False
@@ -2084,6 +2202,7 @@ class OpsManager:
                     "internal_route_key": f"orso_client_{tenant_slug.replace('-', '_')}",
                     "status": "ready" if is_container_ready else "not_provisioned",
                     "environment_status": "active" if is_container_ready else "pending_validation",
+                    "agents_enabled": tenant_record["agents_enabled"],
                 })
             except Exception as e:
                 _log.warning("Provisioning Supabase pour sandbox %s: %s", tenant_slug, e)
@@ -2092,10 +2211,10 @@ class OpsManager:
             actor={"actor": "drone-clientx", "role": "drone"},
             action="tenant:provision:sandbox",
             target=tenant_slug,
-            details={"quotas": effective_quotas, "name": name},
+            details={"quotas": effective_quotas, "name": name, "openrouter_key_hash": or_token_meta.get("key_hash")},
         )
 
-        return {"success": True, "tenant": tenant_record}
+        return {"success": True, "tenant": tenant_record, "openrouter_token": or_token_meta}
 
     def delete_tenant(self, tenant_id_or_slug: str) -> Dict[str, Any]:
         """Supprime proprement et de manière idempotente un tenant et ses ressources (L3/CA2)."""
@@ -2109,6 +2228,12 @@ class OpsManager:
                 matched_id = tid
                 matched_slug = tdata.get("slug", target)
                 break
+
+        # Révocation immédiate du token OpenRouter dédié au tenant (KAN-116 CA5)
+        try:
+            self.revoke_tenant_openrouter_token(matched_id or target, tenant_slug=matched_slug, hard_delete=True)
+        except Exception as e:
+            _log.warning("Notice révocation token OpenRouter lors de delete_tenant %s: %s", matched_slug, e)
 
         if matched_id:
             self._mock_tenants.pop(matched_id, None)
@@ -2419,6 +2544,10 @@ class OpsManager:
             except Exception as e:
                 _log.warning("Erreur suspension conteneur pour %s: %s", matched_slug, e)
                 env_result = "error"
+            try:
+                self.revoke_tenant_openrouter_token(matched_tenant_id or matched_slug, tenant_slug=matched_slug)
+            except Exception as e:
+                _log.warning("Erreur révocation token OpenRouter post-webhook pour %s: %s", matched_slug, e)
 
         # ── 6. Synchronisation de l'état en base (Supabase) ou en mémoire ────
         if self.supabase_url and self.supabase_key and matched_tenant_id:
@@ -2574,17 +2703,33 @@ class OpsManager:
             return db_events
         return list(reversed(self._audit_log))[:limit]
 
+    def get_tenant_by_id(self, tenant_id_or_slug: str) -> Optional[Dict[str, Any]]:
+        """Alias de get_tenant_detail."""
+        return self.get_tenant_detail(tenant_id_or_slug)
+
     def record_contact_lead(
         self,
-        name: str,
-        email: str,
+        name: str = "",
+        email: str = "",
         company: str = "",
         phone: str = "",
         interest: str = "recouvrement",
         message: str = "",
         consent: bool = True,
+        company_name: Optional[str] = None,
+        contact_name: Optional[str] = None,
+        selected_agents: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Enregistre une prise de contact ou demande de souscription depuis la vitrine et notifie le cockpit OPS (KAN-45)."""
+        if contact_name and not name:
+            name = contact_name
+        if company_name and not company:
+            company = company_name
+        if selected_agents and len(selected_agents) > 0:
+            interest = selected_agents[0]
+            if not message:
+                message = f"Demande d'onboarding pour {', '.join(selected_agents)}"
+
         clean_email = email.strip().lower()
         if not clean_email or "@" not in clean_email:
             raise ValueError("Adresse email invalide.")
@@ -2635,8 +2780,28 @@ class OpsManager:
         if not slug:
             slug = f"lead-{int(time.time())}"
 
+        # Création automatique du token OpenRouter dédié à l'onboarding du nouveau client (KAN-116 CA1, CA6 / KAN-123 CA4)
+        tenant_id_new = f"tenant-{slug}"
+        or_token_meta = self.ensure_tenant_openrouter_token(
+            tenant_id=tenant_id_new,
+            tenant_slug=slug,
+            limit_usd=DEFAULT_CONSUMPTION_LIMIT_USD,
+            allow_simulated=not self.is_production,
+        )
+        or_meta_obj = {
+            "has_dedicated_token": bool(or_token_meta.get("key_hash")),
+            "key_hash": or_token_meta.get("key_hash"),
+            "key_masked": or_token_meta.get("key_masked"),
+            "key_label": or_token_meta.get("key_label"),
+            "status": or_token_meta.get("status", "active"),
+            "limit_usd": or_token_meta.get("limit_usd", DEFAULT_CONSUMPTION_LIMIT_USD),
+            "alert_threshold_pct": or_token_meta.get("alert_threshold_pct", DEFAULT_CONSUMPTION_ALERT_THRESHOLD_PCT),
+            "extra_credits_usd": 0.0,
+            "monthly_credit_addon_usd": 0.0,
+        }
+
         pending_tenant = {
-            "id": f"tenant-{slug}",
+            "id": tenant_id_new,
             "slug": slug,
             "name": lead_record["company"],
             "status": "trial",
@@ -2658,6 +2823,14 @@ class OpsManager:
                 "environment_status": "pending_validation",
                 "container_name": f"orso_client_{slug.replace('-', '_')}",
                 "internal_route_key": f"orso_client_{slug.replace('-', '_')}",
+            },
+            "selected_model": DEFAULT_TENANT_MODEL_ID,
+            "openrouter": dict(or_meta_obj),
+            "agents_enabled": {
+                "active": [normalize_agent_slug(lead_record["interest"]) or "jerome"],
+                "trials": {},
+                "selected_model": DEFAULT_TENANT_MODEL_ID,
+                "openrouter": dict(or_meta_obj),
             },
             "agent_instances": [
                 {
@@ -2695,6 +2868,7 @@ class OpsManager:
                     "internal_route_key": pending_tenant["instance"]["internal_route_key"],
                     "status": "not_provisioned",
                     "environment_status": "pending_validation",
+                    "agents_enabled": pending_tenant["agents_enabled"],
                 })
             except Exception as e:
                 _log.warning("Erreur synchronisation Supabase pour lead %s: %s", slug, e)
@@ -2703,8 +2877,16 @@ class OpsManager:
         return {
             "success": True,
             "lead_id": lead_id,
+            "tenant_id": pending_tenant["id"],
             "slug": slug,
             "status": "pending_validation",
+            "openrouter_token": {
+                "has_dedicated_token": bool(or_token_meta.get("key_hash")),
+                "key_hash": or_token_meta.get("key_hash"),
+                "key_masked": or_token_meta.get("key_masked"),
+                "key_label": or_token_meta.get("key_label"),
+                "limit_usd": or_token_meta.get("limit_usd", DEFAULT_CONSUMPTION_LIMIT_USD),
+            },
             "message": "Votre message a été transmis avec succès à notre équipe d'exploitation.",
             "created_at": lead_record["created_at"],
         }
@@ -2752,6 +2934,7 @@ class OpsManager:
             raise ValueError(f"Client {tenant_id} introuvable.")
 
         actual_tenant_id = tenant["id"]
+        tenant_slug = tenant.get("slug", "")
 
         if provisioning_result and not provisioning_result.get("success"):
             err_code = provisioning_result.get("error", "ERR_PROVISION_FAILED")
@@ -2771,6 +2954,14 @@ class OpsManager:
         )
         execution_mode = "simulated" if effective_is_simulated else "containerized"
 
+        # S'assurer qu'un token OpenRouter dédié est créé et associé au tenant en base (KAN-116 CA1)
+        or_token_meta = self.ensure_tenant_openrouter_token(
+            tenant_id=actual_tenant_id,
+            tenant_slug=tenant_slug or actual_tenant_id,
+            limit_usd=DEFAULT_CONSUMPTION_LIMIT_USD,
+            allow_simulated=effective_is_simulated or not self.is_production,
+        )
+
         # 1. Traitement via le worker souverain si Supabase est configuré
         if self.supabase_url and self.supabase_key:
             # CA2 KAN-74 : Interdiction d'écrire un statut actif ou prêt en production suite à un mode simulé
@@ -2780,9 +2971,19 @@ class OpsManager:
             worker_res = onboarding_worker.provision_tenant_agents(actual_tenant_id)
             _log.info("Provisioning Supabase exécuté pour %s : %s", actual_tenant_id, worker_res)
 
-            tenant_slug = tenant.get("slug", "")
             container_name = f"orso_client_{tenant_slug}" if tenant_slug else f"orso_client_{actual_tenant_id}"
             try:
+                cur_agents_enabled = normalize_agents_enabled(tenant.get("agents_enabled") or {"active": ["jerome"], "trials": {}})
+                cur_agents_enabled.setdefault("selected_model", DEFAULT_TENANT_MODEL_ID)
+                cur_agents_enabled["openrouter"] = {
+                    **(cur_agents_enabled.get("openrouter") or {}),
+                    "key_hash": or_token_meta.get("key_hash"),
+                    "key_masked": or_token_meta.get("key_masked"),
+                    "key_label": or_token_meta.get("key_label"),
+                    "status": or_token_meta.get("status", "active"),
+                    "limit_usd": or_token_meta.get("limit_usd", DEFAULT_CONSUMPTION_LIMIT_USD),
+                    "alert_threshold_pct": or_token_meta.get("alert_threshold_pct", DEFAULT_CONSUMPTION_ALERT_THRESHOLD_PCT),
+                }
                 self._query_supabase(
                     f"tenant_instances?tenant_id=eq.{actual_tenant_id}",
                     method="PATCH",
@@ -2791,6 +2992,7 @@ class OpsManager:
                         "environment_status": "active" if not effective_is_simulated else "simulated",
                         "docker_container_name": container_name,
                         "instance_url": f"https://app.orso-agents.fr/t/{tenant_slug}" if tenant_slug else "https://app.orso-agents.fr",
+                        "agents_enabled": cur_agents_enabled,
                     },
                 )
             except Exception as e:
@@ -2821,8 +3023,21 @@ class OpsManager:
             t["status"] = "active"
             t["instance"]["status"] = "ready" if not effective_is_simulated else "simulated"
             t["instance"]["environment_status"] = "active" if not effective_is_simulated else "simulated"
+            ae = normalize_agents_enabled(t.get("agents_enabled") or {"active": ["jerome"], "trials": {}})
+            ae.setdefault("selected_model", DEFAULT_TENANT_MODEL_ID)
+            ae["openrouter"] = {
+                **(ae.get("openrouter") or {}),
+                "key_hash": or_token_meta.get("key_hash"),
+                "key_masked": or_token_meta.get("key_masked"),
+                "key_label": or_token_meta.get("key_label"),
+                "status": or_token_meta.get("status", "active"),
+                "limit_usd": or_token_meta.get("limit_usd", DEFAULT_CONSUMPTION_LIMIT_USD),
+                "alert_threshold_pct": or_token_meta.get("alert_threshold_pct", DEFAULT_CONSUMPTION_ALERT_THRESHOLD_PCT),
+            }
+            t["agents_enabled"] = ae
             for ai in t.get("agent_instances", []):
                 ai["provisioning_status"] = "ACTIVE"
+            self._db_save_tenant(t)
 
         self.record_audit_event(
             actor={"actor": "ops_manager", "role": "system"},
@@ -2832,6 +3047,7 @@ class OpsManager:
                 "tenant_slug": tenant.get("slug"),
                 "simulated": effective_is_simulated,
                 "execution_mode": execution_mode,
+                "openrouter_key_hash": or_token_meta.get("key_hash"),
             },
         )
 
@@ -2841,6 +3057,12 @@ class OpsManager:
             "status": "ACTIVE",
             "simulated": effective_is_simulated,
             "execution_mode": execution_mode,
+            "openrouter_token": {
+                "key_hash": or_token_meta.get("key_hash"),
+                "key_masked": or_token_meta.get("key_masked"),
+                "limit_usd": or_token_meta.get("limit_usd", DEFAULT_CONSUMPTION_LIMIT_USD),
+                "status": or_token_meta.get("status", "active"),
+            },
             "message": f"Organisation {tenant.get('name')} et agents activés avec succès ({'mode simulé' if effective_is_simulated else 'mode conteneurisé réel'}).",
             "timestamp": _format_timestamp(),
         }
@@ -3020,5 +3242,559 @@ class OpsManager:
             "current_period_end": sub.get("current_period_end"),
             "price_id": price_id,
         }
+
+    # ── Gouvernance Modèles, Consommation & Tokens OpenRouter (KAN-116 / KAN-122 / KAN-123) ──
+
+    def _db_get_llm_settings(
+        self,
+        tenant_id: str,
+        tenant_slug: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Récupère les paramètres LLM et OpenRouter d'un tenant depuis SQLite."""
+        try:
+            with sqlite3.connect(str(self.db_path), timeout=10.0) as conn:
+                cursor = conn.cursor()
+                if tenant_slug:
+                    cursor.execute(
+                        "SELECT data_json FROM tenant_llm_settings WHERE tenant_id = ? OR tenant_slug = ? LIMIT 1;",
+                        (tenant_id, tenant_slug),
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT data_json FROM tenant_llm_settings WHERE tenant_id = ? OR tenant_slug = ? LIMIT 1;",
+                        (tenant_id, tenant_id),
+                    )
+                row = cursor.fetchone()
+                if row and row[0]:
+                    return json.loads(row[0])
+        except Exception as e:
+            _log.debug("Lecture SQLite tenant_llm_settings impossible : %s", e)
+        return None
+
+    def _db_save_llm_settings(
+        self,
+        tenant_id: str,
+        tenant_slug: str,
+        settings: Dict[str, Any],
+    ) -> None:
+        """Persiste les paramètres LLM et OpenRouter d'un tenant dans SQLite."""
+        try:
+            or_meta = settings.get("openrouter") or {}
+            updated_at = _format_timestamp()
+            settings["updated_at"] = updated_at
+            with sqlite3.connect(str(self.db_path), timeout=10.0) as conn:
+                conn.execute(
+                    """INSERT OR REPLACE INTO tenant_llm_settings (
+                        tenant_id, tenant_slug, selected_model,
+                        openrouter_key_hash, openrouter_key_masked, openrouter_key_label, openrouter_key_status,
+                        consumption_limit_usd, alert_threshold_pct, extra_credits_usd,
+                        monthly_credit_addon_usd, stripe_credit_subscription_id, updated_at, data_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);""",
+                    (
+                        tenant_id,
+                        tenant_slug,
+                        settings.get("selected_model", DEFAULT_TENANT_MODEL_ID),
+                        or_meta.get("key_hash", ""),
+                        or_meta.get("key_masked", ""),
+                        or_meta.get("key_label", ""),
+                        or_meta.get("status", "active"),
+                        float(or_meta.get("limit_usd", DEFAULT_CONSUMPTION_LIMIT_USD)),
+                        float(or_meta.get("alert_threshold_pct", DEFAULT_CONSUMPTION_ALERT_THRESHOLD_PCT)),
+                        float(or_meta.get("extra_credits_usd", 0.0)),
+                        float(or_meta.get("monthly_credit_addon_usd", 0.0)),
+                        or_meta.get("stripe_credit_subscription_id"),
+                        updated_at,
+                        json.dumps(settings),
+                    ),
+                )
+                conn.commit()
+        except Exception as e:
+            _log.error("Erreur persistance SQLite tenant_llm_settings pour %s : %s", tenant_slug, e)
+
+    def _sync_tenant_agents_enabled_meta(
+        self,
+        tenant_id: str,
+        tenant_slug: str,
+        selected_model: Optional[str] = None,
+        openrouter_meta: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Synchronise `selected_model` et `openrouter` dans `agents_enabled` (Supabase + SQLite + mémoire)."""
+        tenant = self.get_tenant_detail(tenant_id) or self.get_tenant_detail(tenant_slug)
+        actual_id = tenant["id"] if tenant else tenant_id
+        actual_slug = (tenant.get("slug") if tenant else tenant_slug) or tenant_slug or tenant_id
+
+        existing_llm = self._db_get_llm_settings(actual_id, actual_slug) or {}
+        raw_ae = (tenant.get("agents_enabled") if tenant else None) or {"active": ["jerome"], "trials": {}}
+        ae = normalize_agents_enabled(raw_ae)
+
+        final_model = (
+            selected_model
+            or ae.get("selected_model")
+            or existing_llm.get("selected_model")
+            or DEFAULT_TENANT_MODEL_ID
+        )
+        if final_model not in VALID_MODEL_IDS:
+            final_model = DEFAULT_TENANT_MODEL_ID
+
+        merged_or = {
+            **(existing_llm.get("openrouter") or {}),
+            **(ae.get("openrouter") or {}),
+            **(openrouter_meta or {}),
+        }
+        merged_or.setdefault("limit_usd", DEFAULT_CONSUMPTION_LIMIT_USD)
+        merged_or.setdefault("alert_threshold_pct", DEFAULT_CONSUMPTION_ALERT_THRESHOLD_PCT)
+        merged_or.setdefault("extra_credits_usd", 0.0)
+        merged_or.setdefault("monthly_credit_addon_usd", 0.0)
+        merged_or.setdefault("status", "active")
+
+        ae["selected_model"] = final_model
+        ae["openrouter"] = merged_or
+
+        if self.supabase_url and self.supabase_key:
+            try:
+                self._query_supabase(
+                    f"tenant_instances?tenant_id=eq.{actual_id}",
+                    method="PATCH",
+                    payload={"agents_enabled": ae},
+                )
+            except Exception as e:
+                _log.warning("Synchronisation Supabase agents_enabled méta partielle (%s) : %s", actual_id, e)
+
+        if actual_id in self._mock_tenants:
+            self._mock_tenants[actual_id]["agents_enabled"] = ae
+            self._mock_tenants[actual_id]["selected_model"] = final_model
+            self._mock_tenants[actual_id]["openrouter"] = merged_or
+            self._db_save_tenant(self._mock_tenants[actual_id])
+        else:
+            db_t = self._db_get_tenant(actual_id) or self._db_get_tenant(actual_slug)
+            if db_t:
+                db_t["agents_enabled"] = ae
+                db_t["selected_model"] = final_model
+                db_t["openrouter"] = merged_or
+                self._db_save_tenant(db_t)
+
+        llm_settings = {
+            "tenant_id": actual_id,
+            "tenant_slug": actual_slug,
+            "selected_model": final_model,
+            "openrouter": merged_or,
+        }
+        self._db_save_llm_settings(actual_id, actual_slug, llm_settings)
+        return llm_settings
+
+    def ensure_tenant_openrouter_token(
+        self,
+        tenant_id: str,
+        tenant_slug: str,
+        limit_usd: float = DEFAULT_CONSUMPTION_LIMIT_USD,
+        alert_threshold_pct: float = DEFAULT_CONSUMPTION_ALERT_THRESHOLD_PCT,
+        allow_simulated: bool = True,
+    ) -> Dict[str, Any]:
+        """Garantit qu'un token OpenRouter dédié existe pour le client (KAN-116 CA1, CA3, CA6).
+
+        Si un token actif existe déjà dans le coffre-fort chiffré, il est réutilisé.
+        Sinon, un nouveau token dédié est créé à la volée, stocké chiffré (0600) et
+        associé au tenant en base de données (sans jamais exposer la clé en clair).
+        """
+        or_mgr = getattr(self, "openrouter_manager", None) or openrouter_manager
+        existing = or_mgr.get_tenant_secret_record(tenant_slug)
+        if existing and existing.get("status") == "active" and existing.get("key_encrypted"):
+            public_meta = {
+                "has_dedicated_token": True,
+                "tenant_id": tenant_id,
+                "tenant_slug": tenant_slug,
+                "key_hash": existing.get("key_hash", ""),
+                "key_label": existing.get("key_label", f"orso-tenant-{tenant_slug}"),
+                "key_masked": existing.get("key_masked", ""),
+                "limit_usd": float(existing.get("limit_usd", limit_usd)),
+                "alert_threshold_pct": float(existing.get("alert_threshold_pct", alert_threshold_pct)),
+                "extra_credits_usd": float(existing.get("extra_credits_usd", 0.0)),
+                "monthly_credit_addon_usd": float(existing.get("monthly_credit_addon_usd", 0.0)),
+                "status": "active",
+                "simulated": bool(existing.get("simulated", False)),
+                "created_at": existing.get("created_at"),
+            }
+        else:
+            public_meta = or_mgr.create_tenant_key(
+                tenant_id=tenant_id,
+                tenant_slug=tenant_slug,
+                limit_usd=limit_usd,
+                alert_threshold_pct=alert_threshold_pct,
+                allow_simulated=allow_simulated,
+            )
+
+        self._sync_tenant_agents_enabled_meta(
+            tenant_id=tenant_id,
+            tenant_slug=tenant_slug,
+            openrouter_meta=public_meta,
+        )
+        return public_meta
+
+    def revoke_tenant_openrouter_token(
+        self,
+        tenant_id_or_slug: str,
+        tenant_slug: Optional[str] = None,
+        hard_delete: bool = False,
+    ) -> Dict[str, Any]:
+        """Révoque immédiatement le token OpenRouter d'un client désactivé ou résilié (KAN-116 CA5)."""
+        or_mgr = getattr(self, "openrouter_manager", None) or openrouter_manager
+        tenant = self.get_tenant_detail(tenant_id_or_slug)
+        actual_id = tenant["id"] if tenant else tenant_id_or_slug
+        actual_slug = tenant_slug or (tenant.get("slug") if tenant else None)
+        if not actual_slug:
+            llm_row = self._db_get_llm_settings(tenant_id_or_slug)
+            actual_slug = (llm_row or {}).get("tenant_slug") or tenant_id_or_slug
+
+        res = or_mgr.revoke_tenant_key(actual_slug, hard_delete=hard_delete)
+        self._sync_tenant_agents_enabled_meta(
+            tenant_id=actual_id,
+            tenant_slug=actual_slug,
+            openrouter_meta={
+                "status": "revoked",
+                "revoked_at": res.get("revoked_at", _format_timestamp()),
+            },
+        )
+        self.record_audit_event(
+            actor={"actor": "ops_manager", "role": "system"},
+            action="openrouter:token_revoked",
+            target=actual_id,
+            details={
+                "tenant_slug": actual_slug,
+                "key_hash": res.get("key_hash"),
+                "status": "revoked",
+            },
+        )
+        return res
+
+    def get_tenant_llm_settings(self, tenant_id_or_slug: str) -> Dict[str, Any]:
+        """Retourne l'état complet Modèle & Consommation d'un tenant (KAN-116, KAN-122, KAN-123).
+
+        Ne contient JAMAIS la clé OpenRouter en clair.
+        """
+        or_mgr = getattr(self, "openrouter_manager", None) or openrouter_manager
+        tenant = self.get_tenant_detail(tenant_id_or_slug)
+        actual_id = tenant["id"] if tenant else tenant_id_or_slug
+        actual_slug = (tenant.get("slug") if tenant else None) or tenant_id_or_slug
+
+        llm_row = self._db_get_llm_settings(actual_id, actual_slug) or {}
+        ae = normalize_agents_enabled((tenant.get("agents_enabled") if tenant else None) or {})
+
+        selected_model = (
+            llm_row.get("selected_model")
+            or ae.get("selected_model")
+            or DEFAULT_TENANT_MODEL_ID
+        )
+        if selected_model not in VALID_MODEL_IDS:
+            selected_model = DEFAULT_TENANT_MODEL_ID
+
+        usage_info = or_mgr.get_tenant_usage(actual_slug, tenant_id=actual_id)
+        or_meta = {
+            **(ae.get("openrouter") or {}),
+            **(llm_row.get("openrouter") or {}),
+        }
+
+        limit_usd = float(or_meta.get("limit_usd") or usage_info.get("limit_usd") or DEFAULT_CONSUMPTION_LIMIT_USD)
+        alert_threshold_pct = float(or_meta.get("alert_threshold_pct") or usage_info.get("alert_threshold_pct") or DEFAULT_CONSUMPTION_ALERT_THRESHOLD_PCT)
+        extra_credits_usd = float(or_meta.get("extra_credits_usd") or usage_info.get("extra_credits_usd") or 0.0)
+        monthly_addon_usd = float(or_meta.get("monthly_credit_addon_usd") or usage_info.get("monthly_credit_addon_usd") or 0.0)
+
+        usage_usd = float(usage_info.get("usage_usd", 0.0))
+        usage_pct = round((usage_usd / limit_usd) * 100.0, 2) if limit_usd > 0 else 0.0
+        alert_threshold_usd = round(limit_usd * (alert_threshold_pct / 100.0), 4)
+        threshold_reached = usage_pct >= alert_threshold_pct
+        limit_exceeded = usage_usd >= limit_usd and limit_usd > 0
+        remaining_usd = round(max(0.0, limit_usd - usage_usd), 4)
+
+        or_payload = {
+            "has_dedicated_token": bool(usage_info.get("key_hash") or or_meta.get("key_hash")),
+            "key_hash": usage_info.get("key_hash") or or_meta.get("key_hash", ""),
+            "key_masked": usage_info.get("key_masked") or or_meta.get("key_masked", ""),
+            "key_label": usage_info.get("key_label") or or_meta.get("key_label", f"orso-tenant-{actual_slug}"),
+            "status": usage_info.get("status") or or_meta.get("status", "not_provisioned"),
+            "limit_usd": limit_usd,
+            "usage_usd": usage_usd,
+            "cost_usd": usage_usd,
+            "usage_monthly_usd": float(usage_info.get("usage_monthly_usd", usage_usd)),
+            "remaining_usd": remaining_usd,
+            "limit_remaining_usd": remaining_usd,
+            "usage_pct": usage_pct,
+            "alert_threshold_pct": alert_threshold_pct,
+            "alert_threshold_usd": alert_threshold_usd,
+            "threshold_reached": threshold_reached,
+            "limit_exceeded": limit_exceeded,
+            "extra_credits_usd": extra_credits_usd,
+            "monthly_credit_addon_usd": monthly_addon_usd,
+            "monthly_addon_usd": monthly_addon_usd,
+            "stripe_credit_subscription_id": or_meta.get("stripe_credit_subscription_id"),
+            "credit_history": or_meta.get("credit_history", []),
+        }
+        model_info = get_model_catalog_entry(selected_model)
+        models_list = get_models_catalog()
+
+        return {
+            "success": True,
+            "tenant_id": actual_id,
+            "tenant_slug": actual_slug,
+            "selected_model": selected_model,
+            "current_model_info": model_info,
+            "active_model_info": model_info,
+            "available_models": models_list,
+            "models_catalog": models_list,
+            "openrouter": or_payload,
+            "consumption": dict(or_payload),
+            "credits_history": or_meta.get("credit_history", []),
+        }
+
+    def update_tenant_model(
+        self,
+        tenant_id_or_slug: str,
+        model_id: str,
+        actor: Optional[ Any ] = None,
+    ) -> Dict[str, Any]:
+        """Sélectionne et persiste le modèle LLM d'un client (KAN-122 CA1, CA2)."""
+        clean_model = (model_id or "").strip()
+        if clean_model not in VALID_MODEL_IDS:
+            raise ValueError(
+                f"Modèle '{clean_model}' non autorisé. Modèles disponibles : {', '.join( sorted(VALID_MODEL_IDS) )}"
+            )
+
+        tenant = self.get_tenant_detail(tenant_id_or_slug)
+        actual_id = tenant["id"] if tenant else tenant_id_or_slug
+        actual_slug = (tenant.get("slug") if tenant else None) or tenant_id_or_slug
+
+        self._sync_tenant_agents_enabled_meta(
+            tenant_id=actual_id,
+            tenant_slug=actual_slug,
+            selected_model=clean_model,
+        )
+
+        actor_obj = {"actor": actor, "role": "admin"} if isinstance(actor, str) else (actor or {"actor": "tenant_admin", "role": "admin"})
+        self.record_audit_event(
+            actor=actor_obj,
+            action="llm:model_updated",
+            target=actual_id,
+            details={"tenant_slug": actual_slug, "selected_model": clean_model},
+        )
+        return self.get_tenant_llm_settings(actual_id)
+
+    def update_tenant_consumption_threshold(
+        self,
+        tenant_id_or_slug: Optional[str] = None,
+        limit_usd: Optional[float] = None,
+        alert_threshold_pct: Optional[float] = None,
+        actor: Optional[ Any ] = None,
+        tenant_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Met à jour le plafond de consommation (USD) et/ou le seuil d'alerte (%) d'un client (KAN-116 CA6, KAN-123 CA4).
+
+        Modifiable par l'admin global (OPS) ou l'admin client (APP), persisté en base et répercuté sur OpenRouter.
+        """
+        target_ref = tenant_id_or_slug or tenant_id or ""
+        if limit_usd is not None and float(limit_usd) <= 0:
+            raise ValueError("Le plafond de consommation doit être strictement supérieur à 0 USD.")
+        if alert_threshold_pct is not None and not (1.0 <= float(alert_threshold_pct) <= 100.0):
+            raise ValueError("Le seuil d'alerte doit être compris entre 1% et 100%.")
+
+        or_mgr = getattr(self, "openrouter_manager", None) or openrouter_manager
+        tenant = self.get_tenant_detail(target_ref)
+        actual_id = tenant["id"] if tenant else target_ref
+        actual_slug = (tenant.get("slug") if tenant else None) or target_ref
+
+        current = self.get_tenant_llm_settings(actual_id)
+        cur_or = current.get("openrouter", {})
+
+        new_limit = round(float(limit_usd), 2) if limit_usd is not None else float(cur_or.get("limit_usd", DEFAULT_CONSUMPTION_LIMIT_USD))
+        new_threshold_pct = round(float(alert_threshold_pct), 1) if alert_threshold_pct is not None else float(cur_or.get("alert_threshold_pct", DEFAULT_CONSUMPTION_ALERT_THRESHOLD_PCT))
+
+        # S'assurer qu'un enregistrement OpenRouter existe ou le mettre à jour
+        vault_rec = or_mgr.get_tenant_secret_record(actual_slug)
+        if not vault_rec:
+            self.ensure_tenant_openrouter_token(
+                tenant_id=actual_id,
+                tenant_slug=actual_slug,
+                limit_usd=new_limit,
+                alert_threshold_pct=new_threshold_pct,
+                allow_simulated=not self.is_production,
+            )
+            vault_rec = or_mgr.get_tenant_secret_record(actual_slug)
+        if vault_rec:
+            or_mgr.update_tenant_limit(
+                tenant_slug=actual_slug,
+                limit_usd=new_limit,
+                alert_threshold_pct=new_threshold_pct,
+            )
+
+        self._sync_tenant_agents_enabled_meta(
+            tenant_id=actual_id,
+            tenant_slug=actual_slug,
+            openrouter_meta={
+                "limit_usd": new_limit,
+                "alert_threshold_pct": new_threshold_pct,
+            },
+        )
+
+        actor_obj = {"actor": actor, "role": "admin"} if isinstance(actor, str) else (actor or {"actor": "admin", "role": "admin"})
+        self.record_audit_event(
+            actor=actor_obj,
+            action="llm:threshold_updated",
+            target=actual_id,
+            details={
+                "tenant_slug": actual_slug,
+                "limit_usd": new_limit,
+                "alert_threshold_pct": new_threshold_pct,
+            },
+        )
+        return self.get_tenant_llm_settings(actual_id)
+
+    def add_tenant_credits(
+        self,
+        tenant_id_or_slug: Optional[str] = None,
+        amount_usd: float = 0.0,
+        mode: str = "one_shot",
+        actor: Optional[ Any ] = None,
+        tenant_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Ajoute des crédits de consommation via Stripe (paiement one-shot ou abonnement mensuel) (KAN-123 CA5).
+
+        Modes supportés :
+        - `one_shot` : Paiement immédiat Stripe (PaymentIntent / InvoiceItem) + relèvement immédiat du plafond.
+        - `monthly_subscription` : Souscription mensuelle récurrente de crédits supplémentaires + relèvement du plafond.
+        """
+        target_ref = tenant_id_or_slug or tenant_id or ""
+        clean_amount = round(float(amount_usd), 2)
+        if clean_amount <= 0 or clean_amount > 10000:
+            raise ValueError("Le montant de crédits doit être compris entre 1 et 10 000 USD.")
+        if mode not in ("one_shot", "monthly_subscription"):
+            raise ValueError("Mode d'ajout de crédits invalide. Attendu : 'one_shot' ou 'monthly_subscription'.")
+
+        or_mgr = getattr(self, "openrouter_manager", None) or openrouter_manager
+        tenant = self.get_tenant_detail(target_ref)
+        actual_id = tenant["id"] if tenant else target_ref
+        actual_slug = (tenant.get("slug") if tenant else None) or target_ref
+
+        current = self.get_tenant_llm_settings(actual_id)
+        cur_or = current.get("openrouter", {})
+
+        sub = (tenant.get("subscription") if tenant else None) or {}
+        stripe_customer_id = sub.get("stripe_customer_id")
+        stripe_tx_id = f"pi_credit_{actual_slug}_{int(time.time())}"
+        stripe_sub_addon_id = cur_or.get("stripe_credit_subscription_id")
+
+        # Si une clé Stripe réelle et un customer_id réel sont disponibles, déclencher l'opération Stripe
+        if self.stripe_secret_key and stripe_customer_id and not str(stripe_customer_id).startswith("cus_sim"):
+            try:
+                amount_cents = int(round(clean_amount * 100))
+                if mode == "one_shot":
+                    pi = self._stripe_request(
+                        "payment_intents",
+                        method="POST",
+                        data={
+                            "amount": str(amount_cents),
+                            "currency": "eur",
+                            "customer": stripe_customer_id,
+                            "description": f"Recharge crédits IA Orso Agents (+{clean_amount:.2f} $) - {actual_slug}",
+                            "metadata[tenant_id]": actual_id,
+                            "metadata[tenant_slug]": actual_slug,
+                            "metadata[credit_mode]": "one_shot",
+                            "metadata[credits_usd]": str(clean_amount),
+                        },
+                    )
+                    stripe_tx_id = pi.get("id", stripe_tx_id)
+                else:
+                    stripe_sub_addon_id = stripe_sub_addon_id or f"sub_cred_{actual_slug}_{int(time.time())}"
+                    inv_item = self._stripe_request(
+                        "invoiceitems",
+                        method="POST",
+                        data={
+                            "customer": stripe_customer_id,
+                            "amount": str(amount_cents),
+                            "currency": "eur",
+                            "description": f"Forfait mensuel crédits IA supplémentaires (+{clean_amount:.2f} $/mois) - {actual_slug}",
+                            "metadata[tenant_id]": actual_id,
+                            "metadata[tenant_slug]": actual_slug,
+                            "metadata[credit_mode]": "monthly_subscription",
+                            "metadata[credits_usd]": str(clean_amount),
+                        },
+                    )
+                    stripe_tx_id = inv_item.get("id", stripe_tx_id)
+            except Exception as e:
+                _log.warning("Opération Stripe crédits IA en repli contrôlé pour %s : %s", actual_slug, e)
+        else:
+            if mode == "monthly_subscription":
+                stripe_sub_addon_id = f"sub_cred_{actual_slug}_{int(time.time())}"
+
+        old_limit = float(cur_or.get("limit_usd", DEFAULT_CONSUMPTION_LIMIT_USD))
+        new_limit = round(old_limit + clean_amount, 2)
+        new_extra_credits = round(float(cur_or.get("extra_credits_usd", 0.0)) + clean_amount, 2)
+        new_monthly_addon = (
+            round(float(cur_or.get("monthly_credit_addon_usd", 0.0)) + clean_amount, 2)
+            if mode == "monthly_subscription"
+            else float(cur_or.get("monthly_credit_addon_usd", 0.0))
+        )
+
+        # Mise à jour du coffre-fort OpenRouter et de l'API OpenRouter
+        vault_rec = or_mgr.get_tenant_secret_record(actual_slug)
+        if not vault_rec:
+            self.ensure_tenant_openrouter_token(
+                tenant_id=actual_id,
+                tenant_slug=actual_slug,
+                limit_usd=new_limit,
+                alert_threshold_pct=float(cur_or.get("alert_threshold_pct", DEFAULT_CONSUMPTION_ALERT_THRESHOLD_PCT)),
+                allow_simulated=not self.is_production,
+            )
+            vault_rec = or_mgr.get_tenant_secret_record(actual_slug)
+
+        if vault_rec:
+            vault_rec["extra_credits_usd"] = new_extra_credits
+            vault_rec["monthly_credit_addon_usd"] = new_monthly_addon
+            or_mgr.store_tenant_secret(actual_slug, vault_rec)
+            or_mgr.update_tenant_limit(
+                tenant_slug=actual_slug,
+                limit_usd=new_limit,
+                alert_threshold_pct=float(cur_or.get("alert_threshold_pct", DEFAULT_CONSUMPTION_ALERT_THRESHOLD_PCT)),
+            )
+
+        history = list(cur_or.get("credit_history") or [])
+        credit_entry = {
+            "id": stripe_tx_id,
+            "amount_usd": clean_amount,
+            "mode": mode,
+            "mode_label": "Paiement unique (One-Shot)" if mode == "one_shot" else "Abonnement mensuel récurrent",
+            "new_limit_usd": new_limit,
+            "created_at": _format_timestamp(),
+        }
+        history.insert(0, credit_entry)
+
+        self._sync_tenant_agents_enabled_meta(
+            tenant_id=actual_id,
+            tenant_slug=actual_slug,
+            openrouter_meta={
+                "limit_usd": new_limit,
+                "extra_credits_usd": new_extra_credits,
+                "monthly_credit_addon_usd": new_monthly_addon,
+                "stripe_credit_subscription_id": stripe_sub_addon_id,
+                "credit_history": history[:25],
+            },
+        )
+
+        actor_obj = {"actor": actor, "role": "admin"} if isinstance(actor, str) else (actor or {"actor": "tenant_admin", "role": "admin"})
+        self.record_audit_event(
+            actor=actor_obj,
+            action="llm:credits_added",
+            target=actual_id,
+            details={
+                "tenant_slug": actual_slug,
+                "amount_usd": clean_amount,
+                "mode": mode,
+                "new_limit_usd": new_limit,
+                "stripe_transaction_id": stripe_tx_id,
+            },
+        )
+
+        updated_state = self.get_tenant_llm_settings(actual_id)
+        updated_state["last_credit_transaction"] = credit_entry
+        updated_state["operation"] = credit_entry
+        updated_state["credits_history"] = history[:25]
+        return updated_state
 
 
