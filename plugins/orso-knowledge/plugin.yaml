@@ -1,0 +1,10 @@
+name: orso-knowledge
+version: 0.1.0
+description: "Ingestion documentaire par client (fichiers déposés, import de services connectés), index FTS5, versions, retrait, citation obligatoire des sources."
+author: "Orso Agents"
+provides_tools:
+  - knowledge_search
+hooks:
+  - pre_llm_call
+  - post_tool_call
+  - transform_llm_output
