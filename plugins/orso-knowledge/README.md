@@ -34,19 +34,36 @@ aucune réponse, version `retired`. Une ré-ingestion après retrait repart à l
 
 ## Connecteurs (CA5)
 
-Contrat : `connectors.Connector.fetch()` renvoie des `RemoteDocument(ref, name, data)`. Le nom du
-connecteur est inscrit sur chaque version (`origin_connector`, `origin_ref`) ; la clé du document est
-`<connecteur>:<ref>`, donc un ré-import met à jour la même entrée. Livré : `DirectoryConnector`, qui
-lit le dossier d'export d'un service (Drive synchronisé, export comptable). Les accès réseau directs
-à Drive ou à la comptabilité ne sont **pas** livrés : leurs identifiants restent désignés par leur
-emplacement (`GOOGLE_WORKSPACE_CREDENTIALS`, `PENNYLANE_API_KEY` dans l'environnement du conteneur),
-jamais dans l'index, un commit ou une page.
+Contrat : `connectors.Connector.fetch()` renvoie des `RemoteDocument(ref, name, data)` (ou des
+`RemoteFailure` consignées dans le rapport sans interrompre les autres). Le nom du connecteur est
+inscrit sur chaque version (`origin_connector`, `origin_ref`) ; la clé du document est
+`<connecteur>:<ref>`, donc un ré-import met à jour la même entrée.
+
+| Connecteur | Commande | Identifiants (environnement du conteneur, par leur nom) |
+|---|---|---|
+| `google-drive` (API Drive v3, dossier récursif, Docs/Slides en texte, Sheets en CSV) | `hermes knowledge import --connector google-drive --folder-id <id>` | `GOOGLE_WORKSPACE_CREDENTIALS` (JSON : `client_id`, `client_secret`, `refresh_token`, ou `access_token`) |
+| `pennylane` (API v2 : `customer_invoices`, `supplier_invoices`, une pièce JSON par facture) | `hermes knowledge import --connector pennylane [--resource customer_invoices]` | `PENNYLANE_API_KEY` |
+| dossier d'export local (sans accès API) | `hermes knowledge import --connector <nom> --from-dir <dossier>` | aucun |
+
+Les identifiants ne passent jamais en argument, ne sont jamais journalisés (les erreurs ne portent
+ni en-tête ni corps de réponse) ni écrits dans l'index, un commit ou une page. Le jeton n'est envoyé
+qu'en HTTPS et n'est jamais suivi vers un autre hôte lors d'une redirection. Les liens signés
+(`*_url`) sont retirés des factures : ils changent à chaque appel et fabriqueraient de fausses versions.
+Limites : un fichier Drive de plus de 25 Mo ou d'un format sans extracteur (PDF, Office) est consigné
+en échec ; pas de reprise automatique sur HTTP 429 ; le retrait d'un document côté source n'est pas
+répercuté automatiquement (`hermes knowledge retire`).
 
 ## Citation (CA4)
 
-Chaque passage porte `[Source: <document>, v<N>, §<k>]`. Quand un tour a appelé `knowledge_search`,
-le hook `transform_llm_output` signale par un avertissement ajouté une réponse qui ne recopie aucune
-de ces citations ou qui en invente une. Limite : un tour qui n'appelle pas l'outil n'est pas contrôlé.
+Chaque passage porte `[Source: <document>, v<N>, §<k>]`. La citation est **bloquante** : le hook
+`transform_llm_output` remplace par un refus (qui ne reprend pas le contenu non sourcé) toute
+réponse qui, après un `knowledge_search` retrouvant des passages, n'en cite aucun, ou qui cite une
+`[Source: ...]` absente des passages retrouvés dans la session (y compris sans recherche ce tour).
+Les citations sont enregistrées par le handler de l'outil (pas par un hook observateur).
+Limites : un tour qui s'appuie sur un document sans appeler l'outil et sans citation n'est pas
+détecté ; le hook est borné en temps par le moteur (`_HOOK_TIMEOUT_BOUNDED_HOOKS`) : sur délai
+dépassé ou exception, la réponse passe (le moteur n'offre pas de hook de sortie fail-closed) ; après
+redémarrage, une citation d'un tour antérieur n'est plus connue et est refusée.
 
 ## Index
 

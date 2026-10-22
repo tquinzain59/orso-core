@@ -20,6 +20,19 @@ class RemoteDocument:
     data: bytes
 
 
+@dataclass(frozen=True)
+class RemoteFailure:
+    """Document d'une source que le connecteur n'a pas pu livrer : consigné dans le rapport, les
+    autres documents continuent."""
+
+    ref: str
+    reason: str
+
+
+class ConnectorError(RuntimeError):
+    """Échec du service connecté (identifiants absents, refus, indisponibilité) : l'import s'arrête."""
+
+
 class Connector(abc.ABC):
     """Contrat d'un connecteur. Les secrets de la source (jeton Drive, clé de la compta) restent
     dans l'environnement du conteneur désignés par leur nom ; jamais passés en argument ni écrits
@@ -28,7 +41,7 @@ class Connector(abc.ABC):
     name: str
 
     @abc.abstractmethod
-    def fetch(self) -> Iterator[RemoteDocument]: ...
+    def fetch(self) -> Iterator[RemoteDocument | RemoteFailure]: ...
 
 
 class DirectoryConnector(Connector):
@@ -62,6 +75,10 @@ def import_from(store: KnowledgeStore, connector: Connector) -> ImportReport:
     référence met à jour le même document."""
     report = ImportReport(connector=connector.name)
     for doc in connector.fetch():
+        if isinstance(doc, RemoteFailure):
+            logger.warning("import %s : %s non livré (%s)", connector.name, doc.ref, doc.reason)
+            report.failed[doc.ref] = doc.reason
+            continue
         key = f"{connector.name}:{doc.ref}"
         try:
             result = store.ingest(

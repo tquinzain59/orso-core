@@ -48,6 +48,12 @@ class _TextOnly(HTMLParser):
         return "".join(self._parts)
 
 
+def is_supported(name: str) -> bool:
+    """Vrai si ``name`` a un extracteur : permet à un connecteur de ne pas télécharger pour rien."""
+    suffix = PurePath(name).suffix.lower()
+    return suffix in _TEXT_SUFFIXES or suffix in _HTML_SUFFIXES
+
+
 def extract_text(name: str, data: bytes) -> str:
     """Texte brut d'un document. Lève :class:`UnsupportedFormatError` hors formats textuels/HTML
     (PDF/Office : pas d'extracteur livré, voir le handoff)."""
