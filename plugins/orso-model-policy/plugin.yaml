@@ -1,0 +1,9 @@
+name: orso-model-policy
+version: "0.1.0"
+description: "Politique de modèle Orso (KAN-127) : plafond de coût mensuel par client (alerte puis blocage), repli frugal observé et annoncé au client, conformité de route (OpenRouter, DeepSeek/Mistral, aucun modèle local). Politique lue dans config/orso_model_policy.yaml."
+author: "Orso agents"
+hooks:
+  - pre_api_request
+  - api_request_error
+  - post_api_request
+  - transform_llm_output

@@ -42,6 +42,15 @@ security:
 # ── Fallback Model ────────────────────────────────────────────────────
 # Automatic provider failover when primary is unavailable.
 # Triggers on rate limits (429), overload (529), service errors (503).
+# KAN-127 : secours frugal (Mistral) uniquement — voir config/orso_model_policy.yaml
+# et docs/3_Technique/politique_routage_modeles_KAN-127.md. Contrôlé par
+# scripts/orso_model_policy_check.py validate.
 fallback_model:
   provider: openrouter
-  model: anthropic/claude-3-5-sonnet
+  model: mistralai/mistral-small-3.2-24b-instruct
+
+# ── Politique de modèle Orso (KAN-127) ─────────────────────────────────
+# Plafond de coût par client (alerte puis blocage) + annonce du repli au client.
+plugins:
+  enabled:
+    - orso-model-policy
