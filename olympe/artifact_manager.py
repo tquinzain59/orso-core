@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from olympe.sandbox_policy import resolve_within
+
 _log = logging.getLogger("orso.olympe.artifact")
 
 # Motifs rigoureux de détection de secrets pour CA4 (compteur nul impératif)
@@ -102,10 +104,10 @@ class ClientSpaceArtifactManager:
 
     def get_tenant_artifact_dir(self, tenant_slug: str, version: Optional[str] = None) -> Path:
         """Retourne le répertoire de stockage des artefacts d'un tenant."""
-        base = self.artifacts_root / tenant_slug
+        # KAN-129 / CA1 : un slug ou une version forgés ne peuvent pas désigner l'espace d'un autre client.
         if version:
-            return base / version
-        return base
+            return resolve_within(self.artifacts_root, tenant_slug, version)
+        return resolve_within(self.artifacts_root, tenant_slug)
 
     def scan_for_secrets(
         self,

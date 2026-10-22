@@ -81,19 +81,21 @@ def test_kan59_ca1_no_container_without_quotas(tmp_path):
 
                 # Vérification présence des limites physiques Docker
                 assert "--cpus" in cmd
-                assert cmd[cmd.index("--cpus") + 1] == "0.5"
+                assert cmd[cmd.index("--cpus") + 1] == DEFAULT_CLIENT_QUOTAS["cpus"]
                 assert "--memory" in cmd
-                assert cmd[cmd.index("--memory") + 1] == "512m"
+                assert cmd[cmd.index("--memory") + 1] == DEFAULT_CLIENT_QUOTAS["memory"]
                 assert "--memory-swap" in cmd
-                assert cmd[cmd.index("--memory-swap") + 1] == "512m"
+                assert cmd[cmd.index("--memory-swap") + 1] == DEFAULT_CLIENT_QUOTAS["memory"]
                 assert "--pids-limit" in cmd
-                assert cmd[cmd.index("--pids-limit") + 1] == "100"
+                assert cmd[cmd.index("--pids-limit") + 1] == DEFAULT_CLIENT_QUOTAS["pids_limit"]
 
                 # Vérification des labels normalisés
                 assert "--label" in cmd
-                assert "com.orso.quotas.cpus=0.5" in cmd
-                assert "com.orso.quotas.memory=512m" in cmd
-                assert "com.orso.quotas.pids_limit=100" in cmd
+                assert f"com.orso.quotas.cpus={DEFAULT_CLIENT_QUOTAS['cpus']}" in cmd
+                assert f"com.orso.quotas.memory={DEFAULT_CLIENT_QUOTAS['memory']}" in cmd
+                assert f"com.orso.quotas.pids_limit={DEFAULT_CLIENT_QUOTAS['pids_limit']}" in cmd
+                # KAN-129 : le défaut produit est 2 vCPU / 4 Go / 40 Go
+                assert (DEFAULT_CLIENT_QUOTAS["cpus"], DEFAULT_CLIENT_QUOTAS["memory"], DEFAULT_CLIENT_QUOTAS["disk"]) == ("2.0", "4096m", "40g")
 
 
 def test_kan59_ca1_tier_quotas_applied(tmp_path):
