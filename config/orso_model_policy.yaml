@@ -1,0 +1,46 @@
+# Politique de modèle Orso — KAN-127 (zone d'évolution : configuration pure).
+# Source de vérité lue par le plugin `plugins/orso-model-policy/` et par
+# `scripts/orso_model_policy_check.py`. Document de référence daté :
+# docs/3_Technique/politique_routage_modeles_KAN-127.md
+#
+# AUCUN secret ici : les clés d'API sont désignées par leur emplacement
+# (variable OPENROUTER_API_KEY, déclarée dans docker-compose.orso.yml et
+# renseignée dans le .env de l'hôte).
+
+policy_version: 1
+decided_on: "2026-10-21"          # arbitrages rendus par Thibaut
+decided_by: "Thibaut"
+
+routing:
+  # Tout cloud via OpenRouter ; aucun modèle local.
+  required_provider: openrouter
+  api_key_location: "env:OPENROUTER_API_KEY (docker-compose.orso.yml -> .env hôte)"
+  forbid_local: true
+  # Modèles frugaux uniquement : DeepSeek et Mistral.
+  allowed_model_prefixes:
+    - "deepseek/"
+    - "mistralai/"
+  primary:
+    provider: openrouter
+    model: deepseek/deepseek-v4-flash
+  # Bascule automatique sur un frugal de secours (voir fallback_model dans
+  # config/hermes.yaml, qui doit rester identique — contrôlé par `validate`).
+  fallback:
+    provider: openrouter
+    model: mistralai/mistral-small-3.2-24b-instruct
+
+cost_cap:
+  # Plafond par client et par mois civil (UTC), alerte puis blocage.
+  default_monthly_eur: 20
+  alert_ratio: 0.8                # alerte à 80 % du plafond
+  # Surcharge par client : clients: { <ORSO_CLIENT_ID>: { monthly_eur: 50 } }
+  clients: {}
+  # Les coûts sont estimés en USD par Hermes ; 1.0 = borne haute prudente
+  # (1 USD compté 1 EUR => blocage plutôt trop tôt que trop tard).
+  usd_to_eur: 1.0
+
+evaluation:
+  candidates:
+    - deepseek/deepseek-v4-flash
+    - deepseek/deepseek-v3-0324
+    - mistralai/mistral-small-3.2-24b-instruct
