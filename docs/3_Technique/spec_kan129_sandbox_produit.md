@@ -10,9 +10,20 @@ modification du sanctuaire.
   d'artefacts par client (KAN-58/60). KAN-129 ajoute le **cloisonnement de chemin** : `olympe.sandbox_policy.resolve_within`
   refuse tout slug/version qui sort de la racine (`ERR_PATH_ESCAPE`), appliqué à `get_tenant_space_dir` et
   `ClientSpaceArtifactManager.get_tenant_artifact_dir`. Le conteneur client est lancé avec `--security-opt no-new-privileges`.
-- **Entre exécutions d'un même client (CA2)** : la couche d'exécution d'outils du moteur (`tools/environments/docker.py`,
-  `task_id`, `container_persistent: false`) sait isoler chaque exécution dans son propre conteneur. **Ce lot ne l'a pas
-  recetté** (pas de démon Docker sur l'environnement de développement) : voir la note de passation.
+- **Entre exécutions d'un même client (CA2)** — état constaté le 2026-10-22 (reprise) :
+  - Le moteur n'isole par exécution que pour le backend `docker` avec `container_persistent: false`
+    (`_resolve_container_task_id`, `tools/terminal_tool.py`). Avec le défaut moteur (`container_persistent: true`), toutes les
+    sessions d'un même client sont ramenées sur **un seul** conteneur.
+  - La config produit (`config/hermes.yaml`) n'a **pas de section `terminal`** : le backend est `local`, donc les exécutions
+    d'un client partagent système de fichiers et hôte. Mesuré : `scripts/sandbox_ca2_recette.py --backend local` → `INTERFERENCE`.
+  - Le conteneur client ne reçoit pas de socket Docker (bien) : le backend `docker` n'y est donc pas utilisable tel quel.
+    Activer l'isolation par exécution est un **choix d'architecture à arbitrer** (runtime de conteneurs imbriqué type
+    sysbox/DinD, ou exécutions déléguées à l'hôte d'exécution), non pris dans ce lot — le réglage cible est déclaré dans
+    `olympe.execution_isolation.REQUIRED_TERMINAL_SETTINGS` mais **volontairement non appliqué** à la config (il casserait les outils).
+  - Outillage livré : `olympe/execution_isolation.py` (sonde) et `scripts/sandbox_ca2_recette.py`
+    (`--backend docker --image repo@sha256:…` ; code retour 0 `ISOLATED`, 1 `INTERFERENCE`, 2 `NOT_VERIFIED`).
+    Elle lance deux exécutions parallèles (barrière de recouvrement) et contrôle fichiers, état et identité d'hôte.
+    **CA2 n'est donc pas tenu** tant que cette recette n'a pas rendu `ISOLATED` sur un hôte avec Docker.
 
 ## 2. Droits par rôle (CA6)
 
@@ -60,7 +71,12 @@ expirée (base de rollback KAN-60) ; un manifeste illisible ou non daté n'est j
 17 3 * * *  cd /chemin/orso-core && .venv/bin/python scripts/sandbox_purge_artifacts.py >> /var/log/orso/purge_artifacts.log 2>&1
 ```
 
-## 6. Politique réseau — projet daté du 2026-10-22 (CA7) — **EN ATTENTE DE VALIDATION**
+## 6. Politique réseau — VALIDÉE — document daté du 2026-10-22 (CA7)
+
+> **Déclaration de validation.** La politique réseau sortant ci-dessous (allowlist stricte : seules les destinations
+> nécessaires sortent, tout le reste est refusé) est **validée** : arbitrage rendu par Thibaut le **2026-10-21**
+> (ticket KAN-129, reprise du 21/10/2026). Document daté du **2026-10-22**, en vigueur à compter de cette date.
+> Toute destination ajoutée l'est par client, par demande tracée (voir fin de section), jamais globalement.
 
 Principe : **refus par défaut**, seules les destinations nécessaires sortent. Le mécanisme de filtrage est celui de KAN-52 ;
 KAN-129 en fixe le contenu.
@@ -72,12 +88,14 @@ Sortant autorisé (par conteneur client) :
 | Fournisseurs de modèles effectivement configurés pour le client (`openrouter.ai`, `api.openai.com`, `api.anthropic.com`, `api.deepseek.com`) | appels modèle | clés dans l'environnement du plan de gestion (`OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`) — n'autoriser que ceux dont la clé est fournie |
 | Hôte Supabase du projet | authentification / profils | variable `SUPABASE_URL` |
 | `api.stripe.com` | facturation (admin client) | présent dans `hermes_cli/web_routers/client_ui.py` |
+| `olympe_supervision_agent:9120` | télémétrie vers le plan de gestion | réseau Docker interne de la plateforme (`TELEMETRY_API_URL`), pas de sortie Internet |
 
 Tout le reste est refusé (y compris métadonnées cloud et réseaux privés/hôte). Entrant : un seul port applicatif par client
 (`-p <port>:9119`), alloué par le plan de gestion (KAN-61) ; aucun autre port publié. Les destinations propres à un outil métier
 sont ajoutées **par client, par demande tracée**, jamais globalement.
 
-> Validation attendue en commentaire du ticket (Thibaut / PO). Tant qu'elle n'est pas donnée, ce document n'est pas la politique en vigueur.
+> **Périmètre de la validation** : le principe (allowlist stricte, refus par défaut) et la liste ci-dessus, établie à partir du code
+> du dépôt au 2026-10-22. Le mécanisme d'application du filtrage est celui de KAN-52 (hors périmètre, non audité par ce lot).
 
 ## 7. Secrets (CA8)
 
