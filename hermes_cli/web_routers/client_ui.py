@@ -21,6 +21,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from pydantic import BaseModel, Field
 
 from hermes_cli.dashboard_auth.client_jwt import verify_client_access
+from hermes_cli.web_routers.client_run_replay import RunFailure, run_with_replay
+from hermes_cli.web_routers.client_run_traces import FAILURE_NOTICE, RunRecorder
 
 _log = logging.getLogger("hermes_cli.client_ui")
 router = APIRouter()
@@ -1943,13 +1945,23 @@ def _verify_and_bind_client_session(
 # ── Moteur d'Inférence et de Streaming SSE ──────────────────────────────────
 
 async def _chat_stream_generator(
-    agent_id: str, prompt: str, session_id: str, theme_context: str = ""
+    agent_id: str,
+    prompt: str,
+    session_id: str,
+    theme_context: str = "",
+    trace: Optional[RunRecorder] = None,
 ) -> AsyncGenerator[str, None]:
     """Générateur SSE qui interroge le LLM avec le profil de Jérôme (ou de l'agent choisi),
     stream les tokens en temps réel et transmet les cartes d'actions prêtes à valider.
+
+    ``trace`` (KAN-128) enregistre la trace de haut niveau de l'exécution ; un échec en cours
+    d'exécution est rejoué automatiquement puis signalé au client s'il persiste.
     """
     # 1. Événement de début
-    yield f"event: start\ndata: {json.dumps({'session_id': session_id, 'agent_id': agent_id})}\n\n"
+    start_payload: Dict[str, Any] = {'session_id': session_id, 'agent_id': agent_id}
+    if trace is not None:
+        start_payload['trace_id'] = trace.trace_id
+    yield f"event: start\ndata: {json.dumps(start_payload)}\n\n"
     await asyncio.sleep(0.01)
 
     # 2. Préparation du système et de la personnalité
@@ -1983,6 +1995,7 @@ async def _chat_stream_generator(
 
     full_response_text = ""
     llm_invoked = False
+    run_failed = False  # KAN-128 : échec persistant après rejeu automatique
 
     # 3. Tentative d'appel au LLM réel (OpenRouter, Gemini, OpenAI, ou AIAgent)
     openrouter_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
@@ -2004,52 +2017,71 @@ async def _chat_stream_generator(
 
             queue: asyncio.Queue = asyncio.Queue()
             loop = asyncio.get_running_loop()
+            replay_marker = object()
+            replay_state: Dict[str, bool] = {"failed": False}
 
             def stream_cb(delta: str):
                 if delta:
                     loop.call_soon_threadsafe(queue.put_nowait, delta)
 
             def run_sync_agent():
-                token = None
+                # Historique chargé une seule fois : un rejeu repart de l'état d'origine du tour.
+                prior_messages: Optional[List[Dict[str, Any]]] = None
+
+                def attempt(attempt_no: int):
+                    nonlocal prior_messages
+                    token = None
+                    try:
+                        from hermes_constants import set_hermes_home_override
+                        from hermes_state import SessionDB
+                        profile_dir = _find_profile_dir(agent_id)
+                        if profile_dir and profile_dir.is_dir() and os.access(profile_dir, os.W_OK):
+                            agent_home = profile_dir.resolve()
+                        else:
+                            agent_home = (PROJECT_ROOT / "data" / "agents" / agent_id).resolve()
+                            agent_home.mkdir(parents=True, exist_ok=True)
+                        token = set_hermes_home_override(str(agent_home))
+                        sdb = SessionDB(agent_home / "state.db")
+                        if prior_messages is None:
+                            prior_messages = sdb.get_messages_as_conversation(session_id) or []
+                        agent = AIAgent(
+                            model=configured_model,
+                            provider=configured_provider,
+                            ephemeral_system_prompt=system_instruction,
+                            session_id=session_id,
+                            session_db=sdb,
+                            quiet_mode=True,
+                        )
+                        res = agent.run_conversation(
+                            user_message=prompt,
+                            conversation_history=prior_messages,
+                            stream_callback=stream_cb,
+                        )
+                        resp = res.get("final_response", "")
+                        if not resp or "can't reach the model provider" in resp:
+                            raise RunFailure("Réponse vide ou fournisseur de modèle injoignable")
+                        return resp
+                    finally:
+                        if token is not None:
+                            try:
+                                from hermes_constants import reset_hermes_home_override
+                                reset_hermes_home_override(token)
+                            except Exception:
+                                pass
+
+                def on_replay(replay_no: int, error: BaseException) -> None:
+                    if trace is not None:
+                        trace.internal_error(replay_no, error)
+                        trace.step("run_replayed")
+                    loop.call_soon_threadsafe(queue.put_nowait, replay_marker)
+
                 try:
-                    from hermes_constants import set_hermes_home_override, reset_hermes_home_override
-                    from hermes_state import SessionDB
-                    profile_dir = _find_profile_dir(agent_id)
-                    if profile_dir and profile_dir.is_dir() and os.access(profile_dir, os.W_OK):
-                        agent_home = profile_dir.resolve()
-                    else:
-                        agent_home = (PROJECT_ROOT / "data" / "agents" / agent_id).resolve()
-                        agent_home.mkdir(parents=True, exist_ok=True)
-                    token = set_hermes_home_override(str(agent_home))
-                    sdb = SessionDB(agent_home / "state.db")
-                    prior_messages = sdb.get_messages_as_conversation(session_id) or []
-                    agent = AIAgent(
-                        model=configured_model,
-                        provider=configured_provider,
-                        ephemeral_system_prompt=system_instruction,
-                        session_id=session_id,
-                        session_db=sdb,
-                        quiet_mode=True,
-                    )
-                    res = agent.run_conversation(
-                        user_message=prompt,
-                        conversation_history=prior_messages,
-                        stream_callback=stream_cb,
-                    )
-                    resp = res.get("final_response", "")
-                    if "can't reach the model provider" in resp:
-                        return None
-                    return resp
-                except Exception as e:
-                    _log.warning("Erreur AIAgent en direct: %s", e, exc_info=True)
-                    return None
+                    outcome = run_with_replay(attempt, on_replay=on_replay)
+                    replay_state["failed"] = outcome.failed
+                    if outcome.failed and trace is not None:
+                        trace.internal_error(outcome.attempts, outcome.errors[-1])
+                    return outcome.result
                 finally:
-                    if token is not None:
-                        try:
-                            from hermes_constants import reset_hermes_home_override
-                            reset_hermes_home_override(token)
-                        except Exception:
-                            pass
                     loop.call_soon_threadsafe(queue.put_nowait, None)
 
             # Lancer AIAgent en tâche de fond dans un thread dédié
@@ -2059,11 +2091,19 @@ async def _chat_stream_generator(
                 chunk = await queue.get()
                 if chunk is None:
                     break
+                if chunk is replay_marker:
+                    # Rejeu automatique : le texte partiel de la tentative échouée est abandonné.
+                    full_response_text = ""
+                    yield f"event: run_retry\ndata: {json.dumps({'message': 'Nouvelle tentative automatique en cours'}, ensure_ascii=False)}\n\n"
+                    continue
                 full_response_text += chunk
                 yield f"event: delta\ndata: {json.dumps({'content': chunk}, ensure_ascii=False)}\n\n"
                 await asyncio.sleep(0.005)
 
             agent_result = await agent_future
+            if replay_state["failed"]:
+                run_failed = True
+                full_response_text = ""
             if agent_result and not full_response_text:
                 if "can't reach the model provider" not in agent_result:
                     full_response_text = agent_result
@@ -2075,7 +2115,14 @@ async def _chat_stream_generator(
                 full_response_text = ""
         except Exception as exc:
             full_response_text = ""
+            run_failed = True
+            if trace is not None:
+                trace.internal_error(0, exc)
             _log.info("Passerelle AIAgent directe indisponible (%s), bascule vers mode résilient", exc)
+
+    # KAN-128 : l'échec persiste après rejeu automatique -> signalement au client
+    if run_failed:
+        yield f"event: run_failed\ndata: {json.dumps({'message': FAILURE_NOTICE}, ensure_ascii=False)}\n\n"
 
     # 4. Mode résilient / Métier si le LLM n'a pas pu être interrogé en direct
     if not llm_invoked:
@@ -2163,8 +2210,20 @@ async def _chat_stream_generator(
         except Exception as save_err:
             _log.warning("Impossible d'enregistrer le tour résilient dans SessionDB: %s", save_err)
 
+    # Trace de haut niveau de l'exécution (KAN-128) : étapes, artefacts, clôture
+    done_payload: Dict[str, Any] = {'session_id': session_id, 'full_text': clean_text}
+    if trace is not None:
+        if not run_failed:
+            trace.step("response_prepared")
+            trace.artifact("reponse.txt", "reponse", clean_text)
+            if action_card:
+                trace.step("action_proposed")
+                trace.artifact("carte_action.json", "action", json.dumps(action_card, ensure_ascii=False))
+        trace.finish(failed=run_failed)
+        done_payload['trace_id'] = trace.trace_id
+
     # 6. Événement de fin avec le texte consolidé
-    yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'full_text': clean_text}, ensure_ascii=False)}\n\n"
+    yield f"event: done\ndata: {json.dumps(done_payload, ensure_ascii=False)}\n\n"
 
 
 @router.post("/api/client/chat")
@@ -2199,6 +2258,9 @@ async def client_chat_endpoint(
 
     _role, _, _ = _resolve_user_system_role_and_job_title(auth)
     bind_tool_caller(cleaned_sid, _role, tenant_id)
+
+    # Trace de haut niveau de l'exécution, observable par le client (KAN-128)
+    trace = RunRecorder(tenant_id, user_id, req.agent_id, cleaned_sid)
 
     # Titrage automatique du moteur borné à 6 mots (KAN-83)
     try:
@@ -2238,6 +2300,7 @@ async def client_chat_endpoint(
             prompt=req.message,
             session_id=cleaned_sid,
             theme_context=theme_context,
+            trace=trace,
         ),
         media_type="text/event-stream",
         headers={
@@ -3194,3 +3257,9 @@ try:
 except Exception as _err:
     _log.error("Erreur montage history_router dans client_ui.py: %s", _err)
 
+# Montage des routes de traces d'exécution observables par le client (KAN-128)
+try:
+    from hermes_cli.web_routers.client_run_traces import run_traces_router
+    router.include_router(run_traces_router)
+except Exception as _err:
+    _log.error("Erreur montage run_traces_router dans client_ui.py: %s", _err)
