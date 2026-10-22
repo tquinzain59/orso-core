@@ -2194,6 +2194,12 @@ async def client_chat_endpoint(
         create_if_missing=True,
     )
 
+    # KAN-131 : lie rôle + client à la session ; le plugin orso-tool-contracts (pre_tool_call) les relit.
+    from hermes_cli.web_routers.tool_caller import bind_tool_caller
+
+    _role, _, _ = _resolve_user_system_role_and_job_title(auth)
+    bind_tool_caller(cleaned_sid, _role, tenant_id)
+
     # Titrage automatique du moteur borné à 6 mots (KAN-83)
     try:
         from hermes_cli.web_routers.client_chat_history import maybe_auto_title_session

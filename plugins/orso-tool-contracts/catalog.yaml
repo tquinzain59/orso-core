@@ -1,0 +1,179 @@
+# Catalogue exposé Orso (KAN-131) — sous-ensemble MÉTIER du catalogue Hermès.
+#
+# Un outil absent de ce fichier n'est PAS exposé au client (ex. terminal, execute_code,
+# read_file, write_file, patch, process_manage : outils système). Ce fichier est la seule
+# source de vérité du contrat (entrées, sorties, erreurs), de la version, du rôle minimal
+# et des clients autorisés de chaque outil. Aucune valeur secrète n'y figure : un secret
+# est désigné par EMPLACEMENT (`env:NOM` ou `file:chemin/relatif/à/HERMES_HOME`).
+#
+# Rôles (alignés sur client_ui._resolve_user_system_role_and_job_title) :
+#   superadmin >= admin >= user.  `min_role` = rôle minimal pour appeler l'outil.
+# Versionnement : semver par outil. Toute modification des entrées/sorties/erreurs d'un
+# outil impose de relever sa `version` (le contrôle `verify` détecte la dérive du schéma
+# natif Hermès contre `inputs`).
+catalog_version: "1.0.0"
+dated: "2026-10-22"
+ticket: KAN-131
+categories: [documents, messagerie, calcul]
+
+# Erreurs communes à tout outil exposé, ajoutées par la couche contrat (plugin).
+common_errors:
+  - code: TOOL_NOT_EXPOSED
+    when: "L'outil n'est pas dans ce catalogue (outil système ou non métier)."
+  - code: ROLE_FORBIDDEN
+    when: "Le rôle de l'appelant est inférieur au `min_role` de l'outil."
+  - code: CLIENT_FORBIDDEN
+    when: "Le client de la session n'est pas dans `clients` de l'outil."
+  - code: AUTH_REFUSED
+    when: "Outil externe sans authentification déclarée ou secret non provisionné."
+  - code: TOOL_UNAVAILABLE
+    when: "Outil coupé ou prérequis absent : dégradation définie, signalée et tracée."
+
+tools:
+  # ---- documents -------------------------------------------------------------------
+  - name: feishu_doc_read
+    version: "1.0.0"
+    category: documents
+    origin: registry          # outil enregistré dans tools/registry.py
+    min_role: user
+    clients: ["*"]
+    description: "Lit le contenu intégral d'un document Feishu/Lark en texte brut."
+    inputs:
+      type: object
+      properties:
+        doc_token: {type: string}
+      required: [doc_token]
+    outputs:
+      success: '{"success": true, "content": "<texte du document>"}'
+    errors:
+      - {code: INVALID_INPUT, when: "doc_token vide"}
+      - {code: CLIENT_UNAVAILABLE, when: "client Feishu absent (hors contexte de commentaire)"}
+      - {code: UPSTREAM_ERROR, when: "code Feishu != 0 ou contenu vide"}
+    fallback:
+      text: "Document indisponible : ouvrir le document depuis Feishu et en coller le texte dans la conversation."
+
+  - name: feishu_drive_list_comments
+    version: "1.0.0"
+    category: documents
+    origin: registry
+    min_role: user
+    clients: ["*"]
+    description: "Liste les commentaires d'un document Feishu."
+    inputs:
+      type: object
+      properties:
+        file_token: {type: string}
+        file_type: {type: string, default: docx}
+        is_whole: {type: boolean, default: false}
+        page_size: {type: integer, default: 100}
+        page_token: {type: string}
+      required: [file_token]
+    outputs:
+      success: '{"success": true, "data": {"items": [...], "page_token": "..."}}'
+    errors:
+      - {code: CLIENT_UNAVAILABLE, when: "client Feishu absent"}
+      - {code: UPSTREAM_ERROR, when: "code Feishu != 0"}
+    fallback:
+      tool: feishu_doc_read
+      text: "Commentaires indisponibles : lire le document avec feishu_doc_read."
+
+  - name: feishu_drive_add_comment
+    version: "1.0.0"
+    category: documents
+    origin: registry
+    min_role: admin           # écriture : réservée à l'administrateur
+    clients: ["*"]
+    description: "Ajoute un commentaire de document entier sur un document Feishu."
+    inputs:
+      type: object
+      properties:
+        file_token: {type: string}
+        content: {type: string}
+        file_type: {type: string, default: docx}
+      required: [file_token, content]
+    outputs:
+      success: '{"success": true, "data": {...}}'
+    errors:
+      - {code: CLIENT_UNAVAILABLE, when: "client Feishu absent"}
+      - {code: UPSTREAM_ERROR, when: "code Feishu != 0"}
+    fallback:
+      text: "Commentaire non publié : le signaler à l'administrateur, aucune écriture n'a été faite."
+
+  # ---- messagerie (surface `hermes mcp serve`, mcp_serve.py) --------------------------
+  - name: conversations_list
+    version: "1.0.0"
+    category: messagerie
+    origin: mcp_serve         # exposé par mcp_serve.py, hors registre d'outils
+    min_role: user
+    clients: ["*"]
+    description: "Liste les conversations de messagerie actives."
+    inputs:
+      type: object
+      properties:
+        platform: {type: string}
+        limit: {type: integer, default: 50, maximum: 200}
+        search: {type: string}
+      required: []
+    outputs:
+      success: '{"count": N, "conversations": [{"session_key", "platform", "chat_type", "display_name", "updated_at"}]}'
+    errors: []
+    fallback:
+      text: "Liste indisponible : réessayer plus tard ou ouvrir la messagerie directement."
+
+  - name: messages_read
+    version: "1.0.0"
+    category: messagerie
+    origin: mcp_serve
+    min_role: user
+    clients: ["*"]
+    description: "Lit les derniers messages d'une conversation."
+    inputs:
+      type: object
+      properties:
+        session_key: {type: string}
+        limit: {type: integer, default: 50, maximum: 200}
+      required: [session_key]
+    outputs:
+      success: '{"session_key": "...", "count": N, "total_in_session": N, "messages": [{"id", "role", "content", "timestamp"}]}'
+    errors:
+      - {code: CONVERSATION_NOT_FOUND, when: "session_key inconnu", shape: '{"error": "Conversation not found: <clé>"}'}
+    fallback:
+      text: "Historique indisponible : ouvrir la conversation directement dans la messagerie."
+
+  - name: messages_send
+    version: "1.0.0"
+    category: messagerie
+    origin: mcp_serve
+    min_role: admin           # émission vers l'extérieur : réservée à l'administrateur
+    clients: ["*"]
+    description: "Envoie un message vers une conversation de plateforme."
+    inputs:
+      type: object
+      properties:
+        target: {type: string, description: "plateforme:identifiant"}
+        message: {type: string}
+      required: [target, message]
+    outputs:
+      success: "résultat JSON de send_message_tool (statut d'envoi)"
+    errors:
+      - {code: INVALID_INPUT, when: "target ou message vide", shape: '{"error": "Both target and message are required"}'}
+      - {code: SEND_FAILED, when: "échec d'émission", shape: '{"error": "Send failed: <cause>"}'}
+    fallback:
+      text: "Message non envoyé : aucun envoi n'a eu lieu, le rédiger pour envoi manuel."
+
+# Outils EXTERNES (serveurs MCP). Un serveur sans `auth` (ou `auth.type: none`) est refusé.
+# `secret_ref` désigne l'emplacement du secret, jamais sa valeur. Les outils d'un serveur
+# portent le préfixe de registre `mcp__<serveur>__` (tools/mcp_tool_schema.py).
+external_servers:
+  notion:
+    category: documents
+    min_role: user
+    clients: ["*"]
+    auth: {type: oauth, secret_ref: "file:mcp-tokens/notion.json"}
+    contract: "Entrées/sorties = schéma publié par le serveur MCP (validé côté serveur) ; erreurs = enveloppe MCP isError + codes de la couche contrat. Version du contrat = version du catalogue."
+    version: "1.0.0"
+    fallback:
+      text: "Notion indisponible : consulter la page directement, aucune donnée n'a été modifiée."
+
+# Candidats connus mais NON exposés : voir `verify` (ex. wolfram = auth none => refusé).
+# Catégorie `calcul` : aucun outil natif Hermès ni serveur authentifié admissible à ce jour.
