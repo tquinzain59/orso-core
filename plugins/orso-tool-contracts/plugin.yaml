@@ -1,0 +1,6 @@
+name: orso-tool-contracts
+version: "1.0.0"
+description: "KAN-131 — contrat par outil, authentification des outils externes (MCP), permissions par rôle et par client, versionnement et dégradation signalée. Garde pre_tool_call à la marge : n'agit que sur les sessions clientes liées (hermes_cli.web_routers.tool_caller), fail-closed, aucun secret en clair."
+author: "Orso Agents"
+hooks:
+  - pre_tool_call
