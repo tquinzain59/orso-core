@@ -19,6 +19,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from olympe.artifact_manager import ClientSpaceArtifactManager
+from olympe.sandbox_policy import (
+    PRODUCT_DEFAULT_QUOTAS,
+    check_disk_quota,
+    parse_disk_str_to_bytes,
+    resolve_within,
+)
 
 _log = logging.getLogger("orso.olympe.lifecycle")
 
@@ -60,19 +66,18 @@ def _safe_float_env(key: str, default: Optional[float] = None) -> Optional[float
 
 # ── Quotas Matériels par Défaut & Paliers Tarifaires (KAN-59 / Document 27) ──
 
-DEFAULT_CLIENT_QUOTAS = {
-    "cpus": "0.5",
-    "memory": "512m",
-    "pids_limit": "100",
-}
+# KAN-129 : défaut produit par client (arbitrage du 21/10/2026) = 2 vCPU, 4 Go de RAM, 40 Go de disque.
+# Les paliers tarifaires ci-dessous restent des plafonds inférieurs explicitement choisis ; le quota
+# disque par client s'applique à tous (40g).
+DEFAULT_CLIENT_QUOTAS = dict(PRODUCT_DEFAULT_QUOTAS)
 
 TIER_RESOURCE_QUOTAS: Dict[str, Dict[str, Any]] = {
-    "none": {"cpus": "0.5", "memory": "512m", "pids_limit": "100", "agents_max": 0},
-    "1_agent": {"cpus": "0.5", "memory": "512m", "pids_limit": "100", "agents_max": 1},
-    "2_agents": {"cpus": "1.0", "memory": "1024m", "pids_limit": "150", "agents_max": 2},
-    "3_agents": {"cpus": "1.5", "memory": "1536m", "pids_limit": "200", "agents_max": 3},
-    "4_agents": {"cpus": "2.0", "memory": "2048m", "pids_limit": "250", "agents_max": 4},
-    "custom": {"cpus": "2.0", "memory": "2048m", "pids_limit": "250", "agents_max": 4},
+    "none": {"cpus": "0.5", "memory": "512m", "pids_limit": "100", "disk": "40g", "agents_max": 0},
+    "1_agent": {"cpus": "0.5", "memory": "512m", "pids_limit": "100", "disk": "40g", "agents_max": 1},
+    "2_agents": {"cpus": "1.0", "memory": "1024m", "pids_limit": "150", "disk": "40g", "agents_max": 2},
+    "3_agents": {"cpus": "1.5", "memory": "1536m", "pids_limit": "200", "disk": "40g", "agents_max": 3},
+    "4_agents": {"cpus": "2.0", "memory": "2048m", "pids_limit": "250", "disk": "40g", "agents_max": 4},
+    "custom": {"cpus": "2.0", "memory": "2048m", "pids_limit": "250", "disk": "40g", "agents_max": 4},
 }
 
 
@@ -113,17 +118,20 @@ def get_quotas_for_tier(
     overrides: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Retourne les quotas matériels garantis pour un palier tarifaire, fusionnés avec les surcharges (CA1/CA4)."""
-    base = dict(TIER_RESOURCE_QUOTAS.get(tier_id or "1_agent", DEFAULT_CLIENT_QUOTAS))
+    base = dict(TIER_RESOURCE_QUOTAS[tier_id] if tier_id in TIER_RESOURCE_QUOTAS else DEFAULT_CLIENT_QUOTAS)
     res = {
-        "cpus": str(base.get("cpus", "0.5")),
-        "memory": str(base.get("memory", "512m")),
-        "pids_limit": str(base.get("pids_limit", "100")),
+        "cpus": str(base.get("cpus", DEFAULT_CLIENT_QUOTAS["cpus"])),
+        "memory": str(base.get("memory", DEFAULT_CLIENT_QUOTAS["memory"])),
+        "pids_limit": str(base.get("pids_limit", DEFAULT_CLIENT_QUOTAS["pids_limit"])),
+        "disk": str(base.get("disk", DEFAULT_CLIENT_QUOTAS["disk"])),
     }
     if overrides and isinstance(overrides, dict):
         if "cpus" in overrides and overrides["cpus"] is not None:
             res["cpus"] = str(overrides["cpus"])
         if "memory" in overrides and overrides["memory"] is not None:
             res["memory"] = str(overrides["memory"])
+        if "disk" in overrides and overrides["disk"] is not None:
+            res["disk"] = str(overrides["disk"])
         if "pids_limit" in overrides and overrides["pids_limit"] is not None:
             res["pids_limit"] = str(overrides["pids_limit"])
         elif "pids" in overrides and overrides["pids"] is not None:
@@ -341,7 +349,7 @@ class DockerLifecycleManager:
 
     def get_tenant_space_dir(self, tenant_slug: str) -> Path:
         """Retourne le chemin vers le dossier d'espace d'agents propre au client (KAN-58)."""
-        return (self.spaces_root / tenant_slug).resolve()
+        return resolve_within(self.spaces_root, tenant_slug)
 
     def _initialize_tenant_space(
         self,
@@ -1181,6 +1189,29 @@ class DockerLifecycleManager:
                 "tier_id": tier_id or "1_agent",
             }
 
+        # KAN-129 / CA3 : refus explicite si l'espace du client occupe déjà son quota disque.
+        try:
+            parse_disk_str_to_bytes(effective_quotas["disk"])
+            disk_ok, disk_reason, disk_details = check_disk_quota(
+                [tenant_data_dir, Path(custom_space_dir) if custom_space_dir else self.get_tenant_space_dir(tenant_slug)],
+                effective_quotas["disk"],
+            )
+        except ValueError as exc:
+            disk_ok, disk_reason, disk_details = False, str(exc), {}
+        if not disk_ok:
+            _log.warning("Provisioning refusé pour %s : %s", tenant_slug, disk_reason)
+            return {
+                "success": False,
+                "error": "ERR_DISK_QUOTA_EXCEEDED",
+                "tenant_slug": tenant_slug,
+                "container_name": container_name,
+                "action_taken": False,
+                "message": f"Provisioning refusé : {disk_reason}",
+                "disk_details": disk_details,
+                "quotas": effective_quotas,
+                "tier_id": tier_id or "default",
+            }
+
         if not self.has_docker:
             # En production, le provisioning in-process local sur l'Hôte 1 est strictement proscrit (Option B KAN-74)
             from olympe.ops_manager import is_production
@@ -1281,6 +1312,8 @@ class DockerLifecycleManager:
             "--label", f"com.orso.quotas.cpus={cpus}",
             "--label", f"com.orso.quotas.memory={memory}",
             "--label", f"com.orso.quotas.pids_limit={pids}",
+            "--label", f"com.orso.quotas.disk={effective_quotas['disk']}",
+            "--security-opt", "no-new-privileges",
             "--label", f"com.orso.tier_id={tier_id or 'default'}",
         ])
         if tenant_slug in ("clientx-orso",):
